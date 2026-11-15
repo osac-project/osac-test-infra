@@ -400,7 +400,7 @@ def check_shape(name: str, document: dict | None) -> list[Check]:
                 "capture",
                 document,
                 ["capture_id", "state", "session", "coverage", "identity", "tests", "waits",
-                 "fixtures", "fixture_uses", "failed_tests", "notes"],
+                 "fixtures", "fixture_uses", "notes"],
             )
         )
         state = document.get("state")

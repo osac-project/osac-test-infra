@@ -422,3 +422,27 @@ def test_the_active_run_tracking_follows_runs_not_suite_rows(exporter, github, R
     exporter.collect()
     assert not any(f"/actions/runs/{running['id']}" in call for call in github.calls)
     assert [r["id"] for r in exporter.active_runs] == [1, running["id"]]
+
+
+def test_a_rerun_of_the_failed_jobs_keeps_each_suite_on_its_own_attempt(exporter, monkeypatch):
+    # Attempt 2 re-runs the failed caas suite. GitHub's latest jobs keep the
+    # vmaas job of attempt 1: vmaas ran once and is a first-try pass, and the
+    # failed caas attempt stays a run of its own.
+    vmaas = job("vmaas / e2e-vmaas-full-install / e2e") | {"run_attempt": 1}
+    caas_1 = job(SUITE, "failure") | {"run_attempt": 1}
+    caas_2 = job(SUITE) | {"run_attempt": 2}
+    latest = {1: [vmaas, caas_1], 2: [vmaas, caas_2]}
+    attempt = {"now": 1}
+    monkeypatch.setattr(exporter, "_fetch_run_jobs", lambda repo, run_id, run_attempt=None: latest[attempt["now"]])
+    run = flow_run() | {"path": ".github/workflows/e2e-queue.yml", "name": QUEUE, "event": "merge_group",
+                        "status": "completed", "conclusion": "failure", "run_attempt": 1}
+    assert exporter._process_completed_run("osac", run)
+    attempt["now"] = 2
+    assert exporter._process_completed_run("osac", run | {"run_attempt": 2, "conclusion": "success"})
+    got = sorted((r["workflow"], r["conclusion"], r["run_attempt"])
+                 for r in rows(exporter, "SELECT workflow, conclusion, run_attempt FROM jobs WHERE category = 'e2e'"))
+    assert got == [
+        ("E2E caas (merge queue)", "failure", 1),
+        ("E2E caas (merge queue)", "success", 2),
+        ("E2E vmaas (merge queue)", "success", 1),
+    ]

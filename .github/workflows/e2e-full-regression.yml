@@ -158,6 +158,18 @@ on:
         required: false
         type: string
         default: "osac-project/osac"
+    secrets:
+      osac-ci-app-id:
+        description: >-
+          ID of the OSAC CI GitHub App (the organization secret OSAC_CI_APP_ID).
+          With the private key it makes the logs artifact private: the files
+          are handed to osac-project/osac-ci-artifacts instead of being
+          uploaded to this public run. Without them the artifact is uploaded
+          to the run as before.
+        required: false
+      osac-ci-app-private-key:
+        description: Private key of the OSAC CI GitHub App (OSAC_CI_APP_PRIVATE_KEY).
+        required: false
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -265,7 +277,13 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
-      - name: Fetch CaaS secrets
+      # The CaaS flow's only use for these is Route 53 record management for
+      # hosted clusters (DNS_CLASS=dns.route53.dns), so it reads the same
+      # Route 53 credential the Netris lab uses -- see
+      # .github/actions/fetch-route53-creds/action.yml for what it can do
+      # (ChangeResourceRecordSets/ListHostedZones/GetChange on the shared
+      # zone). The old aws-credentials path is no longer read by any workflow.
+      - name: Fetch CaaS Route 53 credentials
         id: caas-secrets
         uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
         with:
@@ -275,8 +293,8 @@ jobs:
           secretId: ${{ steps.setup.outputs.secret-id }}
           exportEnv: false
           secrets: |
-            secret/data/osac/e2e/aws-credentials access_key_id | AWS_ACCESS_KEY_ID ;
-            secret/data/osac/e2e/aws-credentials secret_access_key | AWS_SECRET_ACCESS_KEY
+            secret/data/osac/e2e/caas-route53-credentials access_key_id | AWS_ACCESS_KEY_ID ;
+            secret/data/osac/e2e/caas-route53-credentials secret_access_key | AWS_SECRET_ACCESS_KEY
 
       - name: Prepare cluster environment
         env:
@@ -777,13 +795,29 @@ jobs:
             sleep 2
           done
 
+          # Guest ingress VIPs: MetalLB runs inside each CaaS guest, so the VIP
+          # has to be on the guest workers' L2 segment -- the clone network.
+          # Derive a free static block from the libvirt network definition
+          # rather than hardcoding a subnet: cluster-tool allocates a different
+          # 192.168.<subnet>.0/24 per clone. The block sits below the DHCP pool
+          # (192.168.<subnet>.128-254) and outside the pinned .1/.10 addresses.
+          # A missing range makes guest provisioning fail loudly in AAP, so a
+          # derivation failure fails the install here instead.
+          GUEST_INGRESS_IP_RANGE=$(CLONE_NAME="${CLONE_NAME}" \
+            python3 "${GITHUB_WORKSPACE}/.github/scripts/guest_ingress_vip_range.py" --explain) || {
+            echo "::error::could not derive a guest ingress VIP range from test-infra-net-${CLONE_NAME}"
+            exit 1
+          }
+          echo "Guest ingress VIP range: ${GUEST_INGRESS_IP_RANGE}"
+
           # Configure CaaS domain (after image overrides so helm upgrade cannot overwrite)
           oc patch configmap cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
             -p "{\"data\":{
                 \"DNS_ZONE\":\"${CAAS_DOMAIN}\",
                 \"EXTERNAL_ACCESS_BASE_DOMAIN\":\"${CAAS_DOMAIN}\",
                 \"EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS\":\"${CAAS_DOMAIN}\",
-                \"HOSTED_CLUSTER_BASE_DOMAIN\":\"${CAAS_DOMAIN}\"
+                \"HOSTED_CLUSTER_BASE_DOMAIN\":\"${CAAS_DOMAIN}\",
+                \"CI_GUEST_INGRESS_IP_RANGE\":\"${GUEST_INGRESS_IP_RANGE}\"
             }}"
 
           # Configure AWS credentials (after image overrides so helm upgrade cannot overwrite)
@@ -1020,6 +1054,9 @@ jobs:
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-full-regression-${{ github.run_id }}
+          private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
+          private-repo-app-id: ${{ secrets.osac-ci-app-id }}
+          private-repo-app-key: ${{ secrets.osac-ci-app-private-key }}
 
       # Only a cancelled job is bounded: its always() steps get 5 minutes in
       # total. A timeout elsewhere would turn a passing run red. It runs when
@@ -1032,6 +1069,9 @@ jobs:
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-full-regression-${{ github.run_id }}
+          private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
+          private-repo-app-id: ${{ secrets.osac-ci-app-id }}
+          private-repo-app-key: ${{ secrets.osac-ci-app-private-key }}
           overwrite: "true"
 
       - name: Authenticate for AI diagnosis
@@ -1074,7 +1114,9 @@ jobs:
           workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           branch-name: ${{ github.ref_name }}
           commit-sha: ${{ github.sha }}
-          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
+          # A private artifact is not on this run: the run page's summary holds the link to where it is, so the link
+          # points at the run itself and not at its (empty) artifacts section.
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ (secrets.osac-ci-app-id == '' || secrets.osac-ci-app-private-key == '') && '#artifacts' || '' }}
 
       - name: Prepare AI diagnosis for Slack
         id: prepare-diagnosis-text

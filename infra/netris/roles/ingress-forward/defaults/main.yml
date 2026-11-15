@@ -21,3 +21,11 @@ ingress_forward_extra_alias_deployments:
   - namespace: osac-infra
     deployment: openbao
     keycloak_issuer_container: bootstrap
+  # BMF checks the advertised issuer against these values at every start and
+  # exits on a mismatch, so they must follow Keycloak to the forwarded port.
+  - namespace: "{{ osac_namespace }}"
+    deployment: bmf-operator-controller-manager
+    keycloak_issuer_container: manager
+    keycloak_issuer_env:
+      - OSAC_INSTALLATION_API_ISSUER_URL
+      - OSAC_SECRET_API_ISSUER_URL

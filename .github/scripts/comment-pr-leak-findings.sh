@@ -14,6 +14,8 @@
 #   HEAD_BRANCH, HEAD_OWNER  -- workflow_run head repo owner (fork-aware)
 #   PR_FROM_EVENT  -- workflow_run.pull_requests[0].number
 #   UPLOAD_OK  -- 'true' if redacted-logs artifact uploaded on the scan run
+#   REDACTED_WITHHELD -- optional; 'true' when no redacted copy exists because
+#                 the leak was in artifacts of the private artifact repository
 set -euo pipefail
 
 : "${GH_TOKEN:?}"
@@ -30,6 +32,7 @@ set -euo pipefail
 : "${HEAD_OWNER:=}"
 : "${PR_FROM_EVENT:=}"
 : "${UPLOAD_OK:=}"
+: "${REDACTED_WITHHELD:=}"
 
 # Open PRs associated with HEAD_SHA via commits/{sha}/pulls. This works for
 # pull_request merge commits (workflow_run.head_sha != PR tip head.sha) and
@@ -186,6 +189,8 @@ if ! {
   echo "**Scan run:** [Scan workflow logs](${SCAN_RUN_URL})"
   if [[ "${UPLOAD_OK}" == "true" ]]; then
     echo "**Redacted logs/artifacts:** [\`redacted-logs-${E2E_RUN_ID}\`](${SCAN_RUN_URL}#artifacts)"
+  elif [[ "${REDACTED_WITHHELD}" == "true" ]]; then
+    echo "**Redacted logs/artifacts:** none -- the leak was in an artifact held in the private artifact repository, which is not republished. See the [scan run](${SCAN_RUN_URL}) for what was found."
   elif [[ "${UPLOAD_OK}" == "false" ]]; then
     echo "**Redacted logs/artifacts:** :warning: upload did not succeed -- no redacted copy on the scan run; see [scan logs](${SCAN_RUN_URL})."
   else

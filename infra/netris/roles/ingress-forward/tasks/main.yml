@@ -178,14 +178,16 @@
                   sys.argv[3], os.environ["TARGET_NS"], os.environ["DEPLOYMENT"]
               ))
           environment = container.get("env") or []
-          expected = {"name": "KEYCLOAK_ISSUER_URL", "value": sys.argv[4]}
-          current = next((entry for entry in environment if entry["name"] == expected["name"]), None)
-          if current != expected:
-              container["env"] = [entry for entry in environment if entry["name"] != expected["name"]] + [expected]
-              changed = True
+          for name in sys.argv[5].split(","):
+              expected = {"name": name, "value": sys.argv[4]}
+              current = next((entry for entry in environment if entry["name"] == name), None)
+              if current != expected:
+                  environment = [entry for entry in environment if entry["name"] != name] + [expected]
+                  changed = True
+          container["env"] = environment
           patch["containers"] = spec["containers"]
       print(json.dumps({"spec": {"template": {"spec": patch}}}) if changed else "unchanged")
-      ' "$KC_HOST" "$HOST_IP" "$ISSUER_CONTAINER" "$ISSUER_URL" > /tmp/ingress-forward-alias.json
+      ' "$KC_HOST" "$HOST_IP" "$ISSUER_CONTAINER" "$ISSUER_URL" "$ISSUER_ENV" > /tmp/ingress-forward-alias.json
       if [ "$(cat /tmp/ingress-forward-alias.json)" = "unchanged" ]; then
         echo unchanged
       else
@@ -202,6 +204,7 @@
     HOST_IP: "{{ ingress_forward_host }}"
     ISSUER_CONTAINER: "{{ item.keycloak_issuer_container | default('') }}"
     ISSUER_URL: "{{ _ingress_issuer }}"
+    ISSUER_ENV: "{{ item.keycloak_issuer_env | default(['KEYCLOAK_ISSUER_URL']) | join(',') }}"
   loop: "{{ _ingress_alias_targets }}"
   loop_control:
     label: "{{ item.namespace }}/{{ item.deployment }}"
@@ -404,11 +407,14 @@
           containers = deployment["spec"]["template"]["spec"]["containers"]
           present = present and any(
               container["name"] == sys.argv[3]
-              and {"name": "KEYCLOAK_ISSUER_URL", "value": sys.argv[4]} in (container.get("env") or [])
+              and all(
+                  {"name": name, "value": sys.argv[4]} in (container.get("env") or [])
+                  for name in sys.argv[5].split(",")
+              )
               for container in containers
           )
       print("present" if present else "missing")
-      ' "$KC_HOST" "$HOST_IP" "$ISSUER_CONTAINER" "$ISSUER_URL"
+      ' "$KC_HOST" "$HOST_IP" "$ISSUER_CONTAINER" "$ISSUER_URL" "$ISSUER_ENV"
     executable: /bin/bash
   environment:
     KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
@@ -418,6 +424,7 @@
     HOST_IP: "{{ ingress_forward_host }}"
     ISSUER_CONTAINER: "{{ item.keycloak_issuer_container | default('') }}"
     ISSUER_URL: "{{ _ingress_issuer }}"
+    ISSUER_ENV: "{{ item.keycloak_issuer_env | default(['KEYCLOAK_ISSUER_URL']) | join(',') }}"
   loop: "{{ _ingress_alias_targets }}"
   loop_control:
     label: "{{ item.namespace }}/{{ item.deployment }}"

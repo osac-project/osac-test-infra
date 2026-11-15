@@ -1,7 +1,8 @@
 # Path filters of the E2E policy (.github/e2e-policy.yml). A change to a file that matches e2e-code can change what the
 # full-install suites do. Documentation and ownership files cannot, so they skip the suites (as the old workflow triggers
-# did with paths-ignore). A pull request cannot change these filters for itself: e2e-pr.yml reads them from the default
-# branch.
+# did with paths-ignore). infra/netris/ is left out too: the automatic suites (VMaaS, CaaS, BMaaS) do not run that
+# backend, and the Netris suites are started by hand (manual_only), so a change that only touches it needs none of them.
+# A pull request cannot change these filters for itself: e2e-pr.yml reads them from the default branch.
 e2e-code:
   - '**'
   - '!OWNERS'
@@ -9,3 +10,4 @@ e2e-code:
   - '!LICENSE'
   - '!**/*.md'
   - '!docs/**'
+  - '!infra/netris/**'

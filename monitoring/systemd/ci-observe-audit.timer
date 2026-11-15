@@ -1,0 +1,17 @@
+# Systemd user timer for the daily ci-observe check against GitHub.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-audit.timer
+#
+# Runs once a day at 03:35 UTC, away from the hourly writers (pull requests at
+# 05 past, trends at 25, spans at 45). The pages call a check older than 36
+# hours late. Persistent runs a missed check when the machine comes back.
+
+[Unit]
+Description=Check the ci-observe pages against GitHub daily
+
+[Timer]
+OnCalendar=*-*-* 03:35:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

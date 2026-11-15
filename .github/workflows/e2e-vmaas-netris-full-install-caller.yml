@@ -11,7 +11,15 @@ on:
     types: [labeled]
     branches: [main]
   schedule:
-    - cron: "0 0 * * *"
+    # Temporarily ten runs a day, to gather enough results to find the source of
+    # the flakiness. Back to once a night when that is understood. Evenly spaced,
+    # 2h24m apart: longer than a run (about 2h15m), so two runs of this suite
+    # never hold two metal boxes at once. BMaaS Netris starts 30 minutes later.
+    - cron: "0 0,12 * * *"
+    - cron: "24 2,14 * * *"
+    - cron: "48 4,16 * * *"
+    - cron: "12 7,19 * * *"
+    - cron: "36 9,21 * * *"
   workflow_dispatch:
     inputs:
       deploy-suite:

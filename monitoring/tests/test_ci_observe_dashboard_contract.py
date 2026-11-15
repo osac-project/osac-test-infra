@@ -14,10 +14,13 @@ exists, under the slug Grafana derives from its title.
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import re
 import sqlite3
+import sys
 import threading
+import zipfile
 from datetime import UTC, datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -26,7 +29,7 @@ from urllib.parse import quote, urlparse
 import pytest
 
 import ci_observe_seed
-from helpers import FakeGitHub
+from helpers import FakeGitHub, FakeResponse
 
 DASHBOARDS = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
 API = "http://127.0.0.1:9103"
@@ -36,9 +39,15 @@ NOW = datetime.now(UTC).replace(microsecond=0)
 # here, so their fields are pinned by test_ci_observe_dashboard.py and by
 # test_the_capture_rows_carry_every_run_page_column below.
 TEMPO_PATHS = {"/api/ci-observe/capture"}
-# Roots the seed leaves empty on purpose: a run page's JUnit evidence comes
-# from a GitHub artifact the seed does not serve.
-MAY_BE_EMPTY = {("/api/ci-observe/run", "native.failed_tests")}
+# No root may be empty on the seed: an empty table shows its "nothing here"
+# text, and a root that is empty here is a panel whose columns nothing
+# checks. The Failed tests table was one, and it said "No failures." for
+# runs whose JUnit file could not be read.
+JUNIT = (b'<testsuites><testsuite name="pytest">'
+         b'<testcase classname="tests.e2e.vmaas.test_vm" name="test_vm_create" time="91.5">'
+         b'<failure type="AssertionError" message="ComputeInstance did not reach Ready"/></testcase>'
+         b'<testcase classname="tests.e2e.vmaas.test_vm" name="test_vm_delete" time="12.0"/>'
+         b"</testsuite></testsuites>")
 
 
 def pages():
@@ -87,10 +96,32 @@ def resolve(document, root):
 
 
 class Served:
-    def __init__(self, base_url, seeded):
+    def __init__(self, base_url, seeded, exporter=None, github=None):
         self.base_url = base_url
         self.seeded = seeded
+        self.exporter = exporter
+        self.github = github
         self.cache = {}
+
+    def publish(self, capture_id):
+        """The capture's artifact, where its run's trigger puts it."""
+        evidence_module = sys.modules["ci_observe_run_evidence"]
+        suite, run_id = capture_id.split("-")[0], int(capture_id.split("-")[2])
+        rows = self.exporter._run_evidence._ci_observe_run_rows(run_id)
+        trigger = self.exporter._run_evidence.run_trigger(rows, run_id)
+        repo = rows[0]["repo"]
+        path, _, private = evidence_module.artifact_place(trigger, repo, run_id)
+        name = evidence_module.SUITE_ARTIFACTS[suite].format(run_id=run_id)
+        download = f"/repos/osac-project/{repo}/actions/artifacts/{run_id}/zip"
+        entry = {"id": run_id, "name": name, "size_in_bytes": 512, "expired": False,
+                 "created_at": "2026-11-01T00:00:00Z", "archive_download_url": f"{self.github.api_url}{download}",
+                 "workflow_run": {"id": 1}}
+        listing = f"{path}?name={name}&per_page=100" if private else path
+        self.github.add(listing, FakeResponse(payload={"total_count": 1, "artifacts": [entry]}))
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("junit.xml", JUNIT)
+        self.github.add(download, FakeResponse(content=buffer.getvalue()))
 
     def get(self, url):
         if url not in self.cache:
@@ -116,19 +147,21 @@ def served(wfe, tmp_path_factory):
     patch.setattr(wfe, "CACHE_DIR", str(directory))
     patch.setattr(wfe, "DB_FILE", seeded["jobs_db"])
     patch.setattr(wfe, "LEGACY_CACHE_FILE", str(directory / "workflow-exporter-cache.json"))
-    patch.setattr(wfe, "TOKEN", None)
+    patch.setattr(wfe, "TOKEN", "seed-token")
     patch.setattr(wfe, "REPOS_FILTER", [])
-    # Nothing leaves the test: every GitHub call is a 404.
+    # Nothing leaves the test: every GitHub call is a 404 unless a test
+    # routes it (the Failed tests panel's artifact: Served.publish).
     github = FakeGitHub(wfe.API_URL)
     patch.setattr(wfe.requests, "get", github.get)
     patch.setattr(wfe.requests, "post", github.post)
     exporter = wfe.WorkflowExporter()
+    exporter.headers = {"Authorization": "token seed-token"}
     patch.setattr(wfe.ExporterHandler, "exporter", exporter)
     server = ThreadingHTTPServer(("127.0.0.1", 0), wfe.ExporterHandler)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     try:
-        yield Served(f"http://127.0.0.1:{server.server_address[1]}", seeded)
+        yield Served(f"http://127.0.0.1:{server.server_address[1]}", seeded, exporter, github)
     finally:
         server.shutdown()
         server.server_close()
@@ -166,9 +199,15 @@ def variable_values(document, served):
                 numbers = [str(row[value_column]) for row in rows]
                 values["pr_number"] = next((number for number in numbers if ran_e2e(number)), numbers[0])
         elif variable["name"] == "capture_id":
+            # A run whose tests failed: every run page table has rows for it.
             conn = sqlite3.connect(served.seeded["jobs_db"])
-            values["capture_id"] = conn.execute("SELECT capture_id FROM captures ORDER BY capture_id").fetchone()[0]
+            values["capture_id"] = conn.execute(
+                "SELECT capture_id FROM captures JOIN jobs ON jobs.run_id = captures.run_id"
+                " WHERE jobs.conclusion = 'failure' AND jobs.failed_step LIKE '%Run E2E tests%'"
+                " ORDER BY capture_id"
+            ).fetchone()[0]
             conn.close()
+            served.publish(values["capture_id"])
     return values
 
 
@@ -192,9 +231,7 @@ def test_every_query_resolves_against_the_served_api(served, name):
         if path in TEMPO_PATHS:
             continue
         rows = resolve(served.get(url), target["root_selector"])
-        if not rows:
-            assert (path, target["root_selector"]) in MAY_BE_EMPTY, f"{name} / {title}: no rows at {url}"
-            continue
+        assert rows, f"{name} / {title}: no rows at {url}"
         fields = set().union(*(row.keys() for row in rows if isinstance(row, dict)))
         for column in target["columns"]:
             assert column["selector"] in fields, f"{name} / {title}: {column['selector']!r} is not served by {url}"

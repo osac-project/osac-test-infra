@@ -594,3 +594,110 @@ def run_phases(timeline: list | None, steps: list | None = None) -> dict:
         phases[step_phase(step.get("name"))] += float(seconds)
         measured = True
     return {"phases": phases, "queue_s": None, "total_s": None, "measured": measured, "source": "steps"}
+
+
+# ---------------------------------------------------------------------------
+# The daily check against GitHub
+# ---------------------------------------------------------------------------
+# ci_observe_audit.py (ci-observe-audit.timer) writes its result next to the
+# stores. The pages print its summary; they compute nothing from it.
+AUDIT_FILE_NAME = "ci-observe-audit.json"
+# The timer runs daily; a check older than this is late.
+AUDIT_LATE_HOURS = 36
+
+
+def read_audit_summary(path: str) -> dict | None:
+    """The summary block of the last check, or None when there is none or
+    the file cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            summary = json.load(handle).get("summary")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return summary if isinstance(summary, dict) else None
+
+
+def _audit_test_notes(tests: dict, when: str) -> list[str]:
+    """What the daily check found about test results and failed tests."""
+    notes = []
+    repo = tests.get("private_repo") or "the private artifact repository"
+    if tests.get("private_readable") is False:
+        notes.append(f"the check against GitHub ({when}) cannot read {repo}, where scheduled and manual E2E runs "
+                     f"publish their JUnit files ({tests.get('private_note') or 'no access'}): the test results and "
+                     "failed tests of those runs are missing")
+    if tests.get("runs_missing"):
+        since = (tests.get("missing_since") or "")[:10]
+        reasons = "; ".join(f"{count}: {reason}" for reason, count in tests.get("missing_reasons") or [])
+        notes.append(f"{tests['runs_missing']:,} of {tests.get('runs', 0):,} suite runs that ran their tests have "
+                     f"no test results" + (f", the first from {since}" if since else "")
+                     + (f" ({reasons})" if reasons else ""))
+    failed = tests.get("failed_runs", 0)
+    if tests.get("pages_error"):
+        notes.append(f"{tests['pages_error']} of {failed} runs that failed in their tests cannot show their failed "
+                     f"tests on their run page: {tests.get('page_error') or 'see ' + AUDIT_FILE_NAME}")
+    if tests.get("pages_claim_none"):
+        notes.append(f"{tests['pages_claim_none']} of {failed} runs that failed in their tests show no failed test "
+                     f"on their run page ({AUDIT_FILE_NAME} lists them)")
+    if tests.get("pages_differ"):
+        notes.append(f"{tests['pages_differ']} of {failed} runs that failed in their tests list other failed tests "
+                     f"on their run page than in their JUnit file ({AUDIT_FILE_NAME} lists them)")
+    if tests.get("history_differ"):
+        notes.append(f"{tests['history_differ']} of {failed} runs that failed in their tests have other failed "
+                     f"tests in the test history than in their JUnit file ({AUDIT_FILE_NAME} lists them)")
+    return notes
+
+
+def audit_lines(summary: dict | None, now: datetime, part: str) -> tuple[str, list[str]]:
+    """(source, notes) for one page: the line next to "Data as of" and what
+    the check found, for "Missing or partial data". part is "e2e" for the run
+    pages and "prs" for the Pull requests page."""
+    block = (summary or {}).get(part)
+    checked = parse_time((summary or {}).get("checked_at"))
+    if not block or checked is None:
+        return "Not checked against GitHub yet (ci-observe-audit.timer)", []
+    when = f"{checked:%Y-%m-%d %H:%M} UTC"
+    notes = []
+    hours = (now - checked).total_seconds() / 3600
+    if hours > AUDIT_LATE_HOURS:
+        notes.append(f"the last check against GitHub ran {hours:.0f} h ago ({when}); the daily check is late")
+    if part == "e2e":
+        listed_from = parse_time(block.get("listed_from"))
+        since = f" since {listed_from:%Y-%m-%d}" if listed_from else ""
+        source = (f"Checked against GitHub {when}: {block.get('runs_listed', 0):,} completed suite runs{since}, "
+                  f"{block.get('runs_missing', 0):,} not stored; {block.get('sample', 0)} sampled runs, "
+                  f"{block.get('sample_differ', 0)} differ")
+        if block.get("runs_missing"):
+            notes.append(f"the check against GitHub ({when}) found {block['runs_missing']:,} of "
+                         f"{block.get('runs_listed', 0):,} completed suite runs{since} not stored")
+        if block.get("runs_other_result"):
+            notes.append(f"the check against GitHub ({when}) found {block['runs_other_result']:,} stored runs "
+                         "with an outdated result or attempt")
+        if block.get("sample_differ"):
+            notes.append(f"{block['sample_differ']} of {block.get('sample', 0)} sampled runs differ from GitHub "
+                         f"({AUDIT_FILE_NAME} lists them)")
+        if block.get("recount_ok") is False:
+            notes.append("the Overview's counts differ from a recount of the stored rows by the documented scope")
+        if block.get("lists_incomplete"):
+            notes.append(f"GitHub could not list every run of {block['lists_incomplete']} workflows; "
+                         "the check covers the rest")
+        tests = (summary or {}).get("tests")
+        if tests:
+            source += (f"; test results stored for {tests.get('runs_with_results', 0):,} of "
+                       f"{tests.get('runs', 0):,} suite runs that ran their tests")
+            notes.extend(_audit_test_notes(tests, when))
+        return source, notes
+    merged = "matches" if block.get("merged_ok") else "differs"
+    source = (f"Checked against GitHub {when}: {block.get('sample', 0)} sampled merged pull requests, "
+              f"{block.get('sample_differ', 0)} differ; the merged count {merged}")
+    if block.get("sample_differ"):
+        notes.append(f"{block['sample_differ']} of {block.get('sample', 0)} sampled pull requests differ from "
+                     f"GitHub ({AUDIT_FILE_NAME} lists them)")
+    if block.get("merged_ok") is False:
+        notes.append("the stored merged count differs from GitHub's search")
+    if block.get("api_ok") is False:
+        notes.append("a number on this page differs from a recount of its stored rows")
+    if block.get("order_violations"):
+        examples = "; ".join(block.get("order_examples") or [])
+        notes.append(f"{block['order_violations']} stored pull requests have their times out of order"
+                     + (f" ({examples})" if examples else ""))
+    return source, notes

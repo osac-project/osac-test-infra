@@ -327,6 +327,12 @@
             sed -i '/<\/type>/a\    <boot dev="network"\/>\n    <boot dev="hd"\/>' /tmp/{{ item }}.xml
             changed=true
           fi
+          # Keep the serial console in a file: the gather step collects /var/log/libvirt/qemu/*.log, so a failure
+          # shows each boot, when cloud-init ran and when sshd started.
+          if grep -q "<serial type='pty'>" /tmp/{{ item }}.xml && ! grep -q 'serial.log' /tmp/{{ item }}.xml; then
+            sed -i "0,/<serial type='pty'>/s||<serial type='pty'>\n      <log file='/var/log/libvirt/qemu/{{ item }}-serial.log' append='on'/>|" /tmp/{{ item }}.xml
+            changed=true
+          fi
           if [ "$changed" = true ]; then
             virsh define /tmp/{{ item }}.xml
             echo "cleaned"

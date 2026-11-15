@@ -58,3 +58,6 @@ jobs:
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+    secrets:
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

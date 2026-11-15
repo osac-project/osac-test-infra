@@ -5,10 +5,14 @@
 # a 30 second limit and store stdout as fabric.json. stdout is one JSON object,
 # stderr carries errors, and the exit status is 1 when no snapshot could be taken.
 #
-#   {"vpc": ..., "vnet": ..., "subnets": ..., "nat": ...}
+#   {"captured_at": ..., "vpc": ..., "vnet": ..., "subnets": ..., "nat": ...,
+#    "softgates": "<softgate-read.sh output>"}
 #
 # A section is null when its endpoint failed. Only GET requests are made after the
-# login. The controller URL is found as gather-infra does (the k3s traefik "web"
+# login. The controller API says what Netris wants; "softgates" says what the data
+# plane applies at that moment (softgate-read.sh: each softgate's clock, NAT rules,
+# HTTPS conntrack and the last 15 minutes of its Netris agent journal). A rule the
+# API has deleted but a softgate still applies shows up only there. The controller URL is found as gather-infra does (the k3s traefik "web"
 # nodePort on localhost); the credentials come from the Secret the installer
 # writes, network-fulfillment-ig, so no new credential is stored. The password
 # travels on stdin and in the environment of one child process, never in argv or
@@ -93,6 +97,10 @@ print(json.dumps({"user": os.environ["NETRIS_USER"], "password": os.environ["NET
 fi
 unset password
 
+# Softgates, read in the background while the API calls run.
+SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+timeout "$(budget 12)" bash "${SCRIPTS}/softgate-read.sh" "-15 min" 200 > "${WORK}/softgates.txt" 2>&1 &
+
 declare -A ENDPOINTS=([vpc]=/api/v2/vpc [vnet]=/api/v2/vnet [subnets]=/api/v2/ipam/subnets [nat]=/api/v2/nat)
 for key in "${!ENDPOINTS[@]}"; do
     (
@@ -102,11 +110,16 @@ for key in "${!ENDPOINTS[@]}"; do
 done
 wait
 
-python3 - "${WORK}" <<'PY'
+python3 - "${WORK}" "$(date -u +%FT%T.%NZ)" <<'PY'
 import json, os, sys
 
 work = sys.argv[1]
-out = {}
+out = {"captured_at": sys.argv[2]}
+try:
+    with open(os.path.join(work, "softgates.txt"), encoding="utf-8", errors="replace") as handle:
+        out["softgates"] = handle.read()[-200000:] or None
+except OSError:
+    out["softgates"] = None
 for key in ("vpc", "vnet", "subnets", "nat"):
     try:
         with open(os.path.join(work, key + ".json"), encoding="utf-8") as handle:
@@ -115,7 +128,7 @@ for key in ("vpc", "vnet", "subnets", "nat"):
         out[key] = None
 json.dump(out, sys.stdout, sort_keys=True)
 print()
-if all(value is None for value in out.values()):
+if all(out[key] is None for key in ("vpc", "vnet", "subnets", "nat", "softgates")):
     print("fabric-snapshot: no section could be read", file=sys.stderr)
     sys.exit(1)
 PY

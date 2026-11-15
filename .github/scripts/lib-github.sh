@@ -4,6 +4,9 @@
 #   source "$(dirname "${BASH_SOURCE[0]}")/lib-github.sh"
 #
 # Requires: GH_TOKEN, and optionally GITHUB_API_URL (default set by caller).
+# A call can use another token for one request by setting FETCH_TOKEN on it:
+#   FETCH_TOKEN="${other}" fetch_with_retry ...
+# (empty or unset means GH_TOKEN).
 
 # GET/DELETE/etc with retries on transport blips and HTTP 429/5xx.
 # Writes body to $1, prints the final HTTP code (or curl-transport-error)
@@ -21,7 +24,7 @@ fetch_with_retry() {
   while (( attempt <= max_attempts )); do
     if ! code=$(curl -sL -o "${out}" -w '%{http_code}' \
       --connect-timeout 10 --max-time 30 \
-      -H "Authorization: Bearer ${GH_TOKEN}" \
+      -H "Authorization: Bearer ${FETCH_TOKEN:-${GH_TOKEN}}" \
       -H "Accept: application/vnd.github+json" \
       "$@"); then
       code="curl-transport-error"

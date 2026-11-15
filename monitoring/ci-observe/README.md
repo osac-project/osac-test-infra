@@ -73,7 +73,7 @@ Pick the **Test** (type to search; the list starts with the tests that take the 
 
 **Repository**, **Author** and **Working groups to approve** filter everything on the page except the one pull request below. Working groups are the code-owner teams GitHub reports on the pull request (see [`model.md`](model.md#pull-requests)).
 
-The top half covers every pull request merged or closed in the window. The tiles show the median time to merge, the wait for a first review, review to approval, first approval to the queue, time in the merge queue, queue ejections and re-queues, commits, rebases, force pushes, changes requested, E2E runs and failed E2E runs, then review rounds, re-approvals after a push and after a rebase, the wait for a re-approval, last approval to the queue, files per pull request, the share that needed two or more working groups, and how many pull requests have their lifecycle read. Below them:
+The top half covers every pull request merged or closed in the window. The tiles show the median time to merge, the wait for a first review, the share approved at the first review, the time from ready to the final approval (the last approval before the queue), time in the merge queue, queue ejections and re-queues, commits, rebases, force pushes, changes requested, E2E runs and failed E2E runs, then review rounds, re-approvals after a push and after a rebase, the wait for a re-approval, the final approval to the queue, files per pull request, the share that needed two or more working groups, and how many pull requests have their lifecycle read. Below them:
 
 - **Stage medians per week**.
 - **Every merged pull request**: one dot each, merge date against time to merge on a log scale, colored by how many working groups had to approve it. Hover for the pull request; click to open it below.
@@ -82,6 +82,7 @@ The top half covers every pull request merged or closed in the window. The tiles
 - **Review rounds**, **times in the merge queue** and **working groups** per pull request.
 - **The slowest pull requests, stretch by stretch**: the 20 slowest, each bar its whole life in order, colored by state.
 - Every pull request, newest first, with its files, working groups, review rounds and re-approvals. Click a number to open it below.
+- **About these numbers**: what is counted, the window, what is missing, how old the data is and what the last check against GitHub found.
 
 The E2E numbers describe the pull requests that ran at least one suite run: most change nothing a suite tests. An attempt is **ejected** when its own checks failed or timed out, and **re-queued** when it was cancelled or replaced by a later attempt: every entry behind a failing one is re-queued, so a re-queue is not the pull request's failure.
 

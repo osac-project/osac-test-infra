@@ -912,7 +912,7 @@
         {
           "id": 19,
           "title": "Failed tests",
-          "description": "",
+          "description": "The tests that failed, from the JUnit file in this suite's logs artifact. Pull-request and merge-queue runs keep the artifact on the run; scheduled and manual runs publish it to osac-ci-artifacts. \"No failures.\" means the JUnit file lists none. When the file cannot be read, the panel shows the error, and the workflow exporter's log has it too.",
           "type": "table",
           "gridPos": {
             "h": 4,
@@ -1083,12 +1083,12 @@
               "type": "json",
               "source": "url",
               "format": "table",
-              "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
+              "url": "http://127.0.0.1:9103/api/ci-observe/failed-tests?capture_id=${capture_id:percentencode}",
               "url_options": {
                 "method": "GET",
                 "data": ""
               },
-              "root_selector": "native.failed_tests",
+              "root_selector": "failed_tests",
               "columns": [
                 {
                   "selector": "name",

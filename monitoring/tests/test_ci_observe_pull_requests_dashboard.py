@@ -475,15 +475,25 @@ def test_the_page_opens_on_every_pull_request_of_the_window() -> None:
         for target in candidate.get("targets", []):
             assert target["url"] == INDEX_URL, candidate["title"]
     fields = {column["selector"] for tile in tiles for column in tile["targets"][0]["columns"]}
-    assert {"review_wait_median_s", "review_median_s", "waiting_median_s", "queue_median_s", "rebased_share",
-            "force_pushes_mean", "e2e_retests_median", "ejected_share", "review_rounds_median",
+    assert {"review_wait_median_s", "approved_first_review_share", "ready_to_approval_median_s", "queue_median_s",
+            "rebased_share", "force_pushes_mean", "e2e_retests_median", "ejected_share", "review_rounds_median",
             "reapproved_share", "rebase_rereview_share", "rereview_median_s", "last_approval_wait_median_s",
             "files_median", "multi_wg_share", "lifecycle_prs"} <= fields
-    assert panel("First approval to queue")["targets"][0]["columns"][0]["selector"] == "waiting_median_s"
-    assert panel("Last approval to queue")["targets"][0]["columns"][0]["selector"] == "last_approval_wait_median_s"
+    # Most pull requests are approved at their first review, so the review stage
+    # is a share and a time to the final approval, not a median that reads 0.
+    approved = panel("Approved at the first review")
+    assert approved["targets"][0]["columns"][0]["selector"] == "approved_first_review_share"
+    assert approved["fieldConfig"]["defaults"]["unit"] == "percentunit"
+    assert panel("Ready to final approval")["targets"][0]["columns"][0]["selector"] == "ready_to_approval_median_s"
+    assert panel("Final approval to queue")["targets"][0]["columns"][0]["selector"] == "last_approval_wait_median_s"
+    for title in ("Review to approval", "First approval to queue", "Last approval to queue"):
+        assert not [candidate for candidate in overview if candidate.get("title") == title], title
     weekly = panel("Stage medians per week")
     assert weekly["targets"][0]["root_selector"] == "weekly"
     assert weekly["targets"][0]["format"] == "timeseries"
+    names = {item["matcher"]["options"]: item["properties"][0]["value"] for item in weekly["fieldConfig"]["overrides"]}
+    assert names["review_median_s"] == "First review to final approval"
+    assert names["waiting_median_s"] == "Final approval to queue"
     table = panel("Pull requests")
     assert table["targets"][0]["url"] == INDEX_URL
     assert table["targets"][0]["root_selector"] == "prs"
@@ -491,6 +501,17 @@ def test_the_page_opens_on_every_pull_request_of_the_window() -> None:
     assert override(table, "title")["links"][0]["url"] == "${__data.fields.url}"
     assert {"force_push_count", "e2e_runs", "e2e_failures", "files_changed", "wgs_required", "teams_display",
             "review_rounds", "reapprovals"} <= set(selectors(table))
+
+
+def test_the_page_says_what_it_counts_and_what_the_check_against_github_found() -> None:
+    """The same "About these numbers" table as the run pages: the backfill's
+    freshness and the last check against GitHub (ci_observe_audit.py)."""
+    overview, _ = sections()
+    about = panel("About these numbers")
+    assert about in overview
+    assert about["targets"][0]["url"] == INDEX_URL
+    assert about["targets"][0]["root_selector"] == "about"
+    assert selectors(about) == ["population", "window", "missing", "sources", "generated_at"]
 
 
 def test_every_merged_pull_request_is_a_dot_colored_by_working_groups() -> None:

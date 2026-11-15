@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_observe_phases
 from ci_observe_capture_view import CIObserveCaptureView
 from ci_observe_insights import CIObserveInsights
-from ci_observe_run_evidence import CIObserveRunEvidence
+from ci_observe_run_evidence import CIObserveRunEvidence, EvidenceError
 from ci_observe_runs import CIObserveRuns
 
 logging.basicConfig(
@@ -127,6 +127,18 @@ JOB_COLUMNS = [
 TIMELINE_BACKFILL_PER_CYCLE = int(os.getenv("TIMELINE_BACKFILL_PER_CYCLE", "12"))
 TIMELINE_BACKFILL_MIN_RATE_LIMIT = int(os.getenv("TIMELINE_BACKFILL_MIN_RATE_LIMIT", "1500"))
 
+# The polling reads the 50 newest completed runs per repo and follows the runs
+# it saw active. A burst of more than 50 runs between two polls, a restart or a
+# failed poll loses runs for good, and a run whose result changes under the same
+# attempt (it waited for approval, then ran) keeps its first result. Every
+# RECONCILE_INTERVAL seconds, and on the first cycle, the exporter lists every
+# completed run created in the last RECONCILE_HOURS hours and stores the ones
+# it does not have or has with another conclusion. A few dozen list calls per
+# pass; it waits while the shared budget is below RECONCILE_MIN_RATE_LIMIT.
+RECONCILE_INTERVAL = int(os.getenv("RECONCILE_INTERVAL", "1800"))
+RECONCILE_HOURS = int(os.getenv("RECONCILE_HOURS", "48"))
+RECONCILE_MIN_RATE_LIMIT = int(os.getenv("RECONCILE_MIN_RATE_LIMIT", "1000"))
+
 # ---------------------------------------------------------------------------
 # Prometheus metrics
 # ---------------------------------------------------------------------------
@@ -190,6 +202,11 @@ api_remaining = Gauge(
     "github_actions_api_rate_limit_remaining",
     "GitHub API rate limit remaining (workflow exporter)",
     ["org"],
+)
+reconciled_runs = Counter(
+    "github_actions_reconciled_runs_total",
+    "Completed runs the polling missed or kept with an outdated result, stored by the reconciliation",
+    ["org", "repo"],
 )
 
 
@@ -1166,6 +1183,10 @@ class WorkflowExporter:
                 "failed_step": "",
                 "suite": True,
                 "run_id": record["id"],
+                # The attempt the suite's own test job ran in. A re-run of the
+                # failed jobs moves the run to the next attempt, and a suite
+                # that did not run again keeps its job, and its attempt.
+                "run_attempt": main.get("run_attempt") or record.get("run_attempt"),
             })
             failed = self._extract_failed_steps(group) if result == "failure" else []
             if result == "failure":
@@ -1370,8 +1391,11 @@ class WorkflowExporter:
         self._pr_map_ts = 0
         self._pr_backfill_done = False
         # The last X-RateLimit-Remaining GitHub sent, None before the first
-        # call. The timeline catch-up reads it; nothing else does.
+        # call. The timeline catch-up and the reconciliation read it.
         self._rate_limit_remaining = None
+        # time.monotonic() of the last reconciliation; None runs one on the
+        # first cycle, which also covers what a restart missed.
+        self._reconciled_at = None
         # Run-evidence lookup for /api/ci-observe/run (see
         # get_ci_observe_run_json and ci_observe_run_evidence.py): parsed
         # native JUnit results and run metadata fetched on demand from
@@ -1821,7 +1845,8 @@ class WorkflowExporter:
 
     def _upsert_job(self, record):
         """Insert a job record, or overwrite it if a row with the same id
-        already exists but with an older run_attempt.
+        already exists but with an older run_attempt, or with the same
+        attempt and another, non-empty conclusion.
 
         A GitHub run keeps the same id across re-runs (e.g. "re-run failed
         jobs") -- only run_attempt increments and the run's own
@@ -1830,9 +1855,13 @@ class WorkflowExporter:
         leave a permanently stale "failure" row, since the id alone would
         already look "seen".
 
+        The same attempt changes its result when a run that waited for
+        approval (action_required) is approved and runs, and a row stored
+        before its run finished has no result yet. An empty conclusion never
+        overwrites a stored one.
+
         Returns True if a row was inserted or updated, False if an
-        existing row's run_attempt was already >= the incoming one (i.e.
-        nothing changed).
+        existing row was already as current (i.e. nothing changed).
         """
         row = {c: record.get(c) for c in JOB_COLUMNS if c != "steps_json"}
         row["id"] = record.get("id")
@@ -1849,7 +1878,9 @@ class WorkflowExporter:
             cur = conn.execute(
                 f"INSERT INTO jobs ({', '.join(JOB_COLUMNS)}) VALUES ({placeholders}) "
                 f"ON CONFLICT(id) DO UPDATE SET {update_clause} "
-                f"WHERE excluded.run_attempt > jobs.run_attempt",
+                f"WHERE excluded.run_attempt > jobs.run_attempt "
+                f"OR (excluded.run_attempt = jobs.run_attempt AND COALESCE(excluded.conclusion, '') != '' "
+                f"AND COALESCE(excluded.conclusion, '') != COALESCE(jobs.conclusion, ''))",
                 row,
             )
             return cur.rowcount > 0
@@ -2738,7 +2769,9 @@ class WorkflowExporter:
         delayed, since nothing before it in created_at order will ever
         rank lower. See collect()'s dropped-from-active-list catch-up for
         the mechanism that actually covers long-running runs; this
-        function alone is not sufficient for them.
+        function alone is not sufficient for them. Bursts of more than 50
+        completions per poll, restarts and failed polls are covered by
+        _reconcile_if_due.
         """
         resp = self._get(
             f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
@@ -2903,16 +2936,23 @@ class WorkflowExporter:
     def _needs_upsert(self, run):
         """Whether `run` (a raw GitHub API run object) is worth fetching
         job-level details for and upserting -- true if it's not stored at
-        all yet, or if the incoming run_attempt is newer than what's
-        stored (see _upsert_job). False means the stored row is already
-        at least as current as this run, so the caller can skip the extra
-        _fetch_run_jobs API call entirely.
+        all yet, if the incoming run_attempt is newer than what's stored,
+        or if the same attempt now has another conclusion (see
+        _upsert_job). False means the stored row is already as current as
+        this run, so the caller can skip the extra _fetch_run_jobs API call
+        entirely.
         """
         with self._db() as conn:
             row = conn.execute(
-                "SELECT run_attempt FROM jobs WHERE id = ?", (run["id"],)
+                "SELECT run_attempt, conclusion FROM jobs WHERE id = ?", (run["id"],)
             ).fetchone()
-        return row is None or run.get("run_attempt", 1) > row[0]
+        if row is None:
+            return True
+        attempt = run.get("run_attempt", 1)
+        if attempt != row[0]:
+            return attempt > row[0]
+        conclusion = run.get("conclusion") or ""
+        return bool(conclusion) and conclusion != (row[1] or "")
 
     # GitHub's workflow-runs list endpoint stops paginating around 1000
     # results regardless of total_count -- a documented REST API list
@@ -2922,19 +2962,24 @@ class WorkflowExporter:
     # that with a safety margin before bisecting the date range.
     BACKFILL_SAFE_RESULT_LIMIT = 900
 
-    def _backfill_page(self, repo, url):
+    def _backfill_page(self, repo, url, wait=True):
         """Paginate a single (already narrow enough) runs-list query,
-        upserting every run. Returns (seen, new).
+        upserting every run. Returns (seen, new). With wait=False an
+        exhausted rate limit ends the page instead of sleeping until the
+        reset: the poll loop must not stop for an hour.
         """
         seen = new = 0
         while url:
             resp = self._get(url)
 
             if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
+                if not wait:
+                    logger.warning("Rate limit exhausted; %s: the rest of this listing waits for the next pass", repo)
+                    break
                 reset = int(resp.headers.get("X-RateLimit-Reset", time.time() + 60))
-                wait = max(reset - time.time(), 0) + 5
-                logger.warning("Rate limit exhausted, sleeping %.0fs until reset", wait)
-                time.sleep(wait)
+                pause = max(reset - time.time(), 0) + 5
+                logger.warning("Rate limit exhausted, sleeping %.0fs until reset", pause)
+                time.sleep(pause)
                 continue  # retry the same url
 
             if not resp.ok:
@@ -2984,11 +3029,12 @@ class WorkflowExporter:
 
         return seen, new
 
-    def _backfill_range(self, repo, since_dt, until_dt):
+    def _backfill_range(self, repo, since_dt, until_dt, wait=True):
         """Fetch completed runs for repo in [since_dt, until_dt), recursing
         by bisecting the date range whenever a query's total_count would
         need to paginate past GitHub's ~1000-result list cap. Returns
-        (seen, new).
+        (seen, new). With wait=False an exhausted rate limit skips the
+        range instead of sleeping until the reset.
         """
         since_str = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         until_str = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2997,10 +3043,13 @@ class WorkflowExporter:
 
         probe = self._get(url)
         if probe.status_code == 403 and probe.headers.get("X-RateLimit-Remaining") == "0":
+            if not wait:
+                logger.warning("Rate limit exhausted; %s [%s..%s] waits for the next pass", repo, since_str, until_str)
+                return 0, 0
             reset = int(probe.headers.get("X-RateLimit-Reset", time.time() + 60))
-            wait = max(reset - time.time(), 0) + 5
-            logger.warning("Rate limit exhausted, sleeping %.0fs until reset", wait)
-            time.sleep(wait)
+            pause = max(reset - time.time(), 0) + 5
+            logger.warning("Rate limit exhausted, sleeping %.0fs until reset", pause)
+            time.sleep(pause)
             return self._backfill_range(repo, since_dt, until_dt)  # retry whole range
 
         if not probe.ok:
@@ -3013,8 +3062,8 @@ class WorkflowExporter:
             mid = since_dt + (until_dt - since_dt) / 2
             logger.info("%s [%s..%s]: %d runs, bisecting at %s",
                         repo, since_str, until_str, total_count, mid.isoformat())
-            seen1, new1 = self._backfill_range(repo, since_dt, mid)
-            seen2, new2 = self._backfill_range(repo, mid, until_dt)
+            seen1, new1 = self._backfill_range(repo, since_dt, mid, wait)
+            seen2, new2 = self._backfill_range(repo, mid, until_dt, wait)
             return seen1 + seen2, new1 + new2
 
         # Narrow enough range -- paginate normally, reusing the probe
@@ -3056,11 +3105,38 @@ class WorkflowExporter:
 
         next_url = probe.links.get("next", {}).get("url")
         if next_url:
-            more_seen, more_new = self._backfill_page(repo, next_url)
+            more_seen, more_new = self._backfill_page(repo, next_url, wait)
             seen += more_seen
             new += more_new
 
         return seen, new
+
+    def _reconcile_if_due(self, repos):
+        """List every completed run created in the last RECONCILE_HOURS
+        hours and store the ones the polling missed or kept with an
+        outdated result; see RECONCILE_INTERVAL. Runs on the first cycle,
+        then every RECONCILE_INTERVAL seconds, and waits a cycle while the
+        shared budget is low. Returns the number of runs stored, or None
+        when it did not run."""
+        now = time.monotonic()
+        if self._reconciled_at is not None and now - self._reconciled_at < RECONCILE_INTERVAL:
+            return None
+        if self._rate_limit_remaining is not None and self._rate_limit_remaining < RECONCILE_MIN_RATE_LIMIT:
+            logger.info("Reconciliation waits: %d API calls left, below %d",
+                        self._rate_limit_remaining, RECONCILE_MIN_RATE_LIMIT)
+            return None
+        self._reconciled_at = now
+        until_dt = datetime.now(timezone.utc)
+        since_dt = until_dt - timedelta(hours=RECONCILE_HOURS)
+        stored = 0
+        for repo in repos:
+            seen, new = self._backfill_range(repo, since_dt, until_dt, wait=False)
+            if new:
+                reconciled_runs.labels(org=ORG, repo=repo).inc(new)
+                logger.warning("Reconciliation stored %d run(s) of %s the polling had missed or kept with an "
+                               "outdated result (%d listed, last %d h)", new, repo, seen, RECONCILE_HOURS)
+            stored += new
+        return stored
 
     def backfill(self, days):
         """One-off backfill: fetch completed runs from the last `days` days
@@ -3406,14 +3482,12 @@ class WorkflowExporter:
                         # queued/in_progress. Calling _process_completed_run
                         # on a non-completed run would upsert a premature
                         # row with an empty conclusion under this run's
-                        # current run_attempt -- and since _needs_upsert
-                        # only compares run_attempt, the real completion
-                        # later (same attempt number) would then never
-                        # overwrite it, permanently freezing the row on
-                        # "in_progress". Re-add it to this cycle's active
-                        # list instead, so it's retained for next cycle's
-                        # diff and this catch-up gets another chance once
-                        # it's actually done.
+                        # current run_attempt, shown as "in_progress" until
+                        # the real completion (same attempt number, now a
+                        # conclusion) replaces it. Re-add it to this cycle's
+                        # active list instead, so it's retained for next
+                        # cycle's diff and this catch-up gets another chance
+                        # once it's actually done.
                         current_active.append(
                             self._make_job_record(run_json, dropped_repo)
                         )
@@ -3427,6 +3501,14 @@ class WorkflowExporter:
 
         with self._lock:
             self.active_runs = current_active
+
+        # Then what neither the top-50 feed nor the active list saw: a burst,
+        # a restart, a failed poll, a result that changed under the same
+        # attempt. Best-effort, like the timeline catch-up below.
+        try:
+            self._reconcile_if_due(repos)
+        except Exception:
+            logger.exception("Reconciliation failed this cycle")
 
         # Last, after this cycle's own work: older E2E rows get their job
         # timeline a few at a time. Best-effort; it must never stop a cycle.
@@ -4563,12 +4645,12 @@ class WorkflowExporter:
     # self._run_evidence): a capture id embeds a GitHub run id and attempt,
     # and the evidence ties the capture to the GitHub-side data this
     # exporter already stores (job history in SQLite) and to the native
-    # JUnit results inside the run's osac-logs-[<suite>-]full-install-<run
-    # id> artifact, downloaded from GitHub on demand, bounded and cached.
-    # Same exporter, same token, same data -- no second poller, no new
-    # artifact.
+    # JUnit results inside the logs artifact of the capture's suite (for
+    # /api/ci-observe/failed-tests), downloaded from GitHub on demand,
+    # bounded and cached. Same exporter, same token, same data -- no second
+    # poller, no new artifact.
 
-    # The four run-evidence bounds the tests read on WorkflowExporter
+    # The run-evidence bounds the tests read on WorkflowExporter
     # (monitoring/tests/test_exporter_ci_observe_run.py), re-exported from
     # their canonical home on CIObserveRunEvidence. The download bound is
     # additionally monkeypatched there by the tests, so the evidence code
@@ -4576,7 +4658,6 @@ class WorkflowExporter:
     # CIObserveRunEvidence._download_artifact.
     NATIVE_MAX_DOWNLOAD_BYTES = CIObserveRunEvidence.NATIVE_MAX_DOWNLOAD_BYTES
     NATIVE_MAX_MESSAGE_CHARS = CIObserveRunEvidence.NATIVE_MAX_MESSAGE_CHARS
-    NATIVE_MAX_FAILED_TESTS = CIObserveRunEvidence.NATIVE_MAX_FAILED_TESTS
     NATIVE_FAILURE_CACHE_TTL_SECONDS = CIObserveRunEvidence.NATIVE_FAILURE_CACHE_TTL_SECONDS
 
     def _github_token(self):
@@ -4594,13 +4675,19 @@ class WorkflowExporter:
         return CIObserveRunEvidence._parse_capture_id(capture_id)
 
     def get_ci_observe_run_json(self, params):
-        """The /api/ci-observe/run document: everything known about one
-        ci-observe capture's GitHub run -- the run summary, its stored
-        jobs and steps, and the native JUnit evidence from the run's
-        osac-logs-[<suite>-]full-install-<run id> artifact. Thin wrapper
-        over CIObserveRunEvidence.get_ci_observe_run_json, which also
-        documents the query params and the response shape."""
+        """The /api/ci-observe/run document: everything the job history
+        stores about one ci-observe capture's GitHub run -- the run summary,
+        its jobs, steps and timing. Thin wrapper over
+        CIObserveRunEvidence.get_ci_observe_run_json, which also documents
+        the query params and the response shape."""
         return self._run_evidence.get_ci_observe_run_json(params)
+
+    def get_ci_observe_failed_tests_json(self, params):
+        """The /api/ci-observe/failed-tests document: the failed tests of
+        one capture, from the JUnit file in its suite's artifact. Raises
+        EvidenceError when they cannot be read. Thin wrapper over
+        CIObserveRunEvidence.get_ci_observe_failed_tests_json."""
+        return self._run_evidence.get_ci_observe_failed_tests_json(params)
 
     # -- ci-observe runs (begin) --------------------------------------------
     #
@@ -5416,13 +5503,36 @@ class ExporterHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload.encode())
 
+        elif parsed.path == "/api/ci-observe/failed-tests":
+            # GET /api/ci-observe/failed-tests?capture_id=<id>: 200 with the
+            # JUnit file's failed tests, or 502 when they cannot be read. The
+            # reason is the status line's text, which is what Grafana shows
+            # on the panel, and the JSON body; the evidence module logged it.
+            params = parse_qs(parsed.query)
+            try:
+                data = self.exporter.get_ci_observe_failed_tests_json(params)
+            except EvidenceError as error:
+                payload = json.dumps({"error": str(error), "capture_id": (params.get("capture_id") or [""])[0]})
+                reason = re.sub(r"[^\x20-\x7e]", "?", str(error))[:400]
+                self.send_response(502, reason)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(payload.encode())
+                return
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
         elif parsed.path == "/api/ci-observe/run":
             params = parse_qs(parsed.query)
             # Always 200 with a document that says what is missing: a
             # malformed capture id or an unknown run is a data gap the
-            # dashboard must show, not an error it would hide. The native
-            # lookup inside is bounded and cached; it can add a few seconds
-            # on the first request for a run, never on repeat loads.
+            # dashboard must show, not an error it would hide. It reads the
+            # job history only; the failed tests have their own endpoint.
             data = self.exporter.get_ci_observe_run_json(params)
             payload = json.dumps(data, default=str)
             self.send_response(200)

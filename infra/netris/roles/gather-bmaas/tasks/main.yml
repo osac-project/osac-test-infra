@@ -9,9 +9,21 @@
     state: directory
     mode: "0755"
 
+# Without the last-applied annotation and with the BMC Secret name replaced: the redaction pass otherwise
+# matches inside those lines and leaves YAML that does not parse. The name is not a secret, only noise.
 - name: Gather BMH status
   ansible.builtin.shell:
-    cmd: oc get bmh -n {{ bmaas_bmh_namespace }} -o yaml > {{ _gather_dir }}/mgmt-cluster/bmaas/bmh-status.yaml
+    cmd: >-
+      set -o pipefail;
+      oc get bmh -n {{ bmaas_bmh_namespace }} -o json
+      | python3 -c 'import json, sys;
+      d = json.load(sys.stdin);
+      [(h["metadata"].get("annotations", {}).pop("kubectl.kubernetes.io/last-applied-configuration", None),
+      h.get("spec", {}).get("bmc", {}).update(credentialsName="<bmc-secret>") if h.get("spec", {}).get("bmc") else None)
+      for h in d.get("items", [])];
+      json.dump(d, sys.stdout, indent=1)'
+      > {{ _gather_dir }}/mgmt-cluster/bmaas/bmh-status.json
+    executable: /bin/bash
   environment:
     KUBECONFIG: /root/.kube/config
   failed_when: false
@@ -30,7 +42,7 @@
     cmd: >-
       oc logs -n openshift-machine-api
       -l baremetal.openshift.io/cluster-baremetal-operator=metal3-state
-      --all-containers --tail=500
+      --all-containers --timestamps --since=4h --tail=40000
       > {{ _gather_dir }}/mgmt-cluster/bmaas/ironic-logs.txt 2>&1
   environment:
     KUBECONFIG: /root/.kube/config
@@ -41,8 +53,8 @@
   ansible.builtin.shell:
     cmd: >-
       oc logs -n {{ osac_namespace }}
-      -l app.kubernetes.io/name=bare-metal-fulfillment-operator
-      --all-containers --tail=500
+      -l app.kubernetes.io/name=bmf
+      --all-containers --timestamps --tail=100000
       > {{ _gather_dir }}/mgmt-cluster/bmaas/bmf-operator-logs.txt 2>&1
   environment:
     KUBECONFIG: /root/.kube/config

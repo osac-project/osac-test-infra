@@ -6,3 +6,7 @@
   roles:
     - setup-bmc
     - setup-bmaas
+    # The lab ExternalIPPool is a prerequisite for tenant default networking,
+    # which the E2E session gate requires before any test runs; setup-caas used
+    # to own it, so a BMaaS-only deploy depended on a previous CaaS run.
+    - lab-external-ip-pool

@@ -22,6 +22,7 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 from raw_inventory import Host, InventoryError, RawInventory, is_group_host_name
 
@@ -49,6 +50,7 @@ BMC_ADDRESS_TEMPLATE = "redfish-virtualmedia+http://{host}:{port}/redfish/v1/Sys
 # Storage files are named after the VM: <name>.qcow2 and <name>-VARS.fd.
 DISK_SUFFIX = ".qcow2"
 VARS_SUFFIX = "-VARS.fd"
+SERIAL_LOG_SUFFIX = ".serial.log"
 
 
 def fail(message: str) -> None:
@@ -103,6 +105,7 @@ def render_vm_xml(
     # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails
     # with "Unable to find 'efi' firmware". The pflash paths already
     # select UEFI.
+    serial_log = Path(disk_path).with_suffix(SERIAL_LOG_SUFFIX)
     return f"""<domain type='kvm'>
   <name>{name}</name>
   <memory unit='MiB'>{memory_mib}</memory>
@@ -130,7 +133,13 @@ def render_vm_xml(
       <source network='{network}'/>
       <model type='virtio'/>
     </interface>
-    <console type='pty'/>
+    <serial type='pty'>
+      <log file={quoteattr(str(serial_log))} append='on'/>
+      <target type='isa-serial' port='0'/>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
   </devices>
   <seclabel type='none'/>
 </domain>
@@ -168,6 +177,10 @@ def create_vm(
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
     shutil.copyfile(EFI_VARS, vars_path)
+    # Each new VM starts a private recording; libvirt appends across reboots.
+    serial_log = disk_path.with_suffix(SERIAL_LOG_SUFFIX)
+    with os.fdopen(os.open(serial_log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as recording:
+        os.fchmod(recording.fileno(), 0o600)
 
     xml = render_vm_xml(
         name=name,

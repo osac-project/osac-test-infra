@@ -11,7 +11,7 @@
           '-c', _gather_pod_container.1.name
         ]
         + (['--previous'] if (_gather_pod_log_previous | bool) else [])
-        + ['--timestamps', '--tail=3000']
+        + ['--timestamps', '--since=4h', '--tail=40000']
       }}
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml

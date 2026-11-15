@@ -439,37 +439,9 @@ class FakeTempo:
         return [trace_id] if trace_id in self.traces else []
 
 
-class FakeEvidenceCache:
-    """The already-populated part of CIObserveRunEvidence's BoundedCache."""
-
-    def __init__(self, entries=None):
-        self.entries = entries or {}
-        self.reads = []
-
-    def get(self, key):
-        self.reads.append(key)
-        return self.entries.get(key)
-
-
-class FakeEvidence:
-    """Cache-only stand-in: any artifact request is a test failure."""
-
-    def __init__(self, *, run_id=None, run_attempt=1, native=None):
-        entries = {}
-        if native is not None:
-            entries[("native", run_id, run_attempt)] = native
-        self._cache = FakeEvidenceCache(entries)
-        self.artifact_requests = 0
-
-    def get_ci_observe_run_json(self, params):
-        self.artifact_requests += 1
-        raise AssertionError("the capture endpoint must not download an artifact")
-
-
 class FakeExporter:
-    def __init__(self, db_path, evidence=None):
+    def __init__(self, db_path):
         self.db_path = db_path
-        self._run_evidence = evidence
 
     def _db(self):
         connection = sqlite3.connect(self.db_path)
@@ -595,12 +567,12 @@ def make_capture(capture_id, run_id, *, attempt=1, started_at=None, trace_id="",
     return row
 
 
-def build_view(tmp_path, tempo, *, jobs=(), captures=None, run_id_column=False, evidence=None, monkeypatch=None):
+def build_view(tmp_path, tempo, *, jobs=(), captures=None, run_id_column=False, monkeypatch=None):
     db_path = make_db(tmp_path, jobs=jobs, captures=captures, run_id_column=run_id_column)
-    view = capture_view.CIObserveCaptureView(FakeExporter(db_path, evidence=evidence), tempo_url="http://tempo.test")
+    view = capture_view.CIObserveCaptureView(FakeExporter(db_path), tempo_url="http://tempo.test")
     if monkeypatch is not None:
         monkeypatch.setattr(capture_view, "_http_get", tempo.get)
-    return view, FakeExporter(db_path, evidence=evidence)
+    return view, FakeExporter(db_path)
 
 
 def fetch(view, capture_id):
@@ -1380,83 +1352,17 @@ def test_identity_is_empty_when_the_registry_has_no_row(tmp_path, monkeypatch):
     assert any("registry has no captures row" in note for note in document["notes"])
 
 
-def test_failed_tests_come_from_a_warm_evidence_cache(tmp_path, monkeypatch):
-    capture_id = VMAAS_41818898681
-    evidence = FakeEvidence(
-        run_id=41818898681,
-        run_attempt=1,
-        native={
-            "status": "available",
-            "failed_tests": [
-                {
-                    "classname": "tests.e2e.vmaas.sanity.test_from_junit",
-                    "name": "test_from_junit",
-                    "type": "failure",
-                    "message": "boom",
-                    "time_s": 8.0,
-                    "artifact_url": "https://example.test/artifact",
-                }
-            ],
-        },
-    )
+def test_the_capture_reads_no_artifact(tmp_path, monkeypatch):
+    """A capture's failed tests are /api/ci-observe/failed-tests: the trace
+    document has no failed-test field to leave empty when nothing read one."""
+    capture_id = CAAS_CAPTURE
     tempo = FakeTempo({trace_id_for(capture_id): fixture_trace(capture_id)})
-    view, _ = build_view(
-        tmp_path,
-        tempo,
-        jobs=[make_job(41818898681, "2026-11-03T21:00:00Z")],
-        evidence=evidence,
-        monkeypatch=monkeypatch,
-    )
+    view, _ = build_view(tmp_path, tempo, jobs=[make_job(41709318840, "2026-11-03T21:00:00Z")], monkeypatch=monkeypatch)
 
     document = fetch(view, capture_id)
 
     assert document["state"] == "ok"
-    assert document["failed_tests"][0]["name"] == "test_from_junit"
-    assert evidence.artifact_requests == 0
-    assert evidence._cache.reads == [("native", 41818898681, 1)]
-    # The trace's failed test span is not the source of failed_tests.
-    failed_span_rows = [row for row in document["tests"] if row["status"] == "error"]
-    assert len(failed_span_rows) == 1
-    assert document["failed_tests"][0]["name"] != failed_span_rows[0]["nodeid"].rsplit("::", 1)[-1]
-
-
-def test_failed_tests_cold_cache_returns_empty_without_an_artifact_request(tmp_path, monkeypatch):
-    capture_id = CAAS_CAPTURE
-    evidence = FakeEvidence(run_id=41709318840, run_attempt=1)
-    tempo = FakeTempo({trace_id_for(capture_id): fixture_trace(capture_id)})
-    view, _ = build_view(
-        tmp_path,
-        tempo,
-        jobs=[make_job(41709318840, "2026-11-03T21:00:00Z")],
-        evidence=evidence,
-        monkeypatch=monkeypatch,
-    )
-
-    document = fetch(view, capture_id)
-
-    assert document["failed_tests"] == []
-    assert evidence.artifact_requests == 0
-    assert "failed test detail is in the CI evidence panel" in document["notes"]
-
-
-def test_failed_tests_empty_when_the_cached_junit_is_unavailable(tmp_path, monkeypatch):
-    capture_id = CAAS_CAPTURE
-    evidence = FakeEvidence(run_id=41709318840, run_attempt=1, native={"status": "expired", "failed_tests": []})
-    tempo = FakeTempo({trace_id_for(capture_id): fixture_trace(capture_id)})
-    view, _ = build_view(
-        tmp_path,
-        tempo,
-        jobs=[make_job(41709318840, "2026-11-03T21:00:00Z")],
-        evidence=evidence,
-        monkeypatch=monkeypatch,
-    )
-
-    document = fetch(view, capture_id)
-
-    assert document["failed_tests"] == []
-    assert evidence.artifact_requests == 0
-    assert any("JUnit artifact is 'expired'" in note for note in document["notes"])
-
+    assert "failed_tests" not in document
 
 def test_rows_carry_wait_and_fixture_attributes(tmp_path, monkeypatch):
     capture_id = CAAS_CAPTURE
@@ -1496,7 +1402,6 @@ def test_response_has_the_documented_shape(tmp_path, monkeypatch):
         "waits",
         "fixtures",
         "fixture_uses",
-        "failed_tests",
         "transient",
         "notes",
     }

@@ -11,7 +11,15 @@ on:
     types: [labeled]
     branches: [main]
   schedule:
-    - cron: "0 0 * * *"
+    # Temporarily ten runs a day, to gather enough results to find the source of
+    # the flakiness. Back to once a night when that is understood. Evenly spaced,
+    # 2h24m apart: longer than a run (about 2h15m), so two runs of this suite
+    # never hold two metal boxes at once. VMaaS Netris starts 30 minutes earlier.
+    - cron: "30 0,12 * * *"
+    - cron: "54 2,14 * * *"
+    - cron: "18 5,17 * * *"
+    - cron: "42 7,19 * * *"
+    - cron: "6 10,22 * * *"
   workflow_dispatch:
     inputs:
       pr-number:

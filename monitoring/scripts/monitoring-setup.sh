@@ -619,6 +619,10 @@ if [[ "${MODE}" == "update-central" ]]; then
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_spans.py" \
        "${MONITORING_HOME}/scripts/ci_observe_spans.py"
     chmod +x "${MONITORING_HOME}/scripts/ci_observe_spans.py"
+    # The daily check of the pages against GitHub (ci-observe-audit.timer).
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_audit.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_audit.py"
+    chmod +x "${MONITORING_HOME}/scripts/ci_observe_audit.py"
     info "Config files + scripts updated."
 
     # The prometheus.yml copy above just brought in the repo's template
@@ -652,6 +656,10 @@ if [[ "${MODE}" == "update-central" ]]; then
        "${SYSTEMD_USER_DIR}/ci-observe-spans.service"
     cp "${MONITORING_REPO_DIR}/systemd/ci-observe-spans.timer" \
        "${SYSTEMD_USER_DIR}/ci-observe-spans.timer"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-audit.service" \
+       "${SYSTEMD_USER_DIR}/ci-observe-audit.service"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-audit.timer" \
+       "${SYSTEMD_USER_DIR}/ci-observe-audit.timer"
     # Refresh the tunnel template too (OSAC-2206 added a second -L forward
     # to it) -- this was previously never refreshed by --update-central at
     # all, so a template change would silently never reach production
@@ -691,6 +699,7 @@ if [[ "${MODE}" == "update-central" ]]; then
     systemctl --user enable --now ci-observe-trends.timer
     systemctl --user enable --now ci-observe-prs.timer
     systemctl --user enable --now ci-observe-spans.timer
+    systemctl --user enable --now ci-observe-audit.timer
     # Queue the rollup once now so this deploy starts a trends.db migration
     # and the read of any run not read yet, instead of waiting for the next
     # hourly timer. --no-block returns as soon as the unit is queued; a first
@@ -829,6 +838,10 @@ cp "${MONITORING_REPO_DIR}/scripts/ci_observe_spans.py" \
    "${MONITORING_HOME}/scripts/ci_observe_spans.py"
 chmod +x "${MONITORING_HOME}/scripts/ci_observe_spans.py"
 info "Installed ci_observe_spans.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_audit.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_audit.py"
+chmod +x "${MONITORING_HOME}/scripts/ci_observe_audit.py"
+info "Installed ci_observe_audit.py"
 # The workflow-exporter quadlet bind-mounts these from
 # ${MONITORING_HOME}/scripts, and workflow-exporter.py imports them at load.
 # A first install must copy them or the container cannot start.
@@ -905,6 +918,11 @@ if [[ "${MODE}" == "central" ]]; then
     cp "${MONITORING_REPO_DIR}/systemd/ci-observe-spans.timer" \
        "${SYSTEMD_USER_DIR}/ci-observe-spans.timer"
     info "Installed ci-observe-spans.service + .timer"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-audit.service" \
+       "${SYSTEMD_USER_DIR}/ci-observe-audit.service"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-audit.timer" \
+       "${SYSTEMD_USER_DIR}/ci-observe-audit.timer"
+    info "Installed ci-observe-audit.service + .timer"
 
     # Install the SSH tunnel template unit
     cp "${MONITORING_REPO_DIR}/systemd/monitoring-tunnel@.service" \
@@ -917,6 +935,7 @@ if [[ "${MODE}" == "central" ]]; then
     systemctl --user enable ci-observe-trends.timer
     systemctl --user enable ci-observe-prs.timer
     systemctl --user enable ci-observe-spans.timer
+    systemctl --user enable ci-observe-audit.timer
 fi
 
 ###############################################################################

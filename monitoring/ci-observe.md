@@ -5,6 +5,50 @@ For an introduction, start with [ci-observe/README.md](ci-observe/README.md).
 
 The application and the individual tests keep their current source and behavior.
 
+## Status at 2026-11-15
+
+The E2E run page said **No failures.** for run 43552935524 (E2E VMaaS Production Install, 2026-11-14), whose test step had failed. Since 2026-11-13 scheduled and manual E2E runs publish their logs artifact (with the JUnit file) to the private repository `osac-project/osac-ci-artifacts`. The exporter's token could not read it, and every way that read could fail ended as an empty list, which the table prints as **No failures.**
+
+The failed tests now have one path, and every way off it is an error:
+
+- **Where the artifact is.** The run's trigger decides the one place: pull-request and merge-queue runs keep it on the run (they get no app key, on purpose: `e2e-pr-*.yml`, `e2e-queue.yml`); scheduled and manual runs publish it to `osac-ci-artifacts`. The capture's suite decides the one name: `osac-logs-full-install-<run id>` (VMaaS), `osac-logs-caas-full-install-<run id>`, `osac-logs-bmaas-full-install-<run id>`. No second place is looked in. A merge-queue run holds all three suites, and each suite's page reads its own artifact; before, every page read the VMaaS one.
+- **Failed tests panel.** It reads `/api/ci-observe/failed-tests?capture_id=`: the JUnit file's failed tests, and **No failures.** only when the file lists none. Anything else is an HTTP 502 whose status line, which Grafana shows on the panel, says what failed, where and what to fix; the workflow exporter logs the same line at ERROR. That covers a GitHub refusal or error, no artifact at the place, expired, too large, no or unreadable `junit.xml`, a capture of an earlier attempt than the stored one (an artifact does not say which attempt uploaded it), and a test step that failed while `junit.xml` lists no failed test (pytest stopped before it reported one). The job-history panels read `/api/ci-observe/run`, which reads no artifact, so a failed read does not take them down.
+- **Test history.** It reads each run's artifacts at the same one place. A run's own fact (no artifact there, expired, no `junit.xml`) is stored with that reason. GitHub refusing or failing to answer is the same for every run: the pass stops, stores nothing, logs the reason and exits 1, and the pages' **Data as of** shows the test results going stale. Runs stored as "no artifact" after a 404 from `osac-ci-artifacts`, the answer to a token that cannot see it, are read once more.
+- **The token.** `PRIVATE_GITHUB_TOKEN` (Vault `secret/osac/monitoring/github-token`, field `token`) needs read access to the Actions artifacts of `osac-project/osac-ci-artifacts`: the `repo` scope on a classic token, or that repository with **Actions: Read-only** on a fine-grained one.
+
+The daily check against GitHub now covers the tests too: whether the token can read `osac-ci-artifacts`; that every suite run that ran its tests has test results; and, for the 10 newest runs that failed in their test step, the run page's failed tests and the test history against the run's own JUnit file, downloaded and parsed by the check. What it finds is under **Missing or partial data** on every E2E page.
+
+To see what the run page answers for one run, on the central host:
+
+```bash
+curl -s -w '\n%{http_code}\n' 'http://127.0.0.1:9103/api/ci-observe/failed-tests?capture_id=vmaas-main-43552935524-a1'
+```
+
+## Status at 2026-11-14
+
+A check against GitHub (`ci_observe_audit.py`) found the pages count what `ci-observe/model.md` says and store what GitHub says, with three faults, fixed here:
+
+- **Missing runs.** The exporter reads the 50 newest completed runs per poll and follows the runs it saw active. A burst of more than 50 runs between two polls, a restart or a failed poll lost runs for good: 61 of 5,309 counted suite runs in 28 days. It now also lists every completed run created in the last 48 hours every 30 minutes and at start, and stores what it does not have (`RECONCILE_INTERVAL`, `RECONCILE_HOURS`, `RECONCILE_MIN_RATE_LIMIT`; `github_actions_reconciled_runs_total` counts what it stored). Runs older than 48 hours are recovered once by hand:
+
+  ```bash
+  podman exec -e BACKFILL_DAYS=30 workflow-exporter python3 /app/workflow-exporter.py
+  ```
+- **Outdated results.** A stored run was read again only when its attempt number grew; a run that waited for approval (`action_required`) and then ran kept its first result. A completed run whose conclusion changed under the same attempt is now stored again. A suite row of a re-run merge-queue or pull-request run keeps the attempt its own test job ran in, so a suite that did not run again stays a first-try result.
+- **Machine accounts counted as people.** `osac-ci-bot` approvals and `redhat-chai-bot` reviews counted as human reviews. Bots, `[bot]` logins and the accounts `CI_OBSERVE_MACHINE_ACCOUNTS` names (`osac-ci-bot,redhat-chai-bot,openshift-ci-robot,openshift-cherrypick-robot` by default) are no longer reviewers or review requests.
+
+The Pull requests page also changed:
+
+- Review ends at the **final approval**: the last human approval before the pull request first entered the merge queue, or before the merge when it never queued. Waiting runs from the final approval to the queue. Most pull requests are approved by the first person who reviews them, so the review stage is 0 for them; **Approved at the first review** says how many, **Ready to final approval** how long getting approved takes. **Review to approval** and **First approval to queue** are gone; **Last approval to queue** is **Final approval to queue**.
+- An **About these numbers** table, as the run pages have.
+- Record format 4. A stored pull request no machine account reviewed is promoted in place; the others are read again, 100 per daily full pass. To read them now, run the catch-up below (`--refresh-old`).
+
+`ci-observe-audit.timer` runs the check daily at 03:35 UTC and writes `ci-observe-audit.json` next to the stores. Every page shows what it compared and what differed under **Data as of** and **Missing or partial data** in **About these numbers**. By hand:
+
+```bash
+podman exec workflow-exporter python3 /app/ci_observe_audit.py --days 30
+podman exec workflow-exporter python3 /app/ci_observe_audit.py --part prs --pr 2061 --sample 0
+```
+
 ## Status at 2026-11-07
 
 The ci-observe pages were redesigned around four across-runs pages. Built and checked against a seeded dataset; not yet deployed:

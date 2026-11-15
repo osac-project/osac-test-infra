@@ -171,6 +171,14 @@
     content: "{{ _gather_libvirt_domains_result.stdout | default('') }}\n{{ _gather_libvirt_domains_result.stderr | default('') }}"
   changed_when: false
 
+- name: Capture softgate data plane and Netris agent journal
+  ansible.builtin.include_tasks: capture-command.yml
+  vars:
+    _gather_lab_command:
+      label: softgates
+      path: netris/softgates.txt
+      argv: [timeout, '120', bash, "{{ role_path }}/../../scripts/softgate-read.sh", '-4 h', '20000']
+
 - name: Capture libvirt domain details and XML
   ansible.builtin.include_tasks: capture-command.yml
   loop: "{{ _gather_libvirt_domains_result.stdout_lines | default([]) | reject('equalto', '') | list }}"

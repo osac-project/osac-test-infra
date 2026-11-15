@@ -8,7 +8,8 @@
 # Environment:
 #   KUBECONFIG             — path to cluster kubeconfig (required)
 #   E2E_NAMESPACE          — OSAC namespace (default: osac-e2e-ci)
-#   OSAC_AGENT_NAMESPACE   — namespace where Assisted Installer Agent CRs live (default: hardware-inventory)
+#   OSAC_AGENT_NAMESPACE   — namespace where Assisted Installer Agent CRs live (default: E2E_NAMESPACE)
+#   OSAC_LOG_NAMESPACES    — additional namespaces to collect (space-separated)
 #   JUNIT_PATH             — path to JUnit XML to include (optional)
 #   OSAC_E2E_OUTPUT_DIR    — where the E2E suites write their output
 #                            (default: dirname of JUNIT_PATH, else /tmp/test-output);
@@ -16,6 +17,9 @@
 #   INVENTORY_FILE         — path to the raw virtual-BMH inventory (optional;
 #                            set by setup-virtual-bmh.sh through GITHUB_ENV;
 #                            collected with the BMC passwords redacted)
+#   BMH_CONSOLE_LOG_DIR    — directory containing per-VM *.serial.log files
+#   SUSHY_LOG_FILE         — Redfish emulator log file (optional)
+#   SUSHY_CACHE_CONTAINER  — virtual-media cache container name (optional)
 #
 set -o nounset
 set -o pipefail
@@ -60,6 +64,42 @@ mkdir -p "$ARTIFACT_DIR" "$MGMT_CLUSTER_DIR"
 
 echo "Gathering OSAC logs from namespace ${E2E_NAMESPACE}..."
 
+capture_with_timeout() {
+    local label="$1" duration="$2" rc
+    shift 2
+    timeout "${duration}" "$@" || {
+        rc=$?
+        printf '%s: exit status %s\n' "${label}" "${rc}" >&2
+        return "${rc}"
+    }
+}
+
+if [[ -d "${BMH_CONSOLE_LOG_DIR:-}" ]]; then
+    mkdir -p "$ARTIFACT_DIR/worker-console"
+    printf 'Console log directory: %s\n' "${BMH_CONSOLE_LOG_DIR}" > "$ARTIFACT_DIR/worker-console/collection.txt"
+    for console_log in "${BMH_CONSOLE_LOG_DIR}"/*.serial.log; do
+        [[ -f "${console_log}" ]] || continue
+        capture_with_timeout "console copy $(basename "${console_log}")" 30s \
+            cp -- "${console_log}" "$ARTIFACT_DIR/worker-console/" \
+            2>> "$ARTIFACT_DIR/worker-console/collection.txt" || true
+        if [[ ! -s "${console_log}" ]]; then
+            printf '%s: empty console recording\n' "$(basename "${console_log}")" \
+                >> "$ARTIFACT_DIR/worker-console/collection.txt"
+        fi
+    done
+fi
+if [[ -f "${SUSHY_LOG_FILE:-}" ]]; then
+    mkdir -p "$MGMT_CLUSTER_DIR/bare-metal"
+    capture_with_timeout "sushy log copy" 30s \
+        cp -- "${SUSHY_LOG_FILE}" "$MGMT_CLUSTER_DIR/bare-metal/sushy.log" \
+        2> "$MGMT_CLUSTER_DIR/bare-metal/sushy-copy-errors.txt" || true
+fi
+if [[ -n "${SUSHY_CACHE_CONTAINER:-}" ]]; then
+    mkdir -p "$MGMT_CLUSTER_DIR/bare-metal"
+    capture_with_timeout "virtual-media cache logs" 30s podman logs --timestamps "${SUSHY_CACHE_CONTAINER}" \
+        > "$MGMT_CLUSTER_DIR/bare-metal/virtual-media-cache.log" 2>&1 || true
+fi
+
 collect_namespace_logs() {
     local ns="$1"
     local dir="$2"
@@ -69,22 +109,53 @@ collect_namespace_logs() {
         return 0
     fi
     mkdir -p "${dir}"
-    oc get pods -n "${ns}" -o wide > "${dir}/pods.txt" 2>&1 || true
-    oc get events -n "${ns}" --sort-by=.lastTimestamp > "${dir}/events.txt" 2>&1 || true
-    oc describe pods -n "${ns}" > "${dir}/pods-describe.txt" 2>&1 || true
-    oc get deployments -n "${ns}" -o wide > "${dir}/deployments.txt" 2>&1 || true
-    oc get jobs -n "${ns}" -o wide > "${dir}/jobs.txt" 2>&1 || true
-    oc get statefulsets -n "${ns}" -o wide > "${dir}/statefulsets.txt" 2>&1 || true
-    for pod in $(oc get pods -n "${ns}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-        for container in $(oc get pod "${pod}" -n "${ns}" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null); do
-            oc logs "${pod}" -n "${ns}" -c "${container}" > "${dir}/pod-${pod}-${container}.log" 2>&1 &
-            oc logs "${pod}" -n "${ns}" -c "${container}" --previous > "${dir}/pod-${pod}-${container}-previous.log" 2>/dev/null &
-        done
-        for container in $(oc get pod "${pod}" -n "${ns}" -o jsonpath='{.spec.initContainers[*].name}' 2>/dev/null); do
-            oc logs "${pod}" -n "${ns}" -c "${container}" > "${dir}/pod-${pod}-init-${container}.log" 2>&1 &
-        done
-    done
+    capture_with_timeout "pods ${ns}" 30s oc get pods -n "${ns}" -o wide > "${dir}/pods.txt" 2>&1 || true
+    capture_with_timeout "events ${ns}" 30s oc get events -n "${ns}" --sort-by=.lastTimestamp \
+        > "${dir}/events.txt" 2>&1 || true
+    capture_with_timeout "pod descriptions ${ns}" 30s oc describe pods -n "${ns}" \
+        > "${dir}/pods-describe.txt" 2>&1 || true
+    capture_with_timeout "deployments ${ns}" 30s oc get deployments -n "${ns}" -o wide \
+        > "${dir}/deployments.txt" 2>&1 || true
+    capture_with_timeout "jobs ${ns}" 30s oc get jobs -n "${ns}" -o wide > "${dir}/jobs.txt" 2>&1 || true
+    capture_with_timeout "statefulsets ${ns}" 30s oc get statefulsets -n "${ns}" -o wide \
+        > "${dir}/statefulsets.txt" 2>&1 || true
+    local pods_json pod container kind log_prefix pending=0
+    pods_json=$(capture_with_timeout "pod discovery ${ns}" 30s oc get pods -n "${ns}" -o json \
+        2> "${dir}/pod-discovery-errors.txt") || true
+    while IFS=$'\t' read -r pod container kind; do
+        # Kubernetes names exclude underscores, keeping each filename component distinct.
+        log_prefix="${dir}/pod-${pod}__${kind}__${container}"
+        (
+            capture_with_timeout "pod logs ${ns}/${pod}/${container} current" 60s \
+                oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps \
+                > "${log_prefix}__current.log" 2>&1 || true
+            capture_with_timeout "pod logs ${ns}/${pod}/${container} previous" 60s \
+                oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps --previous \
+                > "${log_prefix}__previous.log" 2>&1 || true
+        ) &
+        pending=$((pending + 1))
+        if (( pending == 4 )); then
+            wait
+            pending=0
+        fi
+    done < <(jq -r '.items[]? | .metadata.name as $pod |
+        (.spec.containers[]? | [$pod, .name, "container"]),
+        (.spec.initContainers[]? | [$pod, .name, "init"]) | @tsv' \
+        <<< "${pods_json}" 2>> "${dir}/pod-discovery-errors.txt")
     wait
+}
+
+collect_resource_status() {
+    local resource="$1" ns="$2" dir="$3"
+    mkdir -p "${dir}"
+    : > "${dir}/${resource}-errors.txt"
+    capture_with_timeout "${resource} ${ns}" 30s oc get "${resource}" -n "${ns}" -o json \
+        2>> "${dir}/${resource}-errors.txt" \
+        | jq '{apiVersion, kind, items: [.items[]? | {
+            apiVersion, kind,
+            metadata: (.metadata | del(.managedFields, .annotations)),
+            status: (if .kind == "InfraEnv" then .status | del(.isoDownloadURL) else .status end)
+        }]}' > "${dir}/${resource}.json" 2>> "${dir}/${resource}-errors.txt" || true
 }
 
 # The router hop answers "did the router receive it, and what did it record?".
@@ -178,7 +249,8 @@ echo "Collecting router hop evidence (routes, endpoints, router access log)..."
 collect_router_evidence "$E2E_NAMESPACE"
 
 for ns in keycloak ansible-aap openshift-cnv; do
-    if oc get namespace "${ns}" &>/dev/null; then
+    if capture_with_timeout "namespace lookup ${ns}" 30s oc get namespace "${ns}" \
+        >/dev/null 2>> "$MGMT_CLUSTER_DIR/namespace-discovery-errors.txt"; then
         echo "Gathering logs from namespace ${ns}..."
         collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
     fi
@@ -208,9 +280,7 @@ for ns in ${VM_NAMESPACES}; do
     oc get events -n "${ns}" --sort-by=.lastTimestamp > "$MGMT_CLUSTER_DIR/cnv/${ns}/events.txt" 2>&1 || true
     oc get networkpolicies -n "${ns}" -o yaml > "$MGMT_CLUSTER_DIR/cnv/${ns}/networkpolicies.yaml" 2>&1 || true
     oc get pods -n "${ns}" -o wide > "$MGMT_CLUSTER_DIR/cnv/${ns}/pods.txt" 2>&1 || true
-    for pod in $(oc get pods -n "${ns}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-        oc logs "${pod}" -n "${ns}" --all-containers > "$MGMT_CLUSTER_DIR/cnv/${ns}/pod-${pod}.log" 2>&1 || true
-    done
+    collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/cnv/${ns}"
 done
 
 echo "Collecting compute instance status..."
@@ -223,8 +293,22 @@ oc get clusterorders -n "${E2E_NAMESPACE}" -o json 2>"$MGMT_CLUSTER_DIR/clustero
     | jq 'del(.items[]?.spec.templateParameters)' \
     > "$MGMT_CLUSTER_DIR/clusterorders.json" || true
 
+collect_resource_status infraenvs.agent-install.openshift.io "$E2E_NAMESPACE" "$MGMT_CLUSTER_DIR"
+
+while IFS= read -r ns; do
+    echo "Gathering hosted cluster diagnostics from namespace ${ns}..."
+    collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
+    for resource in hostedclusters.hypershift.openshift.io \
+        hostedcontrolplanes.hypershift.openshift.io nodepools.hypershift.openshift.io; do
+        collect_resource_status "$resource" "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
+    done
+done < <(jq -r '[.items[]?.status.clusterReference |
+    select(.namespace and .hostedClusterName) |
+    .namespace, (.namespace + "-" + .hostedClusterName)] | unique[]' \
+    "$MGMT_CLUSTER_DIR/clusterorders.json" 2>> "$MGMT_CLUSTER_DIR/clusterorders-errors.txt")
+
 echo "Collecting agent status..."
-AGENT_NAMESPACE="${OSAC_AGENT_NAMESPACE:-hardware-inventory}"
+AGENT_NAMESPACE="${OSAC_AGENT_NAMESPACE:-${E2E_NAMESPACE}}"
 if oc get namespace "${AGENT_NAMESPACE}" &>/dev/null; then
     oc get agents.agent-install.openshift.io -n "${AGENT_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/agents.txt" 2>&1 || true
     oc get agents.agent-install.openshift.io -n "${AGENT_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/agents.yaml" 2>&1 || true
@@ -246,8 +330,10 @@ oc get certificates -n "${E2E_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/certifica
 oc get routes -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/routes.txt" 2>&1 || true
 oc get routes -n keycloak -o wide > "$MGMT_CLUSTER_DIR/routes-keycloak.txt" 2>&1 || true
 
-for ns in cert-manager openshift-machine-api osac-operators; do
-    if oc get namespace "${ns}" &>/dev/null; then
+read -r -a extra_log_namespaces <<< "${OSAC_LOG_NAMESPACES:-}"
+for ns in cert-manager openshift-machine-api osac-operators multicluster-engine hypershift "${extra_log_namespaces[@]}"; do
+    if capture_with_timeout "namespace lookup ${ns}" 30s oc get namespace "${ns}" \
+        >/dev/null 2>> "$MGMT_CLUSTER_DIR/namespace-discovery-errors.txt"; then
         echo "Gathering logs from namespace ${ns}..."
         collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
     fi
@@ -476,7 +562,7 @@ if [[ -n "${AAP_ADMIN_PW}" && -n "${GITHUB_ACTIONS:-}" ]]; then
     echo "::add-mask::${AAP_ADMIN_PW}"
 fi
 if [[ -n "${AAP_ROUTE}" && -n "${AAP_ADMIN_PW}" ]]; then
-    AAP_AUTH=(-sk -u "admin:${AAP_ADMIN_PW}")
+    AAP_AUTH=(-sSk --connect-timeout 10 --max-time 30 -u "admin:${AAP_ADMIN_PW}")
     MAX_PAGES=5
     page=1
     while [[ ${page} -le ${MAX_PAGES} ]]; do
@@ -580,12 +666,13 @@ if [[ -d "${E2E_OUTPUT_DIR}" ]]; then
     for results in "${E2E_OUTPUT_DIR}"/results-*.jsonl; do
         [[ -f "${results}" ]] && { cp "${results}" "${ARTIFACT_DIR}/e2e/" || true; }
     done
-    if [[ -d "${E2E_OUTPUT_DIR}/failures" ]]; then
-        # Not preserving modes: the reporter makes 0700 directories, and a copy that
-        # keeps an unreadable mode would break the redaction pass below.
-        cp -r --no-preserve=mode,ownership "${E2E_OUTPUT_DIR}/failures" "${ARTIFACT_DIR}/e2e/" || true
-        chmod -R u+rwX "${ARTIFACT_DIR}/e2e" 2>/dev/null || true
-    fi
+    for snapshots in failures snapshots; do
+        if [[ -d "${E2E_OUTPUT_DIR}/${snapshots}" ]]; then
+            # The reporter creates private directories; copied files must be readable for redaction.
+            cp -r --no-preserve=mode,ownership "${E2E_OUTPUT_DIR}/${snapshots}" "${ARTIFACT_DIR}/e2e/" || true
+            chmod -R u+rwX "${ARTIFACT_DIR}/e2e" 2>/dev/null || true
+        fi
+    done
 fi
 
 # ── Redact ───────────────────────────────────────────────────────────
