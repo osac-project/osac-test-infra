@@ -67,8 +67,10 @@
         validate_certs: false
         status_code: 200
       register: _bmaas_remaining_bmis
+      # A failed request has no .json; retry it instead of ending the wait.
       until: >-
-        (_bmaas_remaining_bmis.json.get('items', [])
+        _bmaas_remaining_bmis is succeeded
+        and (_bmaas_remaining_bmis.json.get('items', [])
          | selectattr('metadata.tenant', 'in', bmaas_deploy_tenants)
          | selectattr('metadata.name', 'in', _bmaas_deploy_names)
          | list | length) == 0

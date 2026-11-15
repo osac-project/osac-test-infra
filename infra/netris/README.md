@@ -554,6 +554,8 @@ See the PR description for known issues and workarounds specific to BM/RHEL envi
 
 After `make deploy-osac`, a socat forwarder on port 9444 provides access to OCP routes (OSAC UI, Keycloak, AAP UI, OCP console, fulfillment API) from external browsers. Port 443 is intercepted by K3s svclb (Netris controller), so 9444 is used instead. Keycloak advertises its issuer with `:9444` too, so the OSAC UI signs users in through the forwarded route.
 
+`deploy-osac` runs the forward when `INGRESS_FORWARD` is `true`, the default outside CI. In CI (`CI=true`, which GitHub Actions sets) it defaults to `false`: the E2E suites reach OSAC through the portless issuer the install starts with, and the forward moves the issuer for every consumer after the install, so a consumer it misses fails when it next restarts (the BMF operator and the AAP `publish-templates` jobs have). Pass `INGRESS_FORWARD=true` or `false` to choose explicitly; `make ingress-forward` still applies it to a running lab.
+
 Add to your local `/etc/hosts`:
 ```
 <server-ip>  osac-ui-osac-devel.apps.ocp-sno.osac.local
@@ -600,7 +602,7 @@ The snapshot flavor is pulled and cached during `make setup-infra` (one-time ~60
 
 2. **`run-osac-setup`** (shell) — runs `make install-infra` and then `make install-osac` in `osac-installer`. It passes `OSAC_PROFILE` plus the profile's static `netris.yaml` and generated `netris-runtime.yaml` overlays. The infrastructure install deploys the required operators and prerequisites; the OSAC install deploys the application chart and runs its hooks.
 
-3. **`ingress-forward`** (Ansible) — reconciles what the installer's own `--set` flags override: `KC_HOSTNAME` and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` on Keycloak, the `osac-ui` ConfigMap issuer, the operator issuer ConfigMap, the fulfillment auth flags, the Keycloak host alias on the OSAC workloads, and the `osac-ui` client callback. It verifies the advertised issuer, the UI route and the aliases.
+3. **`ingress-forward`** (Ansible, only when `INGRESS_FORWARD` is `true`; see [Accessing OCP Routes](#accessing-ocp-routes)) — reconciles what the installer's own `--set` flags override: `KC_HOSTNAME` and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` on Keycloak, the `osac-ui` ConfigMap issuer, the operator issuer ConfigMap, the fulfillment auth flags, the Keycloak host alias on the OSAC workloads, and the `osac-ui` client callback. It verifies the advertised issuer, the UI route and the aliases.
 
 ## Configuration
 

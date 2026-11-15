@@ -543,9 +543,10 @@ jobs:
           oc wait --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
             catalogsource/redhat-operators -n openshift-marketplace --timeout=300s
 
-          echo "Patching OVN masquerade subnet to 169.254.0.0/17..."
+          # Forward management MetalLB VIP traffic arriving outside OVN's gateway.
+          echo "Configuring OVN masquerade subnet and global IP forwarding..."
           oc patch networks.operator.openshift.io cluster --type=merge \
-            -p '{"spec":{"defaultNetwork":{"ovnKubernetesConfig":{"gatewayConfig":{"ipv4":{"internalMasqueradeSubnet":"169.254.0.0/17"}}}}}}'
+            -p '{"spec":{"defaultNetwork":{"ovnKubernetesConfig":{"gatewayConfig":{"ipForwarding":"Global","ipv4":{"internalMasqueradeSubnet":"169.254.0.0/17"}}}}}}'
           oc delete pod -n openshift-network-operator -l name=network-operator
           echo "Waiting 180s for OVN to stabilize..."
           sleep 180

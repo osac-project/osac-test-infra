@@ -119,8 +119,11 @@
     validate_certs: false
     status_code: [200]
   register: _lab_pool_status
+  # A failed request has no .json; reading it would end the wait at the first API or router blip, so a
+  # failed attempt is retried like a pool that is not READY yet.
   until: >-
-    (_lab_pool_status.json.get('object', _lab_pool_status.json)
+    _lab_pool_status is succeeded
+    and (_lab_pool_status.json.get('object', _lab_pool_status.json)
       .get('status', {}).get('state', '')) in
     ['EXTERNAL_IP_POOL_STATE_READY', 'Ready']
   retries: 60

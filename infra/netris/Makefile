@@ -281,10 +281,18 @@ force-destroy-maas:
 
 # ─── Internal sub-targets (deploy-osac implementation) ─────────────
 
+# The forwarded ingress (:9444) lets people reach the UI and Keycloak on a lab.
+# It moves the Keycloak issuer for every consumer after the install, and a
+# consumer it misses fails when it next starts, so CI, which reaches OSAC
+# through the portless issuer the install starts with, skips it. GitHub Actions
+# sets CI=true; pass INGRESS_FORWARD=true or false to choose explicitly.
+INGRESS_FORWARD ?= $(if $(filter true,$(CI)),false,true)
+
 # Fresh install: clone mono-repo, patch Helm values, run make install, then
-# reconcile the forwarded ingress (the installer hardcodes the portless
-# Keycloak hostname and UI issuer with its own --set flags).
-install-osac: prep-osac run-osac-setup ingress-forward
+# reconcile the forwarded ingress when INGRESS_FORWARD is true (the installer
+# hardcodes the portless Keycloak hostname and UI issuer with its own --set
+# flags).
+install-osac: prep-osac run-osac-setup $(if $(filter true,$(INGRESS_FORWARD)),ingress-forward)
 
 prep-osac:
 	ansible-playbook playbooks/prep-osac.yml $(OCP_ANSIBLE_EXTRA)
