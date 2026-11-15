@@ -26,8 +26,8 @@
 #                      pass the same value to teardown.
 #
 # The raw inventory is written to
-#   ${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json
-# and exported as INVENTORY_FILE through $GITHUB_ENV for later steps.
+#   ${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json. Inventory, console and
+# Redfish log locations are exported through $GITHUB_ENV for collection.
 set -euo pipefail
 
 : "${CLONE_NAME:?CLONE_NAME is required}"
@@ -49,6 +49,16 @@ SUSHY_CONFIG_DIR="${HOME}/sushy-${CLONE_NAME}"
 SUSHY_CACHE_NAME="sushy-cache-${CLONE_NAME}"
 SUSHY_VMEDIA_TMP="${HOME}/sushy-vmedia-tmp-${CLONE_NAME}"
 INVENTORY_FILE="${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json"
+
+# Publish paths before setup so collection can retain a partial setup.
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  {
+    echo "INVENTORY_FILE=${INVENTORY_FILE}"
+    echo "BMH_CONSOLE_LOG_DIR=${VM_DISK_DIR}"
+    echo "SUSHY_LOG_FILE=${SUSHY_CONFIG_DIR}/sushy.log"
+    echo "SUSHY_CACHE_CONTAINER=${SUSHY_CACHE_NAME}"
+  } >> "${GITHUB_ENV}"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VIRSH="virsh -c qemu:///system"
@@ -98,11 +108,6 @@ python3 "${SCRIPT_DIR}/manage-virtual-bmh-vms.py" create "${VM_ARGS[@]}"
 python3 "${SCRIPT_DIR}/reconcile-bmhs.py" \
   --inventory-file "${INVENTORY_FILE}" \
   --namespace "${BMH_NAMESPACE}"
-
-# Export the inventory path for later workflow steps.
-if [[ -n "${GITHUB_ENV:-}" ]]; then
-  echo "INVENTORY_FILE=${INVENTORY_FILE}" >> "${GITHUB_ENV}"
-fi
 
 echo "==> Virtual BMH setup complete. ${BMH_COUNT} hosts available."
 echo "Raw inventory: ${INVENTORY_FILE}"
