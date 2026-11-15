@@ -66,8 +66,8 @@ _UNQUOTED_ASSIGNED_B64 = re.compile(
 _B64_TOKEN = re.compile(_B64_BODY)
 # gitleaks hex: printable ASCII hex >= 32 characters.
 _HEX_TOKEN = re.compile(rb"[0-9A-Fa-f]{32,}")
-# gitleaks percent: consecutive %XX runs (8+ octets = 16 hex chars min).
-_PERCENT_RUN = re.compile(rb"(?:%[0-9A-Fa-f]{2}){8,}")
+# Percent-encoded tokens can mix literal characters with %XX escapes.
+_PERCENT_RUN = re.compile(rb"(?:[A-Za-z0-9+/_=.~\-]|%[0-9A-Fa-f]{2}){8,}")
 
 
 def secret_variants(secret: str) -> list[str]:
@@ -309,7 +309,7 @@ def embedded_hex_token_ranges(
 def percent_encoded_secret_ranges(
     content: bytes, secrets: list[bytes]
 ) -> list[tuple[int, int]]:
-    """Percent-encoded runs (gitleaks decoded:percent) that peel to a secret."""
+    """Percent-encoded tokens containing a plaintext or embedded encoded secret."""
     if not secrets:
         return []
     ranges: list[tuple[int, int]] = []
@@ -317,9 +317,7 @@ def percent_encoded_secret_ranges(
         decoded = try_percent_decode(match.group(0))
         if decoded is None:
             continue
-        if any(secret in decoded for secret in secrets) or blob_decodes_to_secret(
-            decoded, secrets
-        ):
+        if _span_holds_secret(decoded, secrets):
             ranges.append((match.start(), match.end()))
     return ranges
 
@@ -475,6 +473,11 @@ def _span_holds_secret(blob: bytes, secrets: list[bytes]) -> bool:
     for match in _B64_TOKEN.finditer(blob):
         if blob_decodes_to_secret(match.group(0), secrets):
             return True
+    # URI path components can hold Base64 values below the token-length floor.
+    if b"/" in blob and any(
+        blob_decodes_to_secret(component, secrets) for component in blob.split(b"/")
+    ):
+        return True
     decoded = try_hex_decode(blob)
     if decoded is not None and (
         any(secret in decoded for secret in secrets)
