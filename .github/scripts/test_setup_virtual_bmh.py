@@ -64,6 +64,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
                 BMH_COUNT="2",
                 VM_DISK_DIR=str(temp / "custom"),
                 VM_EFI_VARS=str(firmware),
+                GITHUB_ENV=str(temp / "github-env"),
             )
             env.pop("BMH_DATA_DISK_SIZE", None)
             if size is not None:
@@ -74,6 +75,24 @@ class SetupVirtualBmhTests(unittest.TestCase):
             calls = fakes.calls_file.read_text() if fakes.calls_file.exists() else ""
             domains = [ET.fromstring(path.read_text()) for path in sorted(fakes.capture_dir.glob("vm-*.xml"))]
             manifests = [path.read_text() for path in fakes.capture_dir.glob("apply-*")]
+            exports = temp / "github-env"
+            if not size or re.fullmatch(r"[1-9][0-9]*[kMGT]?", size):
+                self.assertEqual(
+                    exports.read_text().splitlines(),
+                    [
+                        f"INVENTORY_FILE={inventory}",
+                        f"BMH_CONSOLE_LOG_DIR={disks}",
+                        f"SUSHY_LOG_FILE={temp}/sushy-contract/sushy.log",
+                        "SUSHY_CACHE_CONTAINER=sushy-cache-contract",
+                    ],
+                )
+            else:
+                self.assertFalse(exports.exists())
+            for domain in domains:
+                os_disk = Path(domain.find("./devices/disk/source").get("file"))
+                recording = os_disk.with_suffix(".serial.log")
+                self.assertEqual(domain.find("./devices/serial/log").attrib, {"file": str(recording), "append": "on"})
+                self.assertEqual(recording.stat().st_mode & 0o777, 0o600)
             if invalid_inventory:
                 self.assertEqual(inventory.read_text(), "invalid inventory")
                 self.assertFalse((temp / "custom").exists())

@@ -208,6 +208,31 @@ class CreateDeleteEndToEndTests(unittest.TestCase):
                 self.assertTrue(path.is_file())
         self.assertEqual(sum(line.startswith("qemu-img ") for line in calls), 6)
 
+    def test_serial_recording_coexists_with_both_disk_modes(self) -> None:
+        """The real CLI retains private boot recording with or without vdb."""
+        for mode, arguments in (("default", ()), ("data", ("--data-disk-size", "50G"))):
+            with self.subTest(mode=mode):
+                self.disk_dir = self.temp / mode
+                self.disk_dir.mkdir()
+                self.inventory_file = self.temp / f"{mode}.json"
+                self.env["FAKE_DISK_DIR"] = str(self.disk_dir)
+                result = self._create("--count", "1", *arguments)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                host = json.loads(self.inventory_file.read_text())["hosts"][0]
+                domain = ET.fromstring(sorted(self.capture_dir.glob("vm-*.xml"))[-1].read_text())
+                recording = self.disk_dir / f"{host['name']}.serial.log"
+                self.assertEqual(recording.read_bytes(), b"")
+                self.assertEqual(recording.stat().st_mode & 0o777, 0o600)
+                serial = domain.find("./devices/serial")
+                self.assertEqual(serial.get("type"), "pty")
+                self.assertEqual(serial.find("log").attrib, {"file": str(recording), "append": "on"})
+                self.assertEqual(serial.find("target").attrib, {"type": "isa-serial", "port": "0"})
+                self.assertEqual(domain.find("./devices/console/target").attrib, {"type": "serial", "port": "0"})
+                disks = domain.findall("./devices/disk")
+                self.assertEqual(
+                    [disk.find("target").get("dev") for disk in disks], ["vda", "vdb"] if arguments else ["vda"]
+                )
+
     def test_invalid_data_sizes_fail_before_commands(self) -> None:
         for size in ("", "0", "0G", "-1G", "1.5G", "50GB", " 50G", "50G\n", "$(false)"):
             with self.subTest(size=size):
@@ -300,7 +325,9 @@ class CreateDeleteEndToEndTests(unittest.TestCase):
         self.assertEqual(before, self._snapshot())
         result = self._delete("--disk-dir", str(self.disk_dir), host["name"])
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(list(self.disk_dir.iterdir()), [shared])
+        recording = self.disk_dir / f"{host['name']}.serial.log"
+        self.assertEqual(set(self.disk_dir.iterdir()), {shared, recording})
+        self.assertEqual(recording.read_bytes(), b"")
         self.assertEqual(shared.read_bytes(), b"keep")
 
     def test_data_delete_requires_explicit_confined_directory(self) -> None:
