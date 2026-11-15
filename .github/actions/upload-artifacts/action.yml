@@ -183,8 +183,13 @@ runs:
           echo "::group::Gitleaks pre-upload scan (pass ${pass}/${MAX_PASSES})"
           REPORT="${REPORT_DIR}/findings-pass-${pass}.json"
 
+          # Run as container root: under rootless podman only container UID 0
+          # maps to the invoking user; any other UID lands in the subuid range
+          # and cannot read mode-0600 artifact files (worker serial logs, e2e
+          # results), so gitleaks would silently skip them. scan-run-logs.sh
+          # relies on the same image default for its post-upload scan.
           if ! "${ENGINE}" run --rm --network=none \
-            --user "$(id -u):$(id -g)" \
+            --user 0:0 \
             -v "${ARTIFACT_DIR}:/scan:ro${SELINUX_SUFFIX}" \
             -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro${SELINUX_SUFFIX}" \
             -v "${REPORT_DIR}:/out:rw${SELINUX_SUFFIX}" \
@@ -228,7 +233,7 @@ runs:
           if [[ "${pass}" -eq "${MAX_PASSES}" ]]; then
             FINAL_REPORT="${REPORT_DIR}/findings-final.json"
             if ! "${ENGINE}" run --rm --network=none \
-              --user "$(id -u):$(id -g)" \
+              --user 0:0 \
               -v "${ARTIFACT_DIR}:/scan:ro${SELINUX_SUFFIX}" \
               -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro${SELINUX_SUFFIX}" \
               -v "${REPORT_DIR}:/out:rw${SELINUX_SUFFIX}" \
