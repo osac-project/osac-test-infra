@@ -16,6 +16,18 @@ E2E runs (Overview, Where the time goes, Why runs fail, All runs):
 - the Overview's runs, passes and failures per suite, against a recount of
   the stored rows by the scope written in ci-observe/model.md.
 
+E2E tests (the run page's Failed tests, the test history behind the Tests and
+Why it fails pages):
+
+- whether the token can read osac-ci-artifacts, where scheduled and manual
+  E2E runs publish their logs artifact (with the JUnit file);
+- every run that ran its tests has test results in the test history, or the
+  reason it has none;
+- for the newest runs that failed in their test step: the failed tests the
+  run page lists, against the run's own JUnit file (downloaded and parsed
+  here) and against the test history. A page that lists no failed test for
+  such a run is wrong whatever the artifact says.
+
 Pull requests:
 
 - for a random sample of the window's merged pull requests (and any --pr):
@@ -45,11 +57,16 @@ import argparse
 import json
 import os
 import random
+import re
 import sqlite3
 import statistics
 import sys
+import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
+import zipfile
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 
@@ -81,11 +98,61 @@ query($owner: String!, $name: String!, $number: Int!) {
 """
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """GitHub answers an artifact download with a redirect to a signed URL,
+    which must be read without the token: urllib would send it along."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class GitHub:
-    def __init__(self, token, fetch=None):
+    def __init__(self, token, fetch=None, download=None):
         self.token = token
         self.calls = 0
         self._fetch = fetch or self._urlopen
+        self._download = download or self._urlopen_file
+
+    def _urlopen_file(self, url, limit):
+        """The body behind url in a temporary file, or None when it is larger
+        than limit bytes."""
+        request = urllib.request.Request(url, headers={"Authorization": f"token {self.token}",
+                                                       "Accept": "application/vnd.github+json"})
+        try:
+            response = urllib.request.build_opener(_NoRedirect).open(request, timeout=120)
+        except urllib.error.HTTPError as error:
+            location = error.headers.get("Location") if error.code in (301, 302, 303, 307, 308) else None
+            error.close()
+            if not location:
+                raise
+            response = urllib.request.urlopen(location, timeout=120)
+        body = tempfile.TemporaryFile()  # noqa: SIM115 - returned open; the caller closes it
+        with response:
+            read = 0
+            while chunk := response.read(1024 * 1024):
+                read += len(chunk)
+                if read > limit:
+                    body.close()
+                    return None
+                body.write(chunk)
+        body.seek(0)
+        return body
+
+    def try_get(self, path):
+        """(status, payload) of one GET: an HTTP error is its status, not an
+        exception, so a check can say what GitHub answered."""
+        self.calls += 1
+        try:
+            return 200, self._fetch(f"{API}{path}")[0]
+        except urllib.error.HTTPError as error:
+            return error.code, None
+        except (urllib.error.URLError, OSError, ValueError):
+            # No answer at all: status 0, which no check reads as one.
+            return 0, None
+
+    def download(self, url, limit):
+        self.calls += 1
+        return self._download(url, limit)
 
     def _urlopen(self, url, body=None):
         headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github+json"}
@@ -755,13 +822,309 @@ def e2e_audit(github, args, now, api_get, rng):
         })
     return {"window_from": iso(since), "window_to": iso(until), "rows": len(rows), "recount": recount,
             "workflows": names, "completeness": completeness, "completeness_from": iso(listed_from),
-            "sample": audited}
+            "sample": audited, "tests": tests_audit(github, args, rows, api_get, now)}
+
+
+# -- E2E tests: the run page's Failed tests and the test history ---------------
+
+# Where scheduled and manual E2E runs publish their logs artifact (with the
+# JUnit file), since 2026-11-13. Pull-request and merge-queue runs keep it on
+# the run.
+PRIVATE_ARTIFACTS = os.getenv("PRIVATE_ARTIFACT_REPO", "osac-ci-artifacts")
+# The artifact a suite's full-install job publishes: VMaaS has no suite in the
+# name. A merge-queue run holds all three, each with its own capture.
+SUITE_ARTIFACTS = {"vmaas": "osac-logs-full-install-{run}", "caas": "osac-logs-caas-full-install-{run}",
+                   "bmaas": "osac-logs-bmaas-full-install-{run}"}
+CAPTURE_SUITE = re.compile(r"^([a-z0-9][a-z0-9-]*)-(?:pr\d+|main)-\d+-a\d+$")
+ARTIFACT_LIMIT = 256 * 1024 * 1024
+# The test history is read hourly, and an artifact can trail its run.
+RESULTS_GRACE = timedelta(hours=3)
+# The newest runs that failed in their test step, compared test by test.
+FAILED_RUNS_CHECKED = 10
+# XML 1.0 forbids these, and JUnit writers emit them in messages anyway.
+XML_CONTROL = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+RUN_IN_URL = re.compile(r"/actions/runs/(\d+)")
+
+
+def row_run_id(row):
+    """The GitHub run a stored row belongs to: a suite row's id is a job id."""
+    if row.get("run_id"):
+        return str(row["run_id"])
+    match = RUN_IN_URL.search(row.get("url") or "")
+    return match.group(1) if match else str(row["id"])
+
+
+def test_step(row):
+    """(ran, failed) for a stored row's test step, from its stored steps and
+    its failed-step text ("job → step; ...")."""
+    try:
+        steps = json.loads(row.get("steps_json") or "[]")
+    except ValueError:
+        steps = []
+    ran = any("e2e tests" in (step.get("name") or "").lower() and (step.get("duration_s") or 0) > 0
+              for step in steps if isinstance(step, dict))
+    failed = any("e2e tests" in entry.rsplit(" → ", 1)[-1].lower()
+                 for entry in (row.get("failed_step") or "").split("; ") if entry.strip())
+    return ran or failed, failed
+
+
+def private_access(github):
+    """Whether the token can list the private repository's artifacts."""
+    status, _ = github.try_get(f"/repos/{ORG}/{PRIVATE_ARTIFACTS}/actions/artifacts?per_page=1")
+    notes = {200: "", 0: "GitHub did not answer", 404: "GitHub answers 404: the token cannot see the repository",
+             403: "GitHub answers 403: the token may not read its artifacts"}
+    return {"repo": f"{ORG}/{PRIVATE_ARTIFACTS}", "status": status,
+            "readable": True if status == 200 else (False if status in (403, 404) else None),
+            "note": notes.get(status, f"GitHub answered HTTP {status}")}
+
+
+def junit_failures(body):
+    """(failed test names, test count, reason) of the junit*.xml files in an
+    artifact zip; names is None when they cannot be read (reason says why)."""
+    try:
+        archive = zipfile.ZipFile(body)
+    except zipfile.BadZipFile:
+        return None, 0, "the artifact is not a zip archive"
+    files = [name for name in archive.namelist()
+             if name.rsplit("/", 1)[-1].startswith("junit") and name.endswith(".xml")]
+    if not files:
+        return None, 0, "the artifact has no junit*.xml"
+    failed, tests = set(), 0
+    for name in files:
+        try:
+            root = ET.fromstring(XML_CONTROL.sub(b"", archive.read(name)))
+        except ET.ParseError:
+            return None, 0, f"{name} is not valid XML"
+        for case in root.iter("testcase"):
+            tests += 1
+            if case.find("failure") is not None or case.find("error") is not None:
+                failed.add(case.get("name") or "")
+    return failed, tests, ""
+
+
+def capture_suite(capture_id):
+    match = CAPTURE_SUITE.match(capture_id or "")
+    return match.group(1) if match else ""
+
+
+def run_trigger(row):
+    """Why a stored run ran, read here from its event and name the way
+    ci-observe/model.md says: a merge group, a pull request, a schedule or a
+    person. The artifact's place follows from it."""
+    event = (row.get("event") or "").lower()
+    name = (row.get("workflow") or "").lower()
+    if event == "merge_group" or name.endswith("(merge queue)"):
+        return "merge_queue"
+    if event == "pull_request" or name.startswith("e2e suite · ") or name.endswith((" pr suite", "(pull requests)")):
+        return "pr"
+    return {"schedule": "scheduled", "workflow_dispatch": "manual"}.get(event, event or "unknown")
+
+
+def artifact_failures(github, repo, run_id, suite, trigger):
+    """The JUnit file of one suite of a run, read here from the one place
+    its trigger says (the run itself for a pull-request or merge-queue run,
+    osac-ci-artifacts for a scheduled or manual one): {"failed", "tests",
+    "where", "note"}. failed is None when it could not be read."""
+    if suite not in SUITE_ARTIFACTS:
+        return {"failed": None, "tests": 0, "where": "", "note": "the capture names no suite"}
+    name = SUITE_ARTIFACTS[suite].format(run=run_id)
+    if trigger in ("pr", "merge_queue"):
+        where = f"run {run_id} of {ORG}/{repo}"
+        path = f"/repos/{ORG}/{repo}/actions/runs/{run_id}/artifacts?per_page=100"
+    elif trigger in ("scheduled", "manual"):
+        where = f"{ORG}/{PRIVATE_ARTIFACTS}"
+        path = f"/repos/{ORG}/{PRIVATE_ARTIFACTS}/actions/artifacts?name={name}&per_page=100"
+    else:
+        return {"failed": None, "tests": 0, "where": "", "note": f"a {trigger} run has no known artifact place"}
+    status, listing = github.try_get(path)
+    if status != 200:
+        answer = f"answered HTTP {status}" if status else "did not answer"
+        return {"failed": None, "tests": 0, "where": where, "note": f"{where} {answer}"}
+    artifacts = [a for a in (listing or {}).get("artifacts") or [] if a.get("name") == name]
+    if not artifacts:
+        return {"failed": None, "tests": 0, "where": where, "note": f"no {name} in {where}"}
+    artifact = max(artifacts, key=lambda a: a.get("created_at") or "")
+    if artifact.get("expired"):
+        return {"failed": None, "tests": 0, "where": where, "note": f"{name} has expired"}
+    if (artifact.get("size_in_bytes") or 0) > ARTIFACT_LIMIT:
+        return {"failed": None, "tests": 0, "where": where, "note": f"{name} is over the audit's bound"}
+    try:
+        body = github.download(artifact.get("archive_download_url") or "", ARTIFACT_LIMIT)
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        return {"failed": None, "tests": 0, "where": where, "note": f"{name}: download failed ({error})"}
+    if body is None:
+        return {"failed": None, "tests": 0, "where": where, "note": f"{name} is over the audit's bound"}
+    with body:
+        failed, tests, reason = junit_failures(body)
+    if failed is None:
+        return {"failed": None, "tests": 0, "where": where, "note": f"{name}: {reason}"}
+    return {"failed": failed, "tests": tests, "where": where, "note": ""}
+
+
+def stored_test_results(trends_db, run_ids):
+    """({run id: {suite: (tests, failed names)}}, {run id: (state, reason)})
+    from the test history; suite "" holds the whole run."""
+    results, fetches = {}, {}
+    conn = open_ro(trends_db)
+    if conn is None or not run_ids:
+        if conn is not None:
+            conn.close()
+        return results, fetches
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(test_runs)")}
+        suite_column = "suite_key" if "suite_key" in columns else "''"
+        for start in range(0, len(run_ids), 500):
+            part = [int(run_id) for run_id in run_ids[start:start + 500]]
+            marks = ",".join("?" * len(part))
+            for row in conn.execute(f"SELECT run_id, test_id, passed, {suite_column} AS suite FROM test_runs"
+                                    f" WHERE run_id IN ({marks})", part):
+                by_suite = results.setdefault(str(row["run_id"]), {})
+                for suite in {"", row["suite"] or ""}:
+                    tests, failed = by_suite.setdefault(suite, [0, set()])
+                    by_suite[suite][0] = tests + 1
+                    if not row["passed"]:
+                        failed.add((row["test_id"] or "").rsplit("::", 1)[-1])
+            for row in conn.execute(f"SELECT run_id, state, reason FROM run_fetches WHERE run_id IN ({marks})", part):
+                fetches[str(row["run_id"])] = (row["state"], row["reason"] or "")
+    except sqlite3.Error:
+        pass
+    finally:
+        conn.close()
+    return results, fetches
+
+
+def suite_results(by_suite, suite):
+    """One suite's (tests, failed names) from a run's stored results, None
+    when the run has none for it. Rows that carry no suite count for a run
+    that holds one suite only."""
+    by_suite = by_suite or {}
+    if suite and suite in by_suite:
+        return by_suite[suite]
+    named = [key for key in by_suite if key]
+    if not named or (not suite and len(named) == 1):
+        return by_suite.get("")
+    return None
+
+
+def stored_captures(jobs_db):
+    """{run id: {suite: capture id}}: the runs that have a run page, one per
+    suite (a merge-queue run has one capture per suite)."""
+    conn = open_ro(jobs_db)
+    if conn is None:
+        return {}
+    try:
+        rows = conn.execute("SELECT capture_id, run_id, run_attempt FROM captures"
+                            " ORDER BY run_id, CAST(run_attempt AS INTEGER)").fetchall()
+    except sqlite3.Error:
+        rows = []
+    finally:
+        conn.close()
+    captures = {}
+    for row in rows:
+        # The latest attempt's: the job history keeps a run's latest attempt.
+        captures.setdefault(str(row["run_id"]), {})[capture_suite(row["capture_id"])] = row["capture_id"]
+    return captures
+
+
+def results_coverage(rows, trends_db, now):
+    """Every finished suite run that ran its tests has test results in the
+    test history, or the reason it has none."""
+    expected = {}
+    for row in rows:
+        suite = documented_suite(row.get("workflow"))
+        if not suite or is_gate(row):
+            continue
+        ran, _ = test_step(row)
+        finished = ts(row.get("updated_at")) or ts(row.get("created_at"))
+        if not ran or finished is None or finished > now - RESULTS_GRACE:
+            continue
+        expected.setdefault((row_run_id(row), suite), row)
+    results, fetches = stored_test_results(trends_db, sorted({run_id for run_id, _ in expected}))
+    missing = {key: fetches.get(key[0], ("", "not read yet")) for key in expected
+               if suite_results(results.get(key[0]), key[1]) is None}
+    reasons = Counter(reason or state for state, reason in missing.values())
+    first = min((expected[key].get("created_at") or "" for key in missing), default="")
+    return {
+        "check": "suite runs that ran their tests: test results in the test history",
+        "runs": len(expected), "with_results": len(expected) - len(missing), "missing": len(missing),
+        "missing_since": first, "reasons": reasons.most_common(5), "ok": not missing,
+        "examples": [f"{expected[key].get('url')} ({key[1]}): {reason or state}"
+                     for key, (state, reason) in sorted(missing.items())[:5]],
+    }
+
+
+def failed_runs_check(github, rows, args, api_get, now):
+    """For the newest runs that failed in their test step and have a run
+    page: the failed tests the page lists, against the run's JUnit file and
+    the test history."""
+    captures = stored_captures(args.jobs_db)
+    failed = {}
+    for row in sorted(rows, key=lambda r: r.get("created_at") or "", reverse=True):
+        run_id = row_run_id(row)
+        finished = ts(row.get("updated_at")) or ts(row.get("created_at"))
+        if finished is None or finished > now - RESULTS_GRACE:
+            continue
+        if RESULTS.get((row.get("conclusion") or "").lower()) != "failed" or not test_step(row)[1]:
+            continue
+        # The capture of the row's suite; a run outside the suites (an
+        # install run) has one capture.
+        run_captures = captures.get(run_id) or {}
+        suite = documented_suite(row.get("workflow"))
+        capture = run_captures.get(suite) or (next(iter(run_captures.values())) if len(run_captures) == 1 else "")
+        if capture and capture not in failed:
+            failed[capture] = (run_id, capture_suite(capture), row)
+        if len(failed) >= FAILED_RUNS_CHECKED:
+            break
+    results, fetches = stored_test_results(args.trends_db, sorted({run_id for run_id, _, _ in failed.values()}))
+    audited = []
+    for capture, (run_id, suite, row) in failed.items():
+        # The run page's Failed tests panel: the failed tests, or the
+        # error the panel shows (its HTTP status line says why).
+        page_error = ""
+        listed = set()
+        try:
+            page = api_get(f"{args.api}/api/ci-observe/failed-tests?capture_id={urllib.parse.quote(capture, safe='')}")
+            listed = {test.get("name") or "" for test in page.get("failed_tests") or []}
+        except urllib.error.HTTPError as error:
+            page_error = f"HTTP {error.code}: {error.reason}"
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            page_error = f"the page's endpoint did not answer: {error}"
+        truth = artifact_failures(github, row["repo"], run_id, suite, run_trigger(row))
+        history = suite_results(results.get(run_id), suite)
+        problems = []
+        if page_error:
+            problems.append(f"the page cannot list the failed tests ({page_error})")
+        elif not listed:
+            problems.append("the page lists no failed test for a run whose test step failed: it shows \"No failures.\"")
+        if truth["failed"] is not None:
+            if not page_error and listed != truth["failed"]:
+                problems.append(f"the page lists {sorted(listed)}, the JUnit file {sorted(truth['failed'])}")
+            if history is not None and history[1] != truth["failed"]:
+                problems.append(f"the test history has {sorted(history[1])}, the JUnit file {sorted(truth['failed'])}")
+        audited.append({
+            "run_id": run_id, "capture_id": capture, "repo": row["repo"], "workflow": row.get("workflow"),
+            "url": row.get("url"), "page": sorted(listed), "page_error": page_error,
+            "junit": sorted(truth["failed"]) if truth["failed"] is not None else None,
+            "junit_where": truth["where"], "junit_note": truth["note"],
+            "history": sorted(history[1]) if history is not None else None,
+            "history_reason": "" if history is not None else (fetches.get(run_id) or ("", "not read yet"))[1],
+            "problems": problems,
+        })
+    return audited
+
+
+def tests_audit(github, args, rows, api_get, now):
+    return {
+        "private": private_access(github),
+        "coverage": results_coverage(rows, args.trends_db, now),
+        "failed_runs": failed_runs_check(github, rows, args, api_get, now),
+    }
 
 
 def summarize(result):
     """The few numbers the pages show: what was compared and what differed.
     Every count here is the audit's; the pages only print them."""
-    summary = {"checked_at": result["now"], "days": result["days"], "e2e": None, "prs": None}
+    summary = {"checked_at": result["now"], "days": result["days"], "e2e": None, "tests": None, "prs": None}
     e2e = result["e2e"]
     if e2e is not None:
         counted = [check for check in e2e["completeness"] if check.get("counted")]
@@ -776,6 +1139,29 @@ def summarize(result):
             "sample_differ": sum(1 for audit in e2e["sample"] if audit["problems"]),
             "recount_ok": all(check["ok"] for check in e2e["recount"]),
         }
+        tests = e2e.get("tests")
+        if tests is not None:
+            coverage, failed = tests["coverage"], tests["failed_runs"]
+            summary["tests"] = {
+                "private_repo": tests["private"]["repo"],
+                "private_readable": tests["private"]["readable"],
+                "private_note": tests["private"]["note"],
+                "runs": coverage["runs"],
+                "runs_with_results": coverage["with_results"],
+                "runs_missing": coverage["missing"],
+                "missing_since": coverage["missing_since"],
+                "missing_reasons": coverage["reasons"][:3],
+                "failed_runs": len(failed),
+                "pages_claim_none": sum(1 for audit in failed if not audit["page"] and not audit["page_error"]),
+                "pages_error": sum(1 for audit in failed if audit["page_error"]),
+                "page_error": next((audit["page_error"] for audit in failed if audit["page_error"]), ""),
+                "pages_differ": sum(1 for audit in failed
+                                    if any(problem.startswith("the page lists [") for problem in audit["problems"])),
+                "history_differ": sum(1 for audit in failed
+                                      if any(problem.startswith("the test history") for problem in audit["problems"])),
+                "unverified": sum(1 for audit in failed if audit["junit"] is None),
+                "unverified_note": next((audit["junit_note"] for audit in failed if audit["junit"] is None), ""),
+            }
     if result["review_definitions"] is not None:
         checks = {check["check"]: check for check in result["window"]}
         order = checks.get("every merged row: timestamps in order, no negative duration") or {}
@@ -795,6 +1181,12 @@ def summarize(result):
         and not part.get("order_violations") and not part.get("lists_incomplete")
         for part in parts
     )
+    tests = summary["tests"]
+    if tests:
+        summary["ok"] = summary["ok"] and (
+            tests["private_readable"] is not False and not tests["runs_missing"] and not tests["pages_claim_none"]
+            and not tests["pages_error"] and not tests["pages_differ"] and not tests["history_differ"]
+        )
     return summary
 
 
@@ -863,10 +1255,14 @@ def main(argv=None, github=None, now=None, api_get=read_api):
     else:
         print(report(result))
     e2e = result["e2e"] or {}
+    tests = e2e.get("tests") or {}
     failed = (any(not check["ok"] for check in result["window"])
               or any(a["problems"] for a in result["pull_requests"])
               or any(not check["ok"] for check in e2e.get("recount", []) + e2e.get("completeness", []))
-              or any(a["problems"] for a in e2e.get("sample", [])))
+              or any(a["problems"] for a in e2e.get("sample", []))
+              or (tests.get("private") or {}).get("readable") is False
+              or not (tests.get("coverage") or {}).get("ok", True)
+              or any(a["problems"] for a in tests.get("failed_runs", [])))
     return 1 if failed and not args.out else 0
 
 
@@ -904,6 +1300,32 @@ def e2e_report(e2e):
             lines.append(f"      {problem['field']}: stored {problem.get('stored')}  github {problem.get('github')}")
         if len(audit["problems"]) > 12:
             lines.append(f"      ... {len(audit['problems']) - 12} more")
+    if e2e.get("tests"):
+        lines += ["", *tests_report(e2e["tests"])]
+    return lines
+
+
+def tests_report(tests):
+    private = tests["private"]
+    readable = {True: "readable", False: "NOT READABLE", None: "unknown"}[private["readable"]]
+    lines = ["E2E tests: the run pages' Failed tests and the test history",
+             f"  {private['repo']}, where scheduled and manual E2E runs publish their logs artifact: {readable}"
+             + (f" ({private['note']})" if private["note"] else "")]
+    lines += _check_lines([tests["coverage"]])
+    failed = tests["failed_runs"]
+    lines.append(f"  The newest {len(failed)} runs that failed in their test step, test by test "
+                 "(page / JUnit file read here / test history)")
+    for audit in failed:
+        verdict = "MISMATCH" if audit["problems"] else "ok      "
+        junit = audit["junit"] if audit["junit"] is not None else f"not read ({audit['junit_note']})"
+        history = audit["history"] if audit["history"] is not None else f"none ({audit['history_reason']})"
+        page = f"error: {audit['page_error']}" if audit["page_error"] else audit["page"]
+        lines.append(f"  {verdict} {audit['workflow']}  {audit['url']}")
+        lines.append(f"             page {page}")
+        lines.append(f"             JUnit {junit}")
+        lines.append(f"             history {history}")
+        for problem in audit["problems"]:
+            lines.append(f"             {problem}")
     return lines
 
 

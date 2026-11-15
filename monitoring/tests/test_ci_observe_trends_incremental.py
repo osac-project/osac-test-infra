@@ -162,19 +162,6 @@ class TestReadDecision:
         assert trends.read_decision(self.run, self.fetch("error", checked=NOW - timedelta(hours=2)), False,
                                     NOW) == "fetch"
 
-    @pytest.mark.parametrize(
-        ("reason", "state"),
-        [
-            ("artifact listing failed with HTTP 502", "error"),
-            ("artifact listing failed (network error)", "error"),
-            ("osac-logs-full-install-1: artifact download failed with HTTP 500", "error"),
-            ("no osac-logs-[<suite>-]full-install artifact", "no_data"),
-            ("osac-logs-full-install-1: expired (30-day retention)", "no_data"),
-        ],
-    )
-    def test_fetch_state(self, trends, reason, state):
-        assert trends.fetch_state(reason) == state
-
 
 class TestHourlyPass:
     def test_a_run_without_an_artifact_is_not_listed_again(self, wired, exporter, github):
@@ -196,14 +183,39 @@ class TestHourlyPass:
         assert query(wired, "SELECT job, summary FROM rollup_passes") == [
             {"job": "trends", "summary": "1 run(s) considered"}]
 
-    def test_a_failed_listing_is_retried_on_a_later_pass(self, wired, exporter, github, monkeypatch):
+    def test_a_github_error_stops_the_pass_and_stores_nothing(self, wired, exporter, github, caplog):
         exporter._upsert_job(run_row())
         github.routes[LIST_PATH] = [FakeResponse(status=502)]
-        assert wired.main(["--days", "7"]) == 0
-        assert query(wired, "SELECT state FROM run_fetches") == [{"state": "error"}]
-        monkeypatch.setattr(wired, "RECHECK_AFTER", timedelta(seconds=-1))
+
+        assert wired.main(["--days", "7"]) == 1
+
+        assert "the test history pass stopped, nothing was stored" in caplog.text
+        assert f"run {RUN_ID} of osac-project/osac answered HTTP 502" in caplog.text
+        assert query(wired, "SELECT * FROM run_fetches") == []
+        tables = {row["name"] for row in query(wired, "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert "rollup_passes" not in tables, "a stopped pass is not a pass"
+        # GitHub answers again: the next pass reads the run.
         github.routes[LIST_PATH] = [artifact_payload("https://api.github.com")]
         assert wired.main(["--days", "7"]) == 0
+        assert query(wired, "SELECT state FROM run_fetches") == [{"state": "parsed"}]
+        assert len(query(wired, "SELECT * FROM test_runs")) == 3
+
+    def test_runs_stored_after_a_private_404_are_read_again(self, wired, exporter, github):
+        """Before 2026-11-15 a 404 from osac-ci-artifacts (a token that
+        cannot see it) was stored as "no artifact" and never asked again."""
+        exporter._upsert_job(run_row())
+        conn = wired.open_trends_db(wired.TRENDS_DB)
+        with conn:
+            conn.execute(
+                "INSERT INTO run_fetches (run_id, day, state, reason, version, checked_at, finished_at)"
+                " VALUES (?, '2026-11-14', 'no_data', ?, 2, '2026-11-14T06:00:00Z', '2026-11-14T05:26:50Z')",
+                (RUN_ID, "no osac-logs-[<suite>-]full-install artifact "
+                         "(private artifact lookup in osac-ci-artifacts failed with HTTP 404)"),
+            )
+        conn.close()
+
+        assert wired.main(["--days", "7"]) == 0
+
         assert query(wired, "SELECT state FROM run_fetches") == [{"state": "parsed"}]
         assert len(query(wired, "SELECT * FROM test_runs")) == 3
 

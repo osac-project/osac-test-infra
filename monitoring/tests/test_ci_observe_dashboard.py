@@ -19,6 +19,7 @@ DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "d
 DASHBOARD = json.loads((DASHBOARDS_DIR / "ci-observe-runs.json").read_text())
 CAPTURE_URL = "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}"
 RUN_URL = "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}"
+FAILED_TESTS_URL = "http://127.0.0.1:9103/api/ci-observe/failed-tests?capture_id=${capture_id:percentencode}"
 
 CAPTURE_DOCUMENT = {
     "session": {
@@ -121,16 +122,19 @@ RUN_DOCUMENT = {
         {"suite": "VMaaS", "job": "vmaas / e2e", "step": "Run E2E tests", "phase": "test", "phase_label": "Tests",
          "start_s": 3300, "duration_s": 2400, "conclusion": "failure"},
     ],
-    "native": {
-        "failed_tests": [
-            {
-                "name": "test_create",
-                "message": "AssertionError: cluster did not reach Ready",
-                "time_s": 95.2,
-                "artifact_url": "https://github.com/osac-project/osac/actions/runs/41709318840",
-            }
-        ]
-    },
+}
+
+FAILED_TESTS_DOCUMENT = {
+    "failed_tests": [
+        {
+            "name": "test_create",
+            "classname": "tests.e2e.vmaas.test_create",
+            "type": "AssertionError",
+            "message": "AssertionError: cluster did not reach Ready",
+            "time_s": 95.2,
+            "artifact_url": "https://github.com/osac-project/osac-ci-artifacts/actions/runs/9001/artifacts/77",
+        }
+    ],
 }
 
 
@@ -323,11 +327,14 @@ def test_steps_read_the_run_endpoint() -> None:
     }
 
 
-def test_failures_read_the_run_endpoint() -> None:
+def test_failures_read_the_failed_tests_endpoint() -> None:
+    """Its own endpoint: when the JUnit file cannot be read, the endpoint
+    fails and this panel shows the error; the job-history panels do not."""
     table = panel("Failed tests")
-    assert table["targets"][0]["url"] == RUN_URL
-    assert table["targets"][0]["root_selector"] == "native.failed_tests"
-    assert_selectors_resolve(table, RUN_DOCUMENT)
+    assert table["targets"][0]["url"] == FAILED_TESTS_URL
+    assert table["targets"][0]["root_selector"] == "failed_tests"
+    assert_selectors_resolve(table, FAILED_TESTS_DOCUMENT)
+    assert table["fieldConfig"]["defaults"]["noValue"] == "No failures."
 
 
 def test_the_test_list_reads_the_capture_endpoint() -> None:

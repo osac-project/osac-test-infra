@@ -5,10 +5,15 @@ file name has a hyphen, so it cannot import this module's classes from
 anywhere else by package path). A ci-observe capture id embeds a GitHub
 run id and attempt, and CIObserveRunEvidence ties such a capture to the
 GitHub-side evidence the exporter already stores (job history in SQLite)
-and to the native JUnit results inside the run's
-osac-logs-[<suite>-]full-install-<run id> artifact, downloaded from
-GitHub on demand, bounded and cached. Same exporter, same token, same
-data -- no second poller, no new artifact.
+and, for /api/ci-observe/failed-tests, to the JUnit file inside the logs
+artifact of the capture's suite, downloaded from GitHub on demand, bounded
+and cached. Same exporter, same token, same data -- no second poller.
+
+The artifact is read from one place, decided by the run's trigger (see
+artifact_place), under one name, decided by the capture's suite (see
+SUITE_ARTIFACTS). Anything that stops that read is an EvidenceError whose
+message says what failed, where, and what to fix: there is no second place
+and no second source.
 
 CIObserveRunEvidence holds an exporter reference and calls back into it
 for everything shared: _db(), _row_to_job(), _get(), _update_rate_limit(),
@@ -44,14 +49,104 @@ logger = logging.getLogger(__name__)
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 API_URL = os.getenv("API_URL", "https://api.github.com")
 JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "30"))
-# The private repository E2E jobs publish their artifacts to instead of to
-# their own run (upload-artifacts' private-repo input). A run that published
-# there has no artifact of its own, so a reader that finds none on the run
-# asks this repository for the exact names. Empty turns the lookup off.
+# Where an E2E run's logs artifact (with the JUnit file) is, by why the run
+# ran. Scheduled and manual runs of the e2e-*-caller.yml workflows pass the
+# OSAC CI app key, so the job publishes the artifact to the private
+# repository (upload-artifacts' private-repo input). Pull-request and
+# merge-queue runs get no app key, on purpose (e2e-pr-*.yml, e2e-queue.yml):
+# the artifact stays on the run. A trigger with neither is an error.
 PRIVATE_ARTIFACT_REPO = os.getenv("PRIVATE_ARTIFACT_REPO", "osac-ci-artifacts")
-# The suite part of "osac-logs-[<suite>-]full-install-<run id>": VMaaS has
-# none, BMaaS and CaaS insert theirs.
-PRIVATE_ARTIFACT_SUITES = ("", "bmaas-", "caas-")
+ON_THE_RUN = frozenset({"pr", "merge_queue"})
+IN_THE_PRIVATE_REPO = frozenset({"scheduled", "manual"})
+# The artifact each suite's full-install job uploads. VMaaS's name has no
+# suite in it. A merge-queue run holds all three, each with its own capture.
+SUITE_ARTIFACTS = {
+    "vmaas": "osac-logs-full-install-{run_id}",
+    "caas": "osac-logs-caas-full-install-{run_id}",
+    "bmaas": "osac-logs-bmaas-full-install-{run_id}",
+}
+TOKEN_FIX = (
+    "PRIVATE_GITHUB_TOKEN needs read access to the Actions artifacts of {org}/{repo}: "
+    "the repo scope on a classic token, or {repo} with Actions read-only on a fine-grained one"
+)
+
+
+class EvidenceError(Exception):
+    """A run's JUnit evidence cannot be read. The message says what failed,
+    where, and, when the fix is known, what to change."""
+
+
+class GitHubRefused(EvidenceError):
+    """GitHub did not answer with an artifact listing or an artifact: an
+    HTTP error, a network error or a body that is not one. Unlike a run's
+    own facts (no artifact where its trigger says), this is the same for
+    every run, so a batch reader stops on it."""
+
+
+def artifact_place(trigger, repo, run_id, org=ORG):
+    """(listing path, label, private) of the one place a run's artifact is:
+    its own run for a pull-request or merge-queue run, the private artifact
+    repository for a scheduled or manual one. Raises EvidenceError for any
+    other trigger."""
+    if trigger in ON_THE_RUN:
+        return (f"/repos/{org}/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
+                f"run {run_id} of {org}/{repo}", False)
+    if trigger in IN_THE_PRIVATE_REPO:
+        return f"/repos/{org}/{PRIVATE_ARTIFACT_REPO}/actions/artifacts", f"{org}/{PRIVATE_ARTIFACT_REPO}", True
+    raise EvidenceError(
+        f"run {run_id} is a {trigger or 'unknown'}-triggered run, and only pull-request and merge-queue runs "
+        f"(artifact on the run) and scheduled and manual runs (artifact in {org}/{PRIVATE_ARTIFACT_REPO}) "
+        "have a known artifact place"
+    )
+
+
+def find_artifacts(get, trigger, repo, run_id, names, org=ORG, api_url=API_URL):
+    """The artifacts named in `names` at the one place the run's trigger
+    says, newest first per name: [(name, artifact, label, private)]. A name
+    with no artifact there is left out; the caller decides what that means.
+    Any answer from GitHub other than a listing raises EvidenceError: a
+    refusal from the private repository names the token's missing access.
+    `get` is a function from a URL to a response."""
+    path, label, private = artifact_place(trigger, repo, run_id, org)
+    urls = ([f"{api_url}{path}?name={name}&per_page=100" for name in names] if private
+            else [f"{api_url}{path}"])
+    found = {}
+    for url in urls:
+        try:
+            response = get(url)
+        except requests.exceptions.RequestException as error:
+            raise GitHubRefused(f"listing the artifacts of {label} failed: {error}") from None
+        if private and response.status_code in (401, 403, 404):
+            raise GitHubRefused(
+                f"{label} answered HTTP {response.status_code} to the artifact listing: the token cannot read it. "
+                + TOKEN_FIX.format(org=org, repo=PRIVATE_ARTIFACT_REPO)
+            )
+        if not response.ok:
+            raise GitHubRefused(f"{label} answered HTTP {response.status_code} to the artifact listing")
+        try:
+            listing = response.json()
+        except ValueError:
+            listing = None
+        artifacts = listing.get("artifacts") if isinstance(listing, dict) else None
+        if not isinstance(artifacts, list) or not all(isinstance(a, dict) for a in artifacts):
+            raise GitHubRefused(f"{label} answered something that is not an artifact listing")
+        for artifact in artifacts:
+            name = artifact.get("name")
+            if name in names:
+                found.setdefault(name, []).append(artifact)
+    return [
+        (name, max(found[name], key=lambda a: a.get("created_at") or ""), label, private)
+        for name in names if name in found
+    ]
+
+
+def artifact_page_url(artifact, repo, run_id, private, org=ORG):
+    """The page an artifact is on: its run's, or the private repository run's
+    that published it."""
+    if private:
+        published_by = (artifact.get("workflow_run") or {}).get("id")
+        return f"https://github.com/{org}/{PRIVATE_ARTIFACT_REPO}/actions/runs/{published_by}/artifacts/{artifact.get('id')}"
+    return f"https://github.com/{org}/{repo}/actions/runs/{run_id}/artifacts/{artifact.get('id')}"
 
 
 class BoundedCache:
@@ -106,24 +201,12 @@ class CIObserveRunEvidence:
     # Bounds for the on-demand native (JUnit) lookup. The artifact zip is
     # read streamed and capped; a larger artifact is reported as too_large,
     # never downloaded unbounded. Parsed results are cached for 15 minutes
-    # so repeated dashboard loads do not re-download; failed lookups are
-    # cached for 2 minutes so a dashboard left open retries soon without
-    # hammering the GitHub API.
-    #
-    # Artifact names are not uniform across suites: VMaaS full-install runs
-    # upload "osac-logs-full-install-<run id>" while BMaaS and CaaS insert
-    # the suite ("osac-logs-bmaas-full-install-<run id>",
-    # "osac-logs-caas-full-install-<run id>" -- confirmed live). Any name
-    # matching NATIVE_ARTIFACT_RE is accepted; the run-id anchor rejects
-    # another run's similarly-named artifact, and anything else is not an
-    # artifact of this run at all. The exact plain name is preferred when
-    # several match.
-    NATIVE_ARTIFACT_RE = re.compile(r"^osac-logs-(?:[a-z0-9-]+-)?full-install-(\d+)$")
-    NATIVE_ARTIFACT_PREFIX = "osac-logs-full-install-"
+    # so repeated dashboard loads do not re-download; an error is cached for
+    # 2 minutes so a dashboard left open asks again soon without hammering
+    # the GitHub API.
     NATIVE_MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
     NATIVE_MAX_JUNIT_FILES = 16
     NATIVE_MAX_JUNIT_FILE_BYTES = 32 * 1024 * 1024
-    NATIVE_MAX_FAILED_TESTS = 100
     NATIVE_MAX_MESSAGE_CHARS = 2000
     NATIVE_CACHE_TTL_SECONDS = 900
     NATIVE_FAILURE_CACHE_TTL_SECONDS = 120
@@ -142,12 +225,15 @@ class CIObserveRunEvidence:
     ILLEGAL_XML_CONTROL_BYTES = (
         bytes(range(0x00, 0x09)) + bytes((0x0B, 0x0C)) + bytes(range(0x0E, 0x20))
     )
+    # The capture ids /api/ci-observe/failed-tests reads: the suite names the
+    # artifact. A legacy or bare id names none.
+    SUITE_CAPTURE_ID_RE = re.compile(r"^(vmaas|caas|bmaas)-(?:pr\d+|main)-(\d+)-a(\d+)$")
 
     def __init__(self, exporter):
         self.exporter = exporter
-        # Run-evidence cache: parsed native JUnit results and run metadata
-        # fetched on demand from GitHub, keyed by (kind, run id[, run
-        # attempt]) -- see get_ci_observe_run_json.
+        # Run-evidence cache: failed-test documents (or their error) and run
+        # metadata fetched on demand from GitHub, keyed by (kind, run id[,
+        # run attempt, suite]).
         self._cache = BoundedCache(self.NATIVE_CACHE_MAX_ENTRIES)
 
     @staticmethod
@@ -362,24 +448,6 @@ class CIObserveRunEvidence:
         )
         return sha
 
-    @staticmethod
-    def _native_doc(status, artifact_name, artifact_url, notes, **counts):
-        """One native-evidence document. Counts stay None (never 0) when
-        the JUnit data was not parsed, so a missing or expired artifact can
-        never look like a green zero."""
-        return {
-            "status": status,
-            "artifact_name": artifact_name,
-            "artifact_url": artifact_url,
-            "tests": counts.get("tests"),
-            "failures": counts.get("failures"),
-            "errors": counts.get("errors"),
-            "skipped": counts.get("skipped"),
-            "time_s": counts.get("time_s"),
-            "failed_tests": counts.get("failed_tests", []),
-            "notes": notes,
-        }
-
     def _download_artifact(self, url):
         """Download an artifact zip, reading at most NATIVE_MAX_DOWNLOAD_BYTES
         (streamed; a larger artifact is abandoned mid-read, never buffered
@@ -449,25 +517,6 @@ class CIObserveRunEvidence:
         return text[: cls.NATIVE_MAX_MESSAGE_CHARS], len(text) > cls.NATIVE_MAX_MESSAGE_CHARS
 
     @staticmethod
-    def _junit_count(suite, attr, fallback):
-        """A <testsuite> count attribute as an int, falling back to counting
-        the matching <testcase> children when the attribute is missing, not
-        a number, or not finite. A crafted tests="inf" must not raise out
-        of the endpoint: float("inf") parses fine and only int() then
-        raises OverflowError, and float("1e400") parses straight to inf, so
-        finiteness is checked before the int() and OverflowError (a huge
-        digit string) is caught too."""
-        raw = suite.get(attr)
-        if raw is not None:
-            try:
-                value = float(raw)
-                if math.isfinite(value):
-                    return int(value)
-            except (TypeError, ValueError, OverflowError):
-                pass
-        return fallback
-
-    @staticmethod
     def _junit_time(element):
         """An element's time attribute as a rounded float, or None when it
         is missing, not a number, or not finite -- inf/nan would serialize
@@ -482,13 +531,12 @@ class CIObserveRunEvidence:
         return round(value, 3)
 
     def _parse_junit_files(self, files, artifact_url):
-        """Aggregate JUnit XML files into the native doc's counts and
-        failed-test rows. Counts come from the <testsuite> attributes,
-        counting <testcase> children when an attribute is absent. Failed
-        tests are capped at NATIVE_MAX_FAILED_TESTS entries; only each
+        """Aggregate JUnit XML files into counts and failed-test rows. Every
+        count is a count of <testcase> elements (a <failure>, <error> or
+        <skipped> child), so the counts and the rows always agree. Only each
         <failure>/<error> element's type and bounded message attribute are
-        kept, never its stack-trace text. Returns (fields, reason):
-        fields is None with a reason when no file parses."""
+        kept, never its stack-trace text. Returns (fields, reason): fields
+        is None with a reason when a file does not parse."""
         totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
         time_s = 0.0
         failed_tests = []
@@ -507,24 +555,16 @@ class CIObserveRunEvidence:
                 return None, f"{name} has no testsuite element"
             for suite in suites:
                 cases = suite.findall("testcase")
-                totals["tests"] += self._junit_count(suite, "tests", len(cases))
-                totals["failures"] += self._junit_count(
-                    suite, "failures",
-                    sum(1 for c in cases if c.find("failure") is not None))
-                totals["errors"] += self._junit_count(
-                    suite, "errors",
-                    sum(1 for c in cases if c.find("error") is not None))
-                totals["skipped"] += self._junit_count(
-                    suite, "skipped",
-                    sum(1 for c in cases if c.find("skipped") is not None))
-                time_s += self._junit_time(suite) or 0
+                totals["tests"] += len(cases)
+                totals["failures"] += sum(1 for c in cases if c.find("failure") is not None)
+                totals["errors"] += sum(1 for c in cases if c.find("error") is not None)
+                totals["skipped"] += sum(1 for c in cases if c.find("skipped") is not None)
+                time_s += sum(self._junit_time(case) or 0 for case in cases)
                 for case in cases:
                     problem = case.find("failure")
                     if problem is None:
                         problem = case.find("error")
                     if problem is None:
-                        continue
-                    if len(failed_tests) >= CIObserveRunEvidence.NATIVE_MAX_FAILED_TESTS:
                         continue
                     message, truncated = self._bound_junit_message(problem.get("message"))
                     if truncated:
@@ -540,10 +580,6 @@ class CIObserveRunEvidence:
                         "time_s": self._junit_time(case),
                         "artifact_url": artifact_url,
                     })
-        if len(failed_tests) >= CIObserveRunEvidence.NATIVE_MAX_FAILED_TESTS:
-            notes.append(
-                f"only the first {CIObserveRunEvidence.NATIVE_MAX_FAILED_TESTS} failed tests are listed"
-            )
         return {
             "tests": totals["tests"],
             "failures": totals["failures"],
@@ -553,133 +589,6 @@ class CIObserveRunEvidence:
             "failed_tests": failed_tests,
             "notes": notes,
         }, None
-
-    @staticmethod
-    def _is_native_artifact(name, run_id):
-        """Whether an artifact name is this run's native-evidence artifact:
-        the plain "osac-logs-full-install-<run id>" (VMaaS) or a
-        suite-qualified "osac-logs-<suite>-full-install-<run id>" (BMaaS,
-        CaaS -- see NATIVE_ARTIFACT_RE). Anything else -- including another
-        run's similarly-named artifact, rejected by the run-id anchor --
-        is not accepted."""
-        match = CIObserveRunEvidence.NATIVE_ARTIFACT_RE.match(name or "")
-        return match is not None and int(match.group(1)) == run_id
-
-    @staticmethod
-    def _artifact_page_url(artifact, repo, run_id):
-        """The page an artifact is on: its run's, or -- for one read from the
-        private artifact repository -- the run there that published it."""
-        private_repo = artifact.get("_private_repo")
-        if private_repo:
-            private_run = (artifact.get("workflow_run") or {}).get("id")
-            if private_run:
-                return (f"https://github.com/{ORG}/{private_repo}/actions/runs/"
-                        f"{private_run}/artifacts/{artifact.get('id')}")
-            return f"https://github.com/{ORG}/{private_repo}/actions"
-        return (f"https://github.com/{ORG}/{repo}/actions/runs/{run_id}"
-                f"/artifacts/{artifact.get('id')}")
-
-    def _ci_observe_native_uncached(self, run_id, repo):
-        """The native JUnit evidence of one run, straight from GitHub. Every
-        failure path returns a document whose status explains the gap; this
-        must never raise into the endpoint. "not_requested" covers the
-        cases where no lookup happened (no token, or the lookup itself
-        failed) -- the notes say which."""
-        artifact_name = f"{CIObserveRunEvidence.NATIVE_ARTIFACT_PREFIX}{run_id}"
-        if not self.exporter._github_token():
-            return self._native_doc(
-                "not_requested", artifact_name, "",
-                ["no GitHub token is configured, so the artifact was not looked up"],
-            )
-        try:
-            resp = self.exporter._get(
-                f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}"
-                f"/artifacts?per_page=100"
-            )
-        except requests.exceptions.RequestException:
-            return self._native_doc(
-                "not_requested", artifact_name, "",
-                ["artifact lookup failed (network error)"],
-            )
-        if not resp.ok:
-            return self._native_doc(
-                "not_requested", artifact_name, "",
-                [f"artifact lookup failed with HTTP {resp.status_code}"],
-            )
-        # The run's own artifacts only (the run-scoped listing), filtered to
-        # the bounded name pattern. Expired matches sort last so a live one
-        # is chosen whenever both exist; the exact plain name beats
-        # suite-qualified ones, and ties break lexically -- a deterministic
-        # choice whenever several match.
-        matches = [
-            a for a in resp.json().get("artifacts") or []
-            if self._is_native_artifact(a.get("name", ""), run_id)
-        ]
-        private_reason = None
-        if not matches:
-            matches, private_reason = private_native_artifacts(self.exporter._get, run_id)
-        if not matches:
-            return self._native_doc(
-                "missing", artifact_name, "",
-                [f"no osac-logs-[<suite>-]full-install-{run_id} artifact "
-                 f"exists in {ORG}/{repo}"] + ([private_reason] if private_reason else []),
-            )
-        matches.sort(key=lambda a: (bool(a.get("expired")),
-                                    a.get("name") != artifact_name,
-                                    a.get("name") or ""))
-        artifact = matches[0]
-        artifact_name = artifact.get("name") or artifact_name
-        notes = []
-        if len(matches) > 1:
-            notes.append(
-                f"{len(matches)} artifacts matched; used {artifact_name}"
-            )
-        artifact_url = self._artifact_page_url(artifact, repo, run_id)
-        if artifact.get("expired"):
-            return self._native_doc(
-                "expired", artifact_name, artifact_url,
-                notes + [f"artifact {artifact_name} has passed its 30-day retention"
-                         f" (expired {artifact.get('expires_at') or 'date unknown'})"],
-            )
-        # Read through the exporter (not this class's own value): the tests
-        # monkeypatch the bound on WorkflowExporter.
-        if (artifact.get("size_in_bytes") or 0) > self.exporter.NATIVE_MAX_DOWNLOAD_BYTES:
-            return self._native_doc(
-                "too_large", artifact_name, artifact_url,
-                notes + [f"artifact is {artifact.get('size_in_bytes')} bytes, over the "
-                         f"{self.exporter.NATIVE_MAX_DOWNLOAD_BYTES}-byte download bound"],
-            )
-        data, reason = self._download_artifact(artifact.get("archive_download_url", ""))
-        if data is None:
-            status = "too_large" if reason == "too_large" else "not_requested"
-            return self._native_doc(status, artifact_name, artifact_url, notes + [reason])
-        files, reason = self._extract_junit_files(data)
-        if files is None:
-            return self._native_doc("invalid", artifact_name, artifact_url, notes + [reason])
-        fields, reason = self._parse_junit_files(files, artifact_url)
-        if fields is None:
-            return self._native_doc("invalid", artifact_name, artifact_url, notes + [reason])
-        return self._native_doc(
-            "available", artifact_name, artifact_url, notes + fields.pop("notes"), **fields
-        )
-
-    def _ci_observe_native(self, run_id, run_attempt, repo):
-        """Cached native evidence for one (run, attempt). A successful parse
-        is cached for NATIVE_CACHE_TTL_SECONDS so repeated dashboard loads
-        do not re-download the artifact; anything else is cached briefly so
-        an open dashboard retries soon without hammering the GitHub API."""
-        key = ("native", run_id, run_attempt)
-        cached = self._cache.get(key)
-        if cached is not None:
-            return cached
-        result = self._ci_observe_native_uncached(run_id, repo)
-        ttl = (
-            CIObserveRunEvidence.NATIVE_CACHE_TTL_SECONDS
-            if result["status"] == "available"
-            else CIObserveRunEvidence.NATIVE_FAILURE_CACHE_TTL_SECONDS
-        )
-        self._cache.put(key, result, ttl)
-        return result
 
     def get_ci_observe_run_json(self, params):
         """The /api/ci-observe/run document: everything known about one
@@ -699,16 +608,11 @@ class CIObserveRunEvidence:
               attempt (a run can have several; all are returned);
           steps -- flattened step rows (job_name, step_name, duration_s,
               conclusion);
-          native -- JUnit evidence parsed from the run's
-              osac-logs-[<suite>-]full-install-<run id> artifact (the
-              plain name for VMaaS runs, a suite-qualified one for BMaaS
-              and CaaS), or a status (missing / expired / too_large /
-              invalid / not_requested) explaining the gap;
           coverage -- where each part comes from and what is missing.
 
-        A missing or malformed capture id, an unknown run, or a failed
-        native lookup never fails the request: the document says what is
-        missing instead.
+        The run's failed tests are not part of it: they come from an
+        artifact, which /api/ci-observe/failed-tests reads, and its errors
+        must not take the job history's panels down with them.
         """
         capture_id = (params.get("capture_id", [""])[0] or "").strip()
         parsed, run_id, run_attempt = self._parse_capture_id(capture_id)
@@ -734,11 +638,6 @@ class CIObserveRunEvidence:
                 "GitHub job history stored by this workflow exporter "
                 f"(SQLite, {JOBS_HISTORY_DAYS}-day retention)"
             ),
-            "native_data": (
-                "JUnit XML parsed on demand from the run's "
-                f"osac-logs-[<suite>-]full-install-<run id> workflow artifact "
-                "(GitHub artifact retention is 30 days)"
-            ),
             "capture_identity": identity,
             "notes": notes,
         }
@@ -753,11 +652,9 @@ class CIObserveRunEvidence:
             "phases": [],
             "timing": [],
             "timeline": [],
-            "native": None,
             "coverage": coverage,
         }
         if run_id is None:
-            doc["native"] = self._native_doc("not_requested", "", "", list(notes))
             return doc
 
         rows = self._ci_observe_run_rows(run_id)
@@ -765,10 +662,6 @@ class CIObserveRunEvidence:
             notes.append(
                 f"run {run_id} is not in the exporter's job history (it was never "
                 f"polled, or it is older than the {JOBS_HISTORY_DAYS}-day retention)"
-            )
-            doc["native"] = self._native_doc(
-                "not_requested", f"{CIObserveRunEvidence.NATIVE_ARTIFACT_PREFIX}{run_id}", "",
-                ["the run's repo is unknown, so the artifact was not looked up"],
             )
             return doc
 
@@ -791,10 +684,6 @@ class CIObserveRunEvidence:
             notes.append(
                 f"the exporter keeps only a run's latest attempt; the stored run row "
                 f"is attempt {run_row.get('run_attempt')}, the capture says {run_attempt}"
-            )
-            notes.append(
-                "re-runs overwrite the artifact, so the native results may be from "
-                "a newer attempt than the capture"
             )
         jobs = ([run_row] if run_row_matches else []) + suite_rows
         if not jobs:
@@ -847,52 +736,135 @@ class CIObserveRunEvidence:
         ]
         doc["steps"] = self._ci_observe_steps(jobs)
         doc.update(self._ci_observe_timing(jobs))
-
-        repo = (doc["run"] or {}).get("repo") or rows[0].get("repo", "")
-        doc["native"] = self._ci_observe_native(run_id, run_attempt, repo)
         return doc
 
+    # -- /api/ci-observe/failed-tests -------------------------------------
 
-def private_native_artifacts(get, run_id, org=ORG, api_url=API_URL):
-    """The native-evidence artifacts of one run that its job published to the
-    private artifact repository: (artifacts, reason).
+    @staticmethod
+    def run_trigger(rows, run_id):
+        """Why a run ran ("pr", "merge_queue", "scheduled", "manual", ...),
+        from its stored rows: the run's own row says it for a flow run (a
+        merge group, a pull request); a suite row says it otherwise."""
+        own = next((row for row in rows if row.get("id") == run_id), None)
+        ordered = ([own] if own else []) + [row for row in rows if row is not own]
+        for row in ordered:
+            trigger = ci_observe_phases.trigger_key(row.get("event"), row.get("workflow"))
+            if trigger != "other":
+                return trigger
+        return "other"
 
-    The artifact there has the name the job gave it, so the lookup asks for
-    each name this run's artifact can have. `get` is a function from a URL to
-    a response (the caller supplies its own authentication). The reason is
-    only set, to the first failure, when nothing was found and a lookup
-    failed -- a token without access to the repository reads as that, not as
-    "not published"."""
-    if not PRIVATE_ARTIFACT_REPO:
-        return [], None
-    found = []
-    reason = None
-    for suite in PRIVATE_ARTIFACT_SUITES:
-        name = f"osac-logs-{suite}full-install-{run_id}"
-        url = f"{api_url}/repos/{org}/{PRIVATE_ARTIFACT_REPO}/actions/artifacts?name={name}&per_page=100"
+    def get_ci_observe_failed_tests_json(self, params):
+        """The /api/ci-observe/failed-tests document for ?capture_id=: the
+        failed tests of one capture, from the JUnit file in its suite's
+        artifact, read from the one place the run's trigger says.
+
+        Returns {capture_id, run_id, run_attempt, suite, trigger, artifact:
+        {name, place, url}, tests, failures, errors, skipped, failed_tests:
+        [{name, classname, type, message, time_s, artifact_url}], notes}.
+        failed_tests is empty only when the JUnit file lists no failed test.
+        Raises EvidenceError, with what failed, where and what to fix, for
+        everything else; the error is cached briefly too."""
+        capture_id = (params.get("capture_id", [""])[0] or "").strip()
+        match = CIObserveRunEvidence.SUITE_CAPTURE_ID_RE.match(capture_id)
+        if match is None:
+            raise EvidenceError(
+                f"capture id {capture_id!r} is not <vmaas|caas|bmaas>-<prN|main>-<run id>-a<attempt>, "
+                "so it names no suite artifact"
+            )
+        suite, run_id, run_attempt = match.group(1), int(match.group(2)), int(match.group(3))
+        key = ("failed_tests", run_id, run_attempt, suite)
+        cached = self._cache.get(key)
+        if cached is not None:
+            kind, value = cached
+            if kind == "error":
+                raise EvidenceError(value)
+            return value
         try:
-            response = get(url)
-            # Decoded here too: a 200 with a body that is not JSON is a failed
-            # lookup, not an exception for the caller, and must not discard
-            # what the earlier names found.
-            listing = response.json() if response.ok else None
-        except (requests.exceptions.RequestException, ValueError):
-            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (network error or invalid response)"
-            continue
-        if not response.ok:
-            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed with HTTP {response.status_code}"
-            continue
-        if not isinstance(listing, dict):
-            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (unexpected response)"
-            continue
-        artifacts = listing.get("artifacts") or []
-        if not isinstance(artifacts, list) or not all(
-            isinstance(artifact, dict) and isinstance(artifact.get("name") or "", str)
-            for artifact in artifacts
-        ):
-            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (unexpected response)"
-            continue
-        for artifact in artifacts:
-            if CIObserveRunEvidence._is_native_artifact(artifact.get("name") or "", run_id):
-                found.append(dict(artifact, _private_repo=PRIVATE_ARTIFACT_REPO))
-    return found, (None if found else reason)
+            document = self._failed_tests_uncached(capture_id, suite, run_id, run_attempt)
+        except EvidenceError as error:
+            logger.error("failed tests of %s cannot be read: %s", capture_id, error)
+            self._cache.put(key, ("error", str(error)), CIObserveRunEvidence.NATIVE_FAILURE_CACHE_TTL_SECONDS)
+            raise
+        self._cache.put(key, ("ok", document), CIObserveRunEvidence.NATIVE_CACHE_TTL_SECONDS)
+        return document
+
+    def _failed_tests_uncached(self, capture_id, suite, run_id, run_attempt):
+        if not self.exporter._github_token():
+            raise EvidenceError("no GitHub token is configured (PRIVATE_GITHUB_TOKEN), so no artifact can be read")
+        rows = self._ci_observe_run_rows(run_id)
+        if not rows:
+            raise EvidenceError(
+                f"run {run_id} is not in the exporter's job history (never polled, or older than "
+                f"{JOBS_HISTORY_DAYS} days), so its repository and trigger are unknown"
+            )
+        repo = next((row.get("repo") for row in rows if row.get("repo")), "")
+        trigger = self.run_trigger(rows, run_id)
+        # The capture's own rows: its suite's in a run that holds several
+        # suites (the merge queue), the run's own row in a run of one.
+        own = [row for row in rows if ci_observe_phases.suite_key(row.get("workflow")) == suite]
+        own = own or [row for row in rows if row.get("id") == run_id]
+        if not own:
+            raise EvidenceError(f"run {run_id} has no stored row for its {suite} suite")
+        latest = max(row.get("run_attempt") or 1 for row in own)
+        if run_attempt != latest:
+            raise EvidenceError(
+                f"the capture is attempt {run_attempt}, and the job history holds attempt {latest} of this suite: "
+                f"an artifact does not say which attempt uploaded it, so attempt {run_attempt}'s failed tests "
+                "cannot be told apart from the later attempt's"
+            )
+        name = SUITE_ARTIFACTS[suite].format(run_id=run_id)
+        found = find_artifacts(self.exporter._get, trigger, repo, run_id, [name])
+        if not found:
+            _, place, _ = artifact_place(trigger, repo, run_id)
+            raise EvidenceError(f"no {name} artifact in {place}, where {trigger} runs keep it")
+        _, artifact, place, private = found[0]
+        artifact_url = artifact_page_url(artifact, repo, run_id, private)
+        if artifact.get("expired"):
+            raise EvidenceError(
+                f"{name} in {place} expired on {artifact.get('expires_at') or 'an unknown date'} "
+                "(GitHub keeps artifacts 30 days)"
+            )
+        size = artifact.get("size_in_bytes") or 0
+        # Read through the exporter (not this class's own value): the tests
+        # monkeypatch the bound on WorkflowExporter.
+        if size > self.exporter.NATIVE_MAX_DOWNLOAD_BYTES:
+            raise EvidenceError(
+                f"{name} in {place} is {size} bytes, over the {self.exporter.NATIVE_MAX_DOWNLOAD_BYTES}-byte "
+                "download bound"
+            )
+        data, reason = self._download_artifact(artifact.get("archive_download_url", ""))
+        if data is None and reason == "too_large":
+            raise EvidenceError(f"downloading {name} from {place} stopped: it is over the download bound")
+        if data is None:
+            raise GitHubRefused(f"downloading {name} from {place} failed: {reason}")
+        files, reason = self._extract_junit_files(data)
+        if files is None:
+            raise EvidenceError(f"{name} from {place}: {reason}")
+        fields, reason = self._parse_junit_files(files, artifact_url)
+        if fields is None:
+            raise EvidenceError(f"{name} from {place}: {reason}")
+        failed_test_steps = [
+            step for row in own for job, step in ci_observe_phases.failed_steps(row.get("failed_step"))
+            if ci_observe_phases.step_phase(step, job) == "test"
+        ]
+        if failed_test_steps and not fields["failed_tests"]:
+            raise EvidenceError(
+                f"the test step failed ({failed_test_steps[0]}), but the junit.xml of {name} lists no failed "
+                "test: pytest stopped before it reported one (a collection or internal error, an interrupt, "
+                "or no test collected). The job log has the cause"
+            )
+        return {
+            "capture_id": capture_id,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+            "suite": suite,
+            "trigger": trigger,
+            "artifact": {"name": name, "place": place, "url": artifact_url},
+            "tests": fields["tests"],
+            "failures": fields["failures"],
+            "errors": fields["errors"],
+            "skipped": fields["skipped"],
+            "time_s": fields["time_s"],
+            "failed_tests": fields["failed_tests"],
+            "notes": fields["notes"],
+        }

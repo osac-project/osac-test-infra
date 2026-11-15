@@ -617,6 +617,36 @@ def read_audit_summary(path: str) -> dict | None:
     return summary if isinstance(summary, dict) else None
 
 
+def _audit_test_notes(tests: dict, when: str) -> list[str]:
+    """What the daily check found about test results and failed tests."""
+    notes = []
+    repo = tests.get("private_repo") or "the private artifact repository"
+    if tests.get("private_readable") is False:
+        notes.append(f"the check against GitHub ({when}) cannot read {repo}, where scheduled and manual E2E runs "
+                     f"publish their JUnit files ({tests.get('private_note') or 'no access'}): the test results and "
+                     "failed tests of those runs are missing")
+    if tests.get("runs_missing"):
+        since = (tests.get("missing_since") or "")[:10]
+        reasons = "; ".join(f"{count}: {reason}" for reason, count in tests.get("missing_reasons") or [])
+        notes.append(f"{tests['runs_missing']:,} of {tests.get('runs', 0):,} suite runs that ran their tests have "
+                     f"no test results" + (f", the first from {since}" if since else "")
+                     + (f" ({reasons})" if reasons else ""))
+    failed = tests.get("failed_runs", 0)
+    if tests.get("pages_error"):
+        notes.append(f"{tests['pages_error']} of {failed} runs that failed in their tests cannot show their failed "
+                     f"tests on their run page: {tests.get('page_error') or 'see ' + AUDIT_FILE_NAME}")
+    if tests.get("pages_claim_none"):
+        notes.append(f"{tests['pages_claim_none']} of {failed} runs that failed in their tests show no failed test "
+                     f"on their run page ({AUDIT_FILE_NAME} lists them)")
+    if tests.get("pages_differ"):
+        notes.append(f"{tests['pages_differ']} of {failed} runs that failed in their tests list other failed tests "
+                     f"on their run page than in their JUnit file ({AUDIT_FILE_NAME} lists them)")
+    if tests.get("history_differ"):
+        notes.append(f"{tests['history_differ']} of {failed} runs that failed in their tests have other failed "
+                     f"tests in the test history than in their JUnit file ({AUDIT_FILE_NAME} lists them)")
+    return notes
+
+
 def audit_lines(summary: dict | None, now: datetime, part: str) -> tuple[str, list[str]]:
     """(source, notes) for one page: the line next to "Data as of" and what
     the check found, for "Missing or partial data". part is "e2e" for the run
@@ -650,6 +680,11 @@ def audit_lines(summary: dict | None, now: datetime, part: str) -> tuple[str, li
         if block.get("lists_incomplete"):
             notes.append(f"GitHub could not list every run of {block['lists_incomplete']} workflows; "
                          "the check covers the rest")
+        tests = (summary or {}).get("tests")
+        if tests:
+            source += (f"; test results stored for {tests.get('runs_with_results', 0):,} of "
+                       f"{tests.get('runs', 0):,} suite runs that ran their tests")
+            notes.extend(_audit_test_notes(tests, when))
         return source, notes
     merged = "matches" if block.get("merged_ok") else "differs"
     source = (f"Checked against GitHub {when}: {block.get('sample', 0)} sampled merged pull requests, "

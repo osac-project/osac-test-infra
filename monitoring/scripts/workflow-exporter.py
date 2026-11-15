@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_observe_phases
 from ci_observe_capture_view import CIObserveCaptureView
 from ci_observe_insights import CIObserveInsights
-from ci_observe_run_evidence import CIObserveRunEvidence
+from ci_observe_run_evidence import CIObserveRunEvidence, EvidenceError
 from ci_observe_runs import CIObserveRuns
 
 logging.basicConfig(
@@ -4645,12 +4645,12 @@ class WorkflowExporter:
     # self._run_evidence): a capture id embeds a GitHub run id and attempt,
     # and the evidence ties the capture to the GitHub-side data this
     # exporter already stores (job history in SQLite) and to the native
-    # JUnit results inside the run's osac-logs-[<suite>-]full-install-<run
-    # id> artifact, downloaded from GitHub on demand, bounded and cached.
-    # Same exporter, same token, same data -- no second poller, no new
-    # artifact.
+    # JUnit results inside the logs artifact of the capture's suite (for
+    # /api/ci-observe/failed-tests), downloaded from GitHub on demand,
+    # bounded and cached. Same exporter, same token, same data -- no second
+    # poller, no new artifact.
 
-    # The four run-evidence bounds the tests read on WorkflowExporter
+    # The run-evidence bounds the tests read on WorkflowExporter
     # (monitoring/tests/test_exporter_ci_observe_run.py), re-exported from
     # their canonical home on CIObserveRunEvidence. The download bound is
     # additionally monkeypatched there by the tests, so the evidence code
@@ -4658,7 +4658,6 @@ class WorkflowExporter:
     # CIObserveRunEvidence._download_artifact.
     NATIVE_MAX_DOWNLOAD_BYTES = CIObserveRunEvidence.NATIVE_MAX_DOWNLOAD_BYTES
     NATIVE_MAX_MESSAGE_CHARS = CIObserveRunEvidence.NATIVE_MAX_MESSAGE_CHARS
-    NATIVE_MAX_FAILED_TESTS = CIObserveRunEvidence.NATIVE_MAX_FAILED_TESTS
     NATIVE_FAILURE_CACHE_TTL_SECONDS = CIObserveRunEvidence.NATIVE_FAILURE_CACHE_TTL_SECONDS
 
     def _github_token(self):
@@ -4676,13 +4675,19 @@ class WorkflowExporter:
         return CIObserveRunEvidence._parse_capture_id(capture_id)
 
     def get_ci_observe_run_json(self, params):
-        """The /api/ci-observe/run document: everything known about one
-        ci-observe capture's GitHub run -- the run summary, its stored
-        jobs and steps, and the native JUnit evidence from the run's
-        osac-logs-[<suite>-]full-install-<run id> artifact. Thin wrapper
-        over CIObserveRunEvidence.get_ci_observe_run_json, which also
-        documents the query params and the response shape."""
+        """The /api/ci-observe/run document: everything the job history
+        stores about one ci-observe capture's GitHub run -- the run summary,
+        its jobs, steps and timing. Thin wrapper over
+        CIObserveRunEvidence.get_ci_observe_run_json, which also documents
+        the query params and the response shape."""
         return self._run_evidence.get_ci_observe_run_json(params)
+
+    def get_ci_observe_failed_tests_json(self, params):
+        """The /api/ci-observe/failed-tests document: the failed tests of
+        one capture, from the JUnit file in its suite's artifact. Raises
+        EvidenceError when they cannot be read. Thin wrapper over
+        CIObserveRunEvidence.get_ci_observe_failed_tests_json."""
+        return self._run_evidence.get_ci_observe_failed_tests_json(params)
 
     # -- ci-observe runs (begin) --------------------------------------------
     #
@@ -5498,13 +5503,36 @@ class ExporterHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload.encode())
 
+        elif parsed.path == "/api/ci-observe/failed-tests":
+            # GET /api/ci-observe/failed-tests?capture_id=<id>: 200 with the
+            # JUnit file's failed tests, or 502 when they cannot be read. The
+            # reason is the status line's text, which is what Grafana shows
+            # on the panel, and the JSON body; the evidence module logged it.
+            params = parse_qs(parsed.query)
+            try:
+                data = self.exporter.get_ci_observe_failed_tests_json(params)
+            except EvidenceError as error:
+                payload = json.dumps({"error": str(error), "capture_id": (params.get("capture_id") or [""])[0]})
+                reason = re.sub(r"[^\x20-\x7e]", "?", str(error))[:400]
+                self.send_response(502, reason)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(payload.encode())
+                return
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
         elif parsed.path == "/api/ci-observe/run":
             params = parse_qs(parsed.query)
             # Always 200 with a document that says what is missing: a
             # malformed capture id or an unknown run is a data gap the
-            # dashboard must show, not an error it would hide. The native
-            # lookup inside is bounded and cached; it can add a few seconds
-            # on the first request for a run, never on repeat loads.
+            # dashboard must show, not an error it would hide. It reads the
+            # job history only; the failed tests have their own endpoint.
             data = self.exporter.get_ci_observe_run_json(params)
             payload = json.dumps(data, default=str)
             self.send_response(200)

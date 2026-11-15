@@ -131,7 +131,7 @@ One table of runs with repository, suite and result filters and a filter on ever
 | Section | Contents |
 |---|---|
 | Summary | Result, tests run, test time, where the run's time went (one bar per suite), time to result, wait for a runner. |
-| Failures | Failed tests, error messages, test time, the artifact. |
+| Failures | Failed tests, error messages, test time, the artifact: the JUnit file in the logs artifact of the capture's suite. **No failures.** means the file lists none; when it cannot be read, the panel shows the error. |
 | Jobs and steps | Every job and step with its duration. A job name opens its suite's Where the time goes. |
 | Test list | Every test with its setup, waiting, actions and teardown. |
 | Run info | Run, pull request, workflow, commit and test paths, as links. |
@@ -146,9 +146,10 @@ A run is keyed by its GitHub run id; a recording id adds the suite and rerun num
 
 - The run archive (suite runs and their job timelines), the test results, the span rollup and the pull request history are kept for 90 days (`CI_OBSERVE_KEEP_DAYS`).
 - The workflow exporter keeps its own job history for 30 days. GitHub keeps the JUnit artifact for 30 days, so a run's tests are read within that window.
+- A run's logs artifact (with its JUnit file) is in one place, by the run's trigger: on the run for pull-request and merge-queue runs, in the private repository `osac-ci-artifacts` for scheduled and manual runs (since 2026-11-13). Reading those needs a token that can see that repository.
 - The exporter fetches the job timeline (needed for the wait for a runner and for timeouts) of a run stored before timelines existed a few runs per poll, counted suite runs only, newest first.
 - The exporter polls the newest completed runs and the runs it saw active, and every 30 minutes lists every completed run created in the last 48 hours to store what the polling missed or kept with an outdated result. A run missed while the exporter was down for longer than that is recovered by a one-off backfill (`BACKFILL_DAYS`).
-- `ci_observe_audit.py` checks the pages against GitHub daily (`ci-observe-audit.timer`): every completed E2E run of the last 28 days is looked up in the job history, a sample of stored suite runs and of merged pull requests is compared field by field with GitHub's record, and the Overview's counts are recounted from the stored rows by the scope above. It imports nothing from the code it checks. Its result is on every page, under **About these numbers**.
+- `ci_observe_audit.py` checks the pages against GitHub daily (`ci-observe-audit.timer`): every completed E2E run of the last 28 days is looked up in the job history, a sample of stored suite runs and of merged pull requests is compared field by field with GitHub's record, and the Overview's counts are recounted from the stored rows by the scope above. For tests, it checks that the token can read `osac-ci-artifacts`, that every suite run that ran its tests has test results, and, for the newest runs that failed in their test step, the run page's failed tests and the test history against the run's own JUnit file. It imports nothing from the code it checks. Its result is on every page, under **About these numbers**.
 - Tempo keeps traces for 30 days; the span rollup reads a run once, 20 minutes after it finished.
 - Prometheus and Loki keep cluster data for 30 days.
 

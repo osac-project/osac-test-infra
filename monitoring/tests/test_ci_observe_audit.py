@@ -6,9 +6,12 @@ The audit must not import the code it checks; these tests may, to fill the
 stores the way production does."""
 
 import importlib.util
+import io
 import json
 import sqlite3
 import sys
+import urllib.error
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -213,19 +216,76 @@ def e2e_world():
     return world
 
 
-def e2e_github(world):
+def junit_zip(failed=(), passed=()):
+    """A logs artifact as the full-install jobs upload it: junit.xml and logs."""
+    cases = "".join(f'<testcase classname="tests.e2e" name="{name}" time="1.0">'
+                    f'<failure message="boom">trace</failure></testcase>' for name in failed)
+    cases += "".join(f'<testcase classname="tests.e2e" name="{name}" time="1.0"/>' for name in passed)
+    xml = f'<testsuites><testsuite name="pytest" tests="{len(failed) + len(passed)}">{cases}</testsuite></testsuites>'
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("junit.xml", xml)
+        archive.writestr("e2e/failures/gw0/01-test/log.txt", "a log")
+    return buffer.getvalue()
+
+
+def e2e_artifacts():
+    """The world's artifacts, where their jobs put them: the scheduled runs
+    (501, 504) publish to osac-ci-artifacts, the merge-queue run (503) keeps
+    one per suite on the run. CaaS failed in the merge queue; 502 failed at
+    the install and has none."""
+    return {
+        501: ("private", [("osac-logs-full-install-501", junit_zip(passed=("test_vm_create", "test_vm_delete")))]),
+        503: ("run", [("osac-logs-full-install-503", junit_zip(passed=("test_vm_create",))),
+                      ("osac-logs-caas-full-install-503", junit_zip(failed=("test_cluster_create",),
+                                                                    passed=("test_cluster_delete",)))]),
+        504: ("private", [("osac-logs-full-install-504", junit_zip(passed=("test_vm_create",)))]),
+    }
+
+
+SUITE_NAMES = ("osac-logs-full-install-{run_id}", "osac-logs-caas-full-install-{run_id}",
+               "osac-logs-bmaas-full-install-{run_id}")
+
+
+def artifact_entries(api_url, run_id, artifacts, place="run"):
+    repo = "osac-ci-artifacts" if place == "private" else "osac"
+    return [{"id": run_id * 10 + index, "name": name, "size_in_bytes": len(content), "expired": False,
+             "created_at": "2026-10-12T00:00:00Z", "workflow_run": {"id": 9000 + run_id},
+             "archive_download_url": f"{api_url}/repos/osac-project/{repo}/actions/artifacts/{run_id * 10 + index}/zip"}
+            for index, (name, content) in enumerate(artifacts)]
+
+
+def e2e_github(world, artifacts=None, private_status=200):
     runs = {run["id"]: (run, jobs) for run, jobs in world}
+    artifacts = artifacts or {}
     workflows = {}
     for run, _ in world:
         workflows[run["workflow_id"]] = {"id": run["workflow_id"], "name": run["name"], "path": run["path"]}
+    downloads, on_runs, private = {}, {}, {}
+    for run_id, (place, published) in artifacts.items():
+        entries = artifact_entries(audit.API, run_id, published, place)
+        for entry, (_, content) in zip(entries, published, strict=True):
+            downloads[entry["archive_download_url"]] = content
+            if place == "private":
+                private[entry["name"]] = entry
+            else:
+                on_runs.setdefault(run_id, []).append(entry)
 
     def fetch(url, body=None):
         parsed = urlparse(url)
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         parts = parsed.path.split("/")[1:]  # repos, org, repo, actions, ...
         repo, rest = parts[2], parts[4:]
+        if repo == "osac-ci-artifacts":
+            if private_status != 200:
+                raise urllib.error.HTTPError(url, private_status, "Not Found", {}, None)
+            found = [private[query["name"]]] if query.get("name") in private else []
+            return {"total_count": len(found), "artifacts": found}, ""
         if repo != "osac":
             return ({"workflows": []} if rest == ["workflows"] else {}), ""
+        if rest[0] == "runs" and rest[2:] == ["artifacts"]:
+            found = on_runs.get(int(rest[1]), [])
+            return {"total_count": len(found), "artifacts": found}, ""
         if rest == ["workflows"]:
             return {"total_count": len(workflows), "workflows": list(workflows.values())}, ""
         if rest[0] == "workflows":
@@ -242,31 +302,110 @@ def e2e_github(world):
             return run, ""
         raise AssertionError(url)
 
-    return audit.GitHub("t", fetch=fetch)
+    def download(url, limit):
+        return io.BytesIO(downloads[url])
+
+    return audit.GitHub("t", fetch=fetch, download=download)
+
+
+def serve_artifacts(fake, api_url, artifacts, world, private_visible=True):
+    """The same artifacts on the GitHub the exporter and the test history
+    read: a run's own listing for every run (empty when its artifacts are
+    elsewhere), and the private repository's listing by name, which answers
+    an empty listing for a name it does not hold, or 404 to a token that
+    cannot see it (an unrouted path is a 404)."""
+    from helpers import FakeResponse
+
+    for run, _ in world:
+        place, published = artifacts.get(run["id"], ("run", []))
+        entries = artifact_entries(api_url, run["id"], published, place)
+        on_run = entries if place == "run" else []
+        fake.add(f"/repos/osac-project/osac/actions/runs/{run['id']}/artifacts?per_page=100",
+                 FakeResponse(payload={"total_count": len(on_run), "artifacts": on_run}))
+        if private_visible:
+            for pattern in SUITE_NAMES:
+                name = pattern.format(run_id=run["id"])
+                held = [entry for entry in entries if entry["name"] == name and place == "private"]
+                fake.add(f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
+                         FakeResponse(payload={"total_count": len(held), "artifacts": held}))
+        for entry, (_, content) in zip(entries, published, strict=True):
+            fake.add(entry["archive_download_url"].removeprefix(api_url), FakeResponse(content=content))
+
+
+def fill_test_history(trends, tmp_path, monkeypatch):
+    """trends.db as the hourly pass fills it, at the tests' clock."""
+    monkeypatch.setattr(trends, "TOKEN", "t")
+    conn = trends.open_trends_db(str(tmp_path / "trends.db"))
+    try:
+        runs = trends.candidate_runs(trends.stored_rows(str(tmp_path / "workflow-exporter.db"), "2026-10-01"))
+        trends._roll_up(conn, runs, False, NOW)
+    finally:
+        conn.close()
+
+
+def register_captures(exporter, captures):
+    with exporter._db() as conn:
+        for capture_id, run_id in captures:
+            conn.execute("INSERT INTO captures (capture_id, run_id, run_attempt, suite, first_seen_at, last_seen_at)"
+                         " VALUES (?, ?, '1', ?, ?, ?)",
+                         (capture_id, str(run_id), capture_id.split("-")[0], audit.iso(NOW), audit.iso(NOW)))
 
 
 @pytest.fixture
-def stored_runs(exporter, wfe, tmp_path, monkeypatch):
-    """The exporter's job history after it read the world, as production stores it."""
+def artifact_github(wfe, monkeypatch):
+    """The GitHub the exporter and the test history read the world's
+    artifacts from. (This module's `github` fixture is the pull requests'.)"""
+    from helpers import FakeGitHub
+
+    fake = FakeGitHub(wfe.API_URL)
+    monkeypatch.setattr(wfe.requests, "get", fake.get)
+    monkeypatch.setattr(wfe.requests, "post", fake.post)
+    return fake
+
+
+@pytest.fixture
+def stored_runs(evidence, wfe, trends, artifact_github, tmp_path, monkeypatch):
+    """The stores after the real code read the world, as production fills
+    them: the exporter's job history and capture registry, and the test
+    history from the runs' artifacts."""
     world = e2e_world()
     jobs_of = {run["id"]: jobs for run, jobs in world}
-    monkeypatch.setattr(exporter, "_fetch_run_jobs", lambda repo, run_id, run_attempt=None: jobs_of[run_id])
+    monkeypatch.setattr(evidence, "_fetch_run_jobs", lambda repo, run_id, run_attempt=None: jobs_of[run_id])
     for run, _ in world:
-        assert exporter._process_completed_run("osac", run)
+        assert evidence._process_completed_run("osac", run)
+    serve_artifacts(artifact_github, wfe.API_URL, e2e_artifacts(), world)
+    fill_test_history(trends, tmp_path, monkeypatch)
+    register_captures(evidence, [("vmaas-main-501-a1", 501), ("vmaas-main-503-a1", 503), ("caas-main-503-a1", 503)])
     insights = wfe.CIObserveInsights(str(tmp_path / "workflow-exporter.db"), str(tmp_path / "trends.db"),
                                      clock=lambda: NOW)
+    STORED_EXPORTERS[str(tmp_path)] = evidence
     return world, tmp_path, insights
 
 
-def e2e_main(tmp_path, insights, world, *extra):
+# The exporter behind a stored_runs world, by its directory: its run pages.
+STORED_EXPORTERS = {}
+
+
+def e2e_main(tmp_path, insights, world, *extra, artifacts=None, private_status=200):
+    exporter = STORED_EXPORTERS.get(str(tmp_path))
+
     def api_get(url):
+        """The exporter's API as the audit reads it over HTTP: a failed
+        failed-tests read is a 502 whose status line is the reason."""
         parsed = urlparse(url)
+        if parsed.path == "/api/ci-observe/failed-tests" and exporter is not None:
+            evidence_module = sys.modules["ci_observe_run_evidence"]
+            try:
+                return exporter._run_evidence.get_ci_observe_failed_tests_json(parse_qs(parsed.query))
+            except evidence_module.EvidenceError as error:
+                raise urllib.error.HTTPError(url, 502, str(error), {}, None) from None
         assert parsed.path == "/api/ci-observe/health", url
         return insights.get_json("health", parse_qs(parsed.query))
 
+    world_github = e2e_github(world, e2e_artifacts() if artifacts is None else artifacts, private_status)
     return audit.main(["--part", "e2e", "--days", "14", "--jobs-db", str(tmp_path / "workflow-exporter.db"),
                        "--trends-db", str(tmp_path / "trends.db"), *extra],
-                      github=e2e_github(world), now=NOW, api_get=api_get)
+                      github=world_github, now=NOW, api_get=api_get)
 
 
 def test_the_e2e_audit_agrees_with_what_the_exporter_stored(stored_runs, capsys):
@@ -325,6 +464,150 @@ def test_the_e2e_summary_counts_the_suite_workflows(stored_runs, capsys):
     assert summary["recount_ok"] is True
 
 
+# -- E2E tests: the run pages' Failed tests and the test history -----------------------------------------------------
+
+
+def run_tests_audit(tmp_path, insights, world, capsys, **options):
+    status = e2e_main(tmp_path, insights, world, "--json", **options)
+    return status, json.loads(capsys.readouterr().out)["e2e"]["tests"]
+
+
+def test_the_tests_audit_agrees_with_correct_stores(stored_runs, capsys):
+    world, tmp_path, insights = stored_runs
+    status, tests = run_tests_audit(tmp_path, insights, world, capsys)
+
+    assert tests["private"]["readable"] is True
+    coverage = tests["coverage"]
+    # 501 (VMaaS) and the two suites of the merge-queue run 503 ran their
+    # tests; 502 failed at the install, 504 is not a suite run.
+    assert (coverage["runs"], coverage["with_results"], coverage["missing"]) == (3, 3, 0)
+    [audited] = tests["failed_runs"]
+    assert audited["capture_id"] == "caas-main-503-a1"
+    assert audited["page"] == audited["junit"] == audited["history"] == ["test_cluster_create"]
+    assert audited["junit_where"] == "run 503 of osac-project/osac", "a merge-queue run keeps it on the run"
+    assert (audited["page_error"], audited["problems"]) == ("", [])
+    assert status == 0
+
+
+def test_the_tests_audit_catches_a_page_that_says_no_failures(stored_runs, monkeypatch, capsys):
+    """The page as it was before 2026-11-15: an empty list for a run whose
+    test step failed, which Grafana shows as "No failures."."""
+    world, tmp_path, insights = stored_runs
+    evidence_class = sys.modules["ci_observe_run_evidence"].CIObserveRunEvidence
+    monkeypatch.setattr(evidence_class, "get_ci_observe_failed_tests_json", lambda self, params: {"failed_tests": []})
+    out = tmp_path / "ci-observe-audit.json"
+
+    assert e2e_main(tmp_path, insights, world, "--out", str(out), "--quiet") == 0
+    result = json.loads(out.read_text())
+    [audited] = result["e2e"]["tests"]["failed_runs"]
+    assert audited["problems"][0].startswith("the page lists no failed test for a run whose test step failed")
+    summary = result["summary"]
+    assert summary["tests"]["pages_claim_none"] == 1
+    assert summary["ok"] is False
+    phases = _load("ci_observe_phases", "ci_observe_phases.py")
+    _, notes = phases.audit_lines(summary, NOW, "e2e")
+    assert "1 of 1 runs that failed in their tests show no failed test on their run page" in " ".join(notes)
+
+
+def test_the_tests_audit_catches_a_wrong_test_history_and_missing_results(stored_runs, capsys):
+    world, tmp_path, insights = stored_runs
+    with sqlite3.connect(tmp_path / "trends.db") as conn:
+        conn.execute("UPDATE test_runs SET passed = 1 WHERE run_id = 503")
+        conn.execute("DELETE FROM test_runs WHERE run_id = 501")
+
+    status, tests = run_tests_audit(tmp_path, insights, world, capsys)
+
+    assert tests["coverage"]["missing"] == 1
+    assert tests["coverage"]["examples"][0].startswith("https://github.com/osac-project/osac/actions/runs/501 (vmaas)")
+    [audited] = tests["failed_runs"]
+    assert audited["problems"] == ["the test history has [], the JUnit file ['test_cluster_create']"]
+    assert status == 1
+
+
+def incident_world():
+    """e2e_world plus the incident: a scheduled production install (505)
+    whose test step failed, and whose artifact went to osac-ci-artifacts."""
+    world = e2e_world()
+    run = gh_run(505, "E2E VMaaS Production Install", ".github/workflows/e2e-vmaas-prod-install-caller.yml",
+                 "failure", "2026-10-12T03:00:00Z", 14)
+    world.append((run, [gh_job(505, "e2e-vmaas-prod-install / e2e", "failure", "2026-10-12T03:00:00Z", 40,
+                               failed_step="Run E2E tests (ci-observe capture)")]))
+    return world
+
+
+@pytest.fixture
+def private_refused(evidence, wfe, trends, artifact_github, tmp_path, monkeypatch):
+    """Production since 2026-11-13, when the token cannot see osac-ci-artifacts:
+    the merge-queue run's artifacts are on the run, and every request to the
+    private repository is a 404 (an unrouted path of the fake GitHub)."""
+    world = incident_world()
+    jobs_of = {run["id"]: jobs for run, jobs in world}
+    monkeypatch.setattr(evidence, "_fetch_run_jobs", lambda repo, run_id, run_attempt=None: jobs_of[run_id])
+    for run, _ in world:
+        assert evidence._process_completed_run("osac", run)
+    artifacts = {503: e2e_artifacts()[503]}
+    serve_artifacts(artifact_github, wfe.API_URL, artifacts, world, private_visible=False)
+    # The test history pass stops at the first private run, and stores nothing.
+    with pytest.raises(trends.GitHubRefused, match="osac-project/osac-ci-artifacts answered HTTP 404"):
+        fill_test_history(trends, tmp_path, monkeypatch)
+    register_captures(evidence, [("vmaas-main-501-a1", 501), ("caas-main-503-a1", 503), ("vmaas-main-505-a1", 505)])
+    insights = wfe.CIObserveInsights(str(tmp_path / "workflow-exporter.db"), str(tmp_path / "trends.db"),
+                                     clock=lambda: NOW)
+    STORED_EXPORTERS[str(tmp_path)] = evidence
+    return world, tmp_path, insights, artifacts
+
+
+def test_the_tests_audit_names_a_private_repository_the_token_cannot_read(private_refused):
+    world, tmp_path, insights, artifacts = private_refused
+    out = tmp_path / "ci-observe-audit.json"
+
+    assert e2e_main(tmp_path, insights, world, "--out", str(out), "--quiet", artifacts=artifacts,
+                    private_status=404) == 0
+
+    result = json.loads(out.read_text())
+    tests = result["e2e"]["tests"]
+    assert tests["private"]["readable"] is False
+    # No pass finished, so no run has test results.
+    assert tests["coverage"]["missing"] == 3
+    by_capture = {audit_row["capture_id"]: audit_row for audit_row in tests["failed_runs"]}
+    assert set(by_capture) == {"caas-main-503-a1", "vmaas-main-505-a1"}
+    # The merge-queue run's page works: its artifact is on the run.
+    assert by_capture["caas-main-503-a1"]["page"] == ["test_cluster_create"]
+    # The incident's page fails, and says why; the audit cannot read the
+    # artifact either, so nothing is compared.
+    incident = by_capture["vmaas-main-505-a1"]
+    assert incident["page_error"].startswith("HTTP 502: osac-project/osac-ci-artifacts answered HTTP 404")
+    assert "PRIVATE_GITHUB_TOKEN needs read access" in incident["page_error"]
+    assert incident["junit"] is None and incident["junit_where"] == "osac-project/osac-ci-artifacts"
+    assert incident["problems"] == [f"the page cannot list the failed tests ({incident['page_error']})"]
+    summary = result["summary"]["tests"]
+    assert (summary["private_readable"], summary["runs_missing"], summary["pages_error"]) == (False, 3, 1)
+    phases = _load("ci_observe_phases", "ci_observe_phases.py")
+    source, notes = phases.audit_lines(result["summary"], NOW, "e2e")
+    assert "test results stored for 0 of 3 suite runs that ran their tests" in source
+    text = " ".join(notes)
+    assert ("cannot read osac-project/osac-ci-artifacts, where scheduled and manual E2E runs publish their "
+            "JUnit files") in text
+    assert "1 of 2 runs that failed in their tests cannot show their failed tests on their run page: HTTP 502" in text
+    report = audit.report(result)
+    assert ("osac-project/osac-ci-artifacts, where scheduled and manual E2E runs publish their logs artifact: "
+            "NOT READABLE") in report
+
+
+def test_a_network_failure_in_the_tests_checks_is_a_finding_not_a_crash(stored_runs, monkeypatch, capsys):
+    world, tmp_path, insights = stored_runs
+    monkeypatch.setattr(audit.GitHub, "download", lambda self, url, limit: (_ for _ in ()).throw(
+        urllib.error.URLError("connection reset")))
+
+    status, tests = run_tests_audit(tmp_path, insights, world, capsys)
+
+    [audited] = tests["failed_runs"]
+    assert audited["junit"] is None
+    assert "download failed" in audited["junit_note"]
+    assert audited["problems"] == []
+    assert status == 0
+
+
 def test_a_gate_job_is_not_a_failed_test_step():
     assert audit.is_gate_job("e2e-caas-gate")
     assert audit.is_gate_job("vmaas / e2e-readiness")
@@ -360,7 +643,8 @@ def test_suite_workflows_are_the_counted_ones():
     assert not audit.counted_workflow("E2E review relay")
 
 
-def test_a_rerun_of_failed_jobs_keeps_each_suite_on_its_own_attempt(exporter, wfe, tmp_path, monkeypatch, capsys):
+def test_a_rerun_of_failed_jobs_keeps_each_suite_on_its_own_attempt(exporter, wfe, trends, artifact_github, tmp_path,
+                                                                    monkeypatch, capsys):
     """Attempt 2 re-runs the failed caas suite; GitHub's latest jobs keep vmaas's attempt-1 job (the API's
     filter=latest returns each job's most recent execution). vmaas ran once: it stays a first-try pass."""
     vmaas = gh_job(503, "vmaas / e2e-vmaas-full-install / e2e", "success", "2026-10-10T10:01:00Z", 50)
@@ -386,9 +670,14 @@ def test_a_rerun_of_failed_jobs_keeps_each_suite_on_its_own_attempt(exporter, wf
         ("E2E caas (merge queue)", "success", 2),
     }
     world = [(run2, [vmaas, caas1, caas2])]
+    # The re-run replaced the CaaS artifact; both suites' tests are stored.
+    artifacts = {503: ("run", [("osac-logs-full-install-503", junit_zip(passed=("test_vm_create",))),
+                               ("osac-logs-caas-full-install-503", junit_zip(passed=("test_cluster_create",)))])}
+    serve_artifacts(artifact_github, wfe.API_URL, artifacts, world)
+    fill_test_history(trends, tmp_path, monkeypatch)
     insights = wfe.CIObserveInsights(str(tmp_path / "workflow-exporter.db"), str(tmp_path / "trends.db"),
                                      clock=lambda: NOW)
-    status = e2e_main(tmp_path, insights, world, "--json")
+    status = e2e_main(tmp_path, insights, world, "--json", artifacts=artifacts)
     result = json.loads(capsys.readouterr().out)["e2e"]
     assert [a["problems"] for a in result["sample"]] == [[], [], []]
     assert status == 0

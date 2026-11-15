@@ -1,10 +1,16 @@
-"""The /api/ci-observe/run endpoint of workflow-exporter.py: capture-id
-parsing, run evidence from the SQLite job history, and the native JUnit
-lookup against the run's osac-logs-[<suite>-]full-install-<run id> artifact
-(missing, expired, too large, invalid, and the cached happy path). The
-last test is the backend half of the dashboard contract: it resolves the
-real endpoint response against the CI evidence row of the Capture
-dashboard."""
+"""Two endpoints of workflow-exporter.py for the E2E run page.
+
+/api/ci-observe/run: capture-id parsing and the run from the SQLite job
+history (no GitHub artifact).
+
+/api/ci-observe/failed-tests: the failed tests of one capture, from the
+JUnit file in its suite's artifact, read from the one place the run's
+trigger says (the run itself for pull-request and merge-queue runs,
+osac-ci-artifacts for scheduled and manual ones). Every way that read can
+fail is an error that says what failed, where and what to fix; none falls
+back to another place or another source.
+
+The last tests resolve the real responses against the run page's panels."""
 
 from __future__ import annotations
 
@@ -12,6 +18,7 @@ import io
 import json
 import sys
 import threading
+import urllib.error
 import urllib.request
 import zipfile
 from http.server import ThreadingHTTPServer
@@ -25,8 +32,7 @@ MONITORING = Path(__file__).resolve().parents[1]
 RUN_ID = 41310072671
 CAPTURE = f"vmaas-main-{RUN_ID}-a1"
 ARTIFACT_NAME = f"osac-logs-full-install-{RUN_ID}"
-# The run-scoped artifact listing (not the repo-wide ?name= filter, which
-# cannot express the suite-qualified name pattern).
+# A pull-request or merge-queue run's own artifact listing.
 LIST_PATH = f"/repos/osac-project/osac/actions/runs/{RUN_ID}/artifacts?per_page=100"
 DOWNLOAD_PATH = f"/repos/osac-project/osac/actions/artifacts/42/zip"
 RUN_PATH = f"/repos/osac-project/osac/actions/runs/{RUN_ID}"
@@ -166,8 +172,6 @@ def test_a_step_result_comes_from_the_job_timeline(evidence, github, wfe):
         timeline_json=json.dumps(timeline),
     )
     github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-    github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-    github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
     doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
 
@@ -185,8 +189,6 @@ def test_direct_run_evidence(evidence, github, wfe):
         failure_reason="test",
     )
     github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-    github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-    github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
     doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
 
@@ -215,6 +217,9 @@ def test_direct_run_evidence(evidence, github, wfe):
             "conclusion": "failure",
         }
     ]
+    # The run document reads no artifact: the failed tests have their own endpoint.
+    assert "native" not in doc
+    assert not [call for call in github.calls if "/artifacts" in call]
 
 
 def test_multiple_suite_rows_are_all_returned(evidence, github, wfe):
@@ -274,9 +279,7 @@ def test_rerun_attempt_falls_back_to_suite_rows(evidence, github):
 
     assert doc["run"]["conclusion"] == "failure"  # from the a1 suite row
     assert [j["workflow"] for j in doc["jobs"]] == ["E2E vmaas (pull requests)"]
-    notes = doc["coverage"]["notes"]
-    assert any("latest attempt" in note for note in notes)
-    assert any("overwrite the artifact" in note for note in notes)
+    assert any("latest attempt" in note for note in doc["coverage"]["notes"])
 
 
 def test_bare_run_id_shows_latest_attempt(evidence, github):
@@ -296,7 +299,6 @@ def test_run_not_found(evidence):
 
     assert doc["parsed"] == "exact"
     assert doc["run"] is None and doc["jobs"] == [] and doc["steps"] == []
-    assert doc["native"]["status"] == "not_requested"
     assert any("not in the exporter's job history" in n for n in doc["coverage"]["notes"])
 
 
@@ -304,7 +306,6 @@ def test_invalid_and_missing_capture_id(evidence):
     invalid = evidence.get_ci_observe_run_json({"capture_id": ["vmaas-main-abc-a1"]})
     assert invalid["parsed"] == "invalid"
     assert invalid["run_id"] is None
-    assert invalid["native"]["status"] == "not_requested"
 
     empty = evidence.get_ci_observe_run_json({})
     assert empty["parsed"] == "invalid"
@@ -312,578 +313,373 @@ def test_invalid_and_missing_capture_id(evidence):
     assert any("missing or empty" in n for n in empty["coverage"]["notes"])
 
 
+# -- /api/ci-observe/failed-tests ------------------------------------------------
+
 PRIVATE_LIST_PATH = f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={ARTIFACT_NAME}&per_page=100"
 PRIVATE_DOWNLOAD_PATH = "/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip"
 PRIVATE_ARTIFACT_URL = "https://github.com/osac-project/osac-ci-artifacts/actions/runs/9001/artifacts/77"
+TOKEN_FIX = "PRIVATE_GITHUB_TOKEN needs read access to the Actions artifacts of osac-project/osac-ci-artifacts"
+PASSING_JUNIT = (b'<testsuites><testsuite name="t"><testcase classname="t" name="test_ok" time="1"/>'
+                 b"</testsuite></testsuites>")
 
 
-def private_artifact_payload(api_url, *, name=ARTIFACT_NAME, expired=False):
+def private_artifact_payload(api_url, *, name=ARTIFACT_NAME, expired=False, size=1024, created="2026-10-10T12:00:00Z",
+                             art_id=77, published_by=9001):
     """One artifact as the private repository's name-filtered listing returns
-    it: it belongs to the private collect run (9001), not to the E2E run."""
-    entry = artifact_entry(api_url, art_id=77, name=name, expired=expired)
-    entry["archive_download_url"] = f"{api_url}{PRIVATE_DOWNLOAD_PATH}"
-    entry["workflow_run"] = {"id": 9001}
-    return FakeResponse(payload={"total_count": 1, "artifacts": [entry]})
+    it: it belongs to the private collect run, not to the E2E run."""
+    entry = artifact_entry(api_url, art_id=art_id, name=name, expired=expired, size=size)
+    entry["archive_download_url"] = f"{api_url}/repos/osac-project/osac-ci-artifacts/actions/artifacts/{art_id}/zip"
+    entry["workflow_run"] = {"id": published_by}
+    entry["created_at"] = created
+    return entry
 
 
-class TestNativePrivateRepository:
-    """A job that published to osac-ci-artifacts has no artifact on its run."""
+def publish_privately(github, api_url, junit=VALID_JUNIT, **entry):
+    """A scheduled run's artifact, where its job put it."""
+    github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+        private_artifact_payload(api_url, **entry)]}))
+    github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": junit})))
 
-    def test_reads_the_artifact_from_the_private_repository(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(PRIVATE_LIST_PATH, private_artifact_payload(wfe.API_URL))
-        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+def failed_tests(evidence, capture_id=CAPTURE):
+    return evidence.get_ci_observe_failed_tests_json({"capture_id": [capture_id]})
 
-        assert native["status"] == "available"
-        assert native["artifact_name"] == ARTIFACT_NAME
-        # The page is the private collect run's, not the E2E run's.
-        assert native["artifact_url"] == PRIVATE_ARTIFACT_URL
-        assert (native["tests"], native["failures"]) == (4, 1)
 
-    def test_suite_qualified_names_are_looked_up_too(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        name = f"osac-logs-bmaas-full-install-{RUN_ID}"
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(
-            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
-            private_artifact_payload(wfe.API_URL, name=name),
-        )
-        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+def refused(evidence, capture_id=CAPTURE):
+    """The error the endpoint answers, as text."""
+    evidence_module = sys.modules["ci_observe_run_evidence"]
+    with pytest.raises(evidence_module.EvidenceError) as raised:
+        failed_tests(evidence, capture_id)
+    return str(raised.value)
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
 
-        assert native["status"] == "available"
-        assert native["artifact_name"] == name
+def seed_merge_queue_run(exporter, **caas):
+    """A merge-queue run: its own row and one row per suite."""
+    exporter._upsert_job(make_job(
+        id=RUN_ID, workflow="E2E for the merge queue", display_name="osac / E2E for the merge queue",
+        category="automation", event="merge_group", conclusion="failure",
+        url=f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}"))
+    exporter._upsert_job(suite_row(101, workflow="E2E vmaas (merge queue)",
+                                   display_name="osac / E2E vmaas (merge queue)", event="merge_group",
+                                   conclusion="success"))
+    exporter._upsert_job(suite_row(102, workflow="E2E caas (merge queue)",
+                                   display_name="osac / E2E caas (merge queue)", event="merge_group",
+                                   conclusion="failure",
+                                   failed_step="caas / e2e-caas-full-install / e2e → Run E2E tests", **caas))
 
-    def test_the_run_artifact_wins_and_the_private_repository_is_not_asked(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        TestNative().route_available(github, wfe)
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+class TestFailedTests:
+    """The happy path: one artifact, at the one place the trigger says."""
 
-        assert native["artifact_url"] == ARTIFACT_URL
+    def test_a_scheduled_run_is_read_from_the_private_repository(self, evidence, github, wfe):
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
+        publish_privately(github, wfe.API_URL)
+
+        doc = failed_tests(evidence)
+
+        assert (doc["suite"], doc["trigger"]) == ("vmaas", "scheduled")
+        assert doc["artifact"] == {"name": ARTIFACT_NAME, "place": "osac-project/osac-ci-artifacts",
+                                   "url": PRIVATE_ARTIFACT_URL}
+        # Counts are counts of test cases, so they agree with the rows.
+        assert (doc["tests"], doc["failures"], doc["errors"], doc["skipped"]) == (4, 1, 1, 1)
+        assert [(t["name"], t["type"], t["message"]) for t in doc["failed_tests"]] == [
+            ("test_fail", "AssertionError", "assert 1 == 2"),
+            ("test_error", "TimeoutError", "timed out after 30s"),
+        ]
+        assert all(t["artifact_url"] == PRIVATE_ARTIFACT_URL for t in doc["failed_tests"])
+        assert github.count(LIST_PATH) == 0, "a scheduled run's own artifacts are not asked"
+
+    def test_a_manual_run_is_read_from_the_private_repository(self, evidence, github, wfe):
+        seed_direct_run(evidence, event="workflow_dispatch", failed_step="e2e → Run E2E tests")
+        publish_privately(github, wfe.API_URL)
+
+        assert failed_tests(evidence)["trigger"] == "manual"
+
+    def test_a_run_that_passed_lists_no_failure(self, evidence, github, wfe):
+        seed_direct_run(evidence, conclusion="success", status="success")
+        junit = PASSING_JUNIT
+        publish_privately(github, wfe.API_URL, junit=junit)
+
+        doc = failed_tests(evidence)
+
+        assert doc["failed_tests"] == [] and doc["tests"] == 1
+
+    def test_a_merge_queue_capture_reads_its_own_suites_artifact_on_the_run(self, evidence, github, wfe):
+        seed_merge_queue_run(evidence)
+        names = (ARTIFACT_NAME, f"osac-logs-caas-full-install-{RUN_ID}", f"osac-logs-bmaas-full-install-{RUN_ID}")
+        entries = [artifact_entry(wfe.API_URL, art_id=60 + index, name=name) for index, name in enumerate(names)]
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 3, "artifacts": entries}))
+        github.add("/repos/osac-project/osac/actions/artifacts/61/zip",
+                   FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        doc = failed_tests(evidence, f"caas-main-{RUN_ID}-a1")
+
+        assert (doc["trigger"], doc["artifact"]["name"]) == ("merge_queue", f"osac-logs-caas-full-install-{RUN_ID}")
+        assert doc["artifact"]["place"] == f"run {RUN_ID} of osac-project/osac"
+        downloads = [call for call in github.calls if call.endswith("/zip")]
+        assert downloads == ["/repos/osac-project/osac/actions/artifacts/61/zip"]
         assert not [call for call in github.calls if "osac-ci-artifacts" in call]
 
-    def test_an_expired_private_artifact_is_reported_as_expired(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(PRIVATE_LIST_PATH, private_artifact_payload(wfe.API_URL, expired=True))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "expired"
-        assert github.count(PRIVATE_DOWNLOAD_PATH) == 0
-
-    def test_a_token_without_access_says_so_instead_of_missing_quietly(self, evidence, github):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(PRIVATE_LIST_PATH, FakeResponse(403, text="forbidden"))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "missing"
-        assert any("osac-ci-artifacts failed with HTTP 403" in note for note in native["notes"])
-
-    def test_an_answer_that_is_not_json_is_a_failed_lookup_not_an_exception(self, evidence, github, wfe):
-        class BadJson(FakeResponse):
-            def json(self):
-                raise ValueError("not json")
-
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        # The plain name has an artifact; the suite-qualified lookups then
-        # answer garbage. What was found must not be thrown away.
-        github.add(PRIVATE_LIST_PATH, private_artifact_payload(wfe.API_URL))
-        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
-        for suite in ("bmaas", "caas"):
-            github.add(
-                f"/repos/osac-project/osac-ci-artifacts/actions/artifacts"
-                f"?name=osac-logs-{suite}-full-install-{RUN_ID}&per_page=100",
-                BadJson(),
-            )
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "available"
-
-    @pytest.mark.parametrize("artifacts", [1, [None], ["x"], [{"name": 3}]])
-    def test_a_malformed_artifacts_field_is_a_failed_lookup_not_an_exception(self, artifacts, evidence, github, wfe):
-        # Another suite's name already matched: it must survive the bad one.
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(PRIVATE_LIST_PATH, private_artifact_payload(wfe.API_URL))
-        github.add(
-            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name=osac-logs-bmaas-full-install-{RUN_ID}&per_page=100",
-            FakeResponse(payload={"total_count": 1, "artifacts": artifacts}),
-        )
-        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "available"
-        assert native["artifact_name"] == ARTIFACT_NAME
-
-    def test_a_malformed_artifacts_field_alone_is_reported_in_the_notes(self, evidence, github):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": 1}))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] != "available"
-        assert "unexpected response" in json.dumps(native)
-
-    def test_a_non_json_answer_alone_is_reported_in_the_notes(self, evidence, github):
-        class BadJson(FakeResponse):
-            def json(self):
-                raise ValueError("not json")
-
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(PRIVATE_LIST_PATH, BadJson())
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "missing"
-        assert any("invalid response" in note for note in native["notes"])
-
-    def test_a_similar_name_for_another_run_is_not_accepted(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(
-            PRIVATE_LIST_PATH,
-            private_artifact_payload(wfe.API_URL, name=f"osac-logs-full-install-{RUN_ID + 1}"),
-        )
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "missing"
-
-    def test_an_empty_repository_name_turns_the_lookup_off(self, evidence, github, monkeypatch):
-        monkeypatch.setattr(sys.modules["ci_observe_run_evidence"], "PRIVATE_ARTIFACT_REPO", "")
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "missing"
-        assert not [call for call in github.calls if "osac-ci-artifacts" in call]
-
-
-class TestNative:
-    def route_available(self, github, wfe, junit=VALID_JUNIT, extra_files=None):
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+    def test_a_pull_request_run_is_read_on_the_run(self, evidence, github, wfe):
+        evidence._upsert_job(run_row(workflow="E2E suite · vmaas · #42 · 0123abc", event="workflow_dispatch",
+                                     failed_step="e2e → Run E2E tests"))
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-        files = {"junit.xml": junit}
-        files.update(extra_files or {})
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes(files)))
+        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
-    def test_available(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        self.route_available(github, wfe)
+        doc = failed_tests(evidence, f"vmaas-pr42-{RUN_ID}-a1")
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+        assert (doc["trigger"], doc["artifact"]["url"]) == ("pr", ARTIFACT_URL)
+        assert len(doc["failed_tests"]) == 2
 
-        assert native["status"] == "available"
-        assert native["artifact_name"] == ARTIFACT_NAME
-        assert native["artifact_url"] == ARTIFACT_URL
-        assert (native["tests"], native["failures"], native["errors"], native["skipped"], native["time_s"]) == (
-            4,
-            1,
-            1,
-            1,
-            12.5,
-        )
-        assert [t["name"] for t in native["failed_tests"]] == ["test_fail", "test_error"]
-        failure = native["failed_tests"][0]
-        assert failure == {
-            "classname": "tests/e2e/vmaas",
-            "name": "test_fail",
-            "type": "AssertionError",
-            "message": "assert 1 == 2",
-            "time_s": 2.5,
-            "artifact_url": ARTIFACT_URL,
-        }
-        assert "Traceback" not in json.dumps(native)  # no raw stack traces
+    def test_the_newest_of_several_published_artifacts_is_read(self, evidence, github, wfe):
+        """A re-run publishes again under the same name: the newest is read."""
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
+        older = private_artifact_payload(wfe.API_URL, art_id=76, created="2026-10-10T11:00:00Z", published_by=9000)
+        newer = private_artifact_payload(wfe.API_URL)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 2, "artifacts": [newer, older]}))
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        assert failed_tests(evidence)["artifact"]["url"] == PRIVATE_ARTIFACT_URL
 
     def test_multiple_junit_files_are_summed(self, evidence, github, wfe):
-        second = (
-            b'<testsuites><testsuite name="xdist" tests="2" failures="1" time="3.5">'
-            b'<testcase classname="t" name="test_x" time="1.0">'
-            b'<failure type="AssertionError" message="boom"/></testcase>'
-            b'<testcase classname="t" name="test_y" time="2.5"/>'
-            b"</testsuite></testsuites>"
-        )
-        seed_direct_run(evidence)
-        self.route_available(github, wfe, extra_files={"junit-xdist1.xml": second, "logs.txt": b"ignored"})
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
+        second = (b'<testsuites><testsuite name="b"><testcase classname="b" name="test_b" time="2">'
+                  b'<failure message="no"/></testcase></testsuite></testsuites>')
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            private_artifact_payload(wfe.API_URL)]}))
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({
+            "junit.xml": VALID_JUNIT, "part/junit-b.xml": second})))
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+        doc = failed_tests(evidence)
 
-        assert native["status"] == "available"
-        assert (native["tests"], native["failures"], native["time_s"]) == (6, 2, 16.0)
+        assert (doc["tests"], doc["failures"]) == (5, 2)
+        assert [t["name"] for t in doc["failed_tests"]] == ["test_fail", "test_error", "test_b"]
 
-    def test_missing(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+    def test_every_failed_test_is_listed(self, evidence, github, wfe):
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
+        cases = "".join(f'<testcase classname="t" name="test_{n}" time="1"><failure message="m"/></testcase>'
+                        for n in range(150))
+        junit = f"<testsuites><testsuite name='t'>{cases}</testsuite></testsuites>".encode()
+        publish_privately(github, wfe.API_URL, junit=junit)
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "missing"
-        assert native["tests"] is None  # never a green zero
-        assert f"full-install-{RUN_ID}" in native["notes"][0]
-
-    @pytest.mark.parametrize("suite", ["bmaas", "caas"])
-    def test_suite_qualified_artifact_name(self, evidence, github, wfe, suite):
-        """BMaaS and CaaS insert the suite in the artifact name; those runs
-        are native evidence too, not a permanent "missing"."""
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL, name=f"osac-logs-{suite}-full-install-{RUN_ID}"))
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "available"
-        assert native["artifact_name"] == f"osac-logs-{suite}-full-install-{RUN_ID}"
-
-    def test_wrong_run_and_arbitrary_artifacts_are_missing(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(
-            LIST_PATH,
-            artifact_payload(
-                wfe.API_URL,
-                name=f"osac-logs-full-install-{RUN_ID + 1}",
-                extra_artifacts=[
-                    # Another run's suite-qualified name, and an artifact of
-                    # this run that is not a full-install log bundle.
-                    artifact_entry(wfe.API_URL, art_id=43, name=f"osac-logs-bmaas-full-install-{RUN_ID + 1}"),
-                    artifact_entry(wfe.API_URL, art_id=44, name=f"ci-observe-capture-{RUN_ID}"),
-                ],
-            ),
-        )
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "missing"
-        assert github.count(DOWNLOAD_PATH) == 0  # nothing was downloaded
-
-    def test_multiple_matches_prefer_the_plain_name(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(
-            LIST_PATH,
-            artifact_payload(
-                wfe.API_URL,
-                extra_artifacts=[artifact_entry(wfe.API_URL, art_id=43, name=f"osac-logs-bmaas-full-install-{RUN_ID}")],
-            ),
-        )
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "available"
-        assert native["artifact_name"] == ARTIFACT_NAME  # the plain name won
-        assert any("2 artifacts matched" in n for n in native["notes"])
-
-    def test_multiple_matches_break_ties_lexically(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(
-            LIST_PATH,
-            artifact_payload(
-                wfe.API_URL,
-                art_id=44,
-                name=f"osac-logs-caas-full-install-{RUN_ID}",
-                extra_artifacts=[artifact_entry(wfe.API_URL, art_id=43, name=f"osac-logs-bmaas-full-install-{RUN_ID}")],
-            ),
-        )
-        # Only the lexically-first match's download is routed (art_id 43);
-        # picking the caas one (44) would hit an unrouted URL and fail.
-        github.add(
-            f"/repos/osac-project/osac/actions/artifacts/43/zip",
-            FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})),
-        )
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "available"
-        assert native["artifact_name"] == f"osac-logs-bmaas-full-install-{RUN_ID}"
-
-    def test_live_artifact_preferred_over_expired(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(
-            LIST_PATH,
-            artifact_payload(
-                wfe.API_URL,
-                expired=True,
-                extra_artifacts=[artifact_entry(wfe.API_URL, art_id=43, name=f"osac-logs-bmaas-full-install-{RUN_ID}")],
-            ),
-        )
-        github.add(
-            f"/repos/osac-project/osac/actions/artifacts/43/zip",
-            FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})),
-        )
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "available"
-        assert native["artifact_name"] == f"osac-logs-bmaas-full-install-{RUN_ID}"
-
-    def test_suite_named_artifact_without_junit(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL, name=f"osac-logs-bmaas-full-install-{RUN_ID}"))
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"e2e.log": b"logs"})))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "invalid"
-        assert "no junit.xml" in native["notes"][0]
-
-    def test_expired(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL, expired=True))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "expired"
-        assert any("30-day retention" in n for n in native["notes"])
-        assert native["artifact_url"] == ARTIFACT_URL
-
-    def test_too_large_without_download(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL, size=wfe.WorkflowExporter.NATIVE_MAX_DOWNLOAD_BYTES + 1))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "too_large"
-        assert github.count(DOWNLOAD_PATH) == 0  # never downloaded at all
-
-    def test_download_bounded_mid_stream(self, evidence, github, wfe, monkeypatch):
-        monkeypatch.setattr(wfe.WorkflowExporter, "NATIVE_MAX_DOWNLOAD_BYTES", 1024)
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-        github.add(DOWNLOAD_PATH, FakeResponse(content=b"x" * 4096))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "too_large"
-
-    def test_invalid_zip(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-        github.add(DOWNLOAD_PATH, FakeResponse(content=b"this is not a zip archive"))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "invalid"
-        assert "not a valid zip" in native["notes"][0]
-
-    def test_zip_without_junit(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"e2e.log": b"logs"})))
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "invalid"
-        assert "no junit.xml" in native["notes"][0]
-
-    def test_invalid_junit_xml(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        self.route_available(github, wfe, junit=b"<testsuites><testsuite ")
-
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
-
-        assert native["status"] == "invalid"
-        assert "not valid XML" in native["notes"][0]
+        assert len(failed_tests(evidence)["failed_tests"]) == 150
 
     def test_message_bounded_and_control_chars_stripped(self, evidence, github, wfe):
         # \x01/\x02 are illegal anywhere in XML 1.0 (the pre-parse clean
         # removes them so the file still parses); \x7f is legal XML but is
         # still stripped from the displayed message.
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
         junit = (
             b'<testsuites><testsuite name="t" tests="1" failures="1" time="1.0">'
             b'<testcase classname="t" name="test_long" time="1.0">'
             b'<failure type="AssertionError" message="boom\x01\x02\x7f' + b"x" * 5000 + b'"/>'
             b"</testcase></testsuite></testsuites>"
         )
-        seed_direct_run(evidence)
-        self.route_available(github, wfe, junit=junit)
+        publish_privately(github, wfe.API_URL, junit=junit)
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+        doc = failed_tests(evidence)
 
-        assert native["status"] == "available"  # control chars did not kill the parse
-        message = native["failed_tests"][0]["message"]
+        message = doc["failed_tests"][0]["message"]
         assert len(message) == wfe.WorkflowExporter.NATIVE_MAX_MESSAGE_CHARS
         for char in ("\x01", "\x02", "\x7f"):
             assert char not in message
-        assert any("truncated" in n for n in native["notes"])
+        assert any("truncated" in note for note in doc["notes"])
 
-    def test_failed_tests_capped(self, evidence, github, wfe):
-        cases = "".join(
-            f'<testcase classname="t" name="test_{i}" time="0.1">'
-            f'<failure type="AssertionError" message="boom"/></testcase>'
-            for i in range(150)
-        )
-        junit = (
-            f'<testsuites><testsuite name="t" tests="150" failures="150" time="15.0">{cases}</testsuite></testsuites>'
-        ).encode()
-        seed_direct_run(evidence)
-        self.route_available(github, wfe, junit=junit)
+    def test_non_finite_numbers_are_not_numbers(self, evidence, github, wfe):
+        """A crafted tests="inf" or time="1e400" must not reach the JSON."""
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
+        junit = (b'<testsuites><testsuite name="t" tests="inf" failures="nan" time="inf">'
+                 b'<testcase classname="t" name="test_x" time="1e400"><failure type="AssertionError" message="boom"/>'
+                 b"</testcase></testsuite></testsuites>")
+        publish_privately(github, wfe.API_URL, junit=junit)
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+        doc = failed_tests(evidence)
 
-        assert len(native["failed_tests"]) == wfe.WorkflowExporter.NATIVE_MAX_FAILED_TESTS
-        assert any("only the first" in n for n in native["notes"])
+        assert (doc["tests"], doc["failures"]) == (1, 1), "counted from the test cases, not the attributes"
+        assert doc["failed_tests"][0]["time_s"] is None
+        json.dumps(doc, allow_nan=False)
 
-    def test_non_finite_time_attribute(self, evidence, github, wfe):
-        """inf times get the missing-value sentinel (None / 0), never a bare
-        Infinity in the JSON."""
-        junit = (
-            b'<testsuites><testsuite name="t" tests="1" failures="1" time="inf">'
-            b'<testcase classname="t" name="test_x" time="1e400">'
-            b'<failure type="AssertionError" message="boom"/></testcase>'
-            b"</testsuite></testsuites>"
-        )
-        seed_direct_run(evidence)
-        self.route_available(github, wfe, junit=junit)
 
-        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+class TestFailedTestsErrors:
+    """Everything else is an error that says what failed, where, and how to fix it."""
 
-        assert native["status"] == "available"
-        assert native["time_s"] == 0  # the non-finite suite time contributed nothing
-        assert native["failed_tests"][0]["time_s"] is None
-        assert "Infinity" not in json.dumps(native) and "NaN" not in json.dumps(native)
+    @pytest.mark.parametrize("capture_id", [
+        f"run-{RUN_ID}-attempt-1", str(RUN_ID), f"netris-main-{RUN_ID}-a1", "garbage", "",
+    ])
+    def test_a_capture_id_that_names_no_suite(self, evidence, capture_id):
+        assert "is not <vmaas|caas|bmaas>-<prN|main>-<run id>-a<attempt>" in refused(evidence, capture_id)
 
-    @pytest.mark.parametrize("count", ["inf", "1e400", "nan"])
-    def test_non_finite_count_attribute(self, evidence, github, wfe, count):
-        """A crafted tests="inf" must not raise out of the endpoint
-        (int(float("inf")) is an OverflowError); the count falls back to
-        counting the <testcase> children instead."""
-        junit = (
-            f'<testsuites><testsuite name="t" tests="{count}" failures="1" time="1.0">'
-            f'<testcase classname="t" name="test_x" time="1.0">'
-            f'<failure type="AssertionError" message="boom"/></testcase>'
-            f"</testsuite></testsuites>"
-        ).encode()
-        seed_direct_run(evidence)
-        self.route_available(github, wfe, junit=junit)
+    def test_no_token(self, exporter, github):
+        seed_direct_run(exporter)
 
-        doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-
-        assert doc["native"]["status"] == "available"
-        assert doc["native"]["tests"] == 1  # fell back to the testcase count
-        assert doc["native"]["failures"] == 1
-
-    def test_no_token_skips_lookup(self, exporter, github):
-        seed_direct_run(exporter)  # exporter fixture has no token
-
-        doc = exporter.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-
-        assert doc["run"]["workflow"] == "E2E VMaaS Full Install"  # job data still served
-        assert doc["native"]["status"] == "not_requested"
-        assert any("no GitHub token" in n for n in doc["native"]["notes"])
+        assert "no GitHub token is configured (PRIVATE_GITHUB_TOKEN)" in refused(exporter)
         assert github.calls == []
 
-    def test_lookup_failure_is_reported_not_raised(self, evidence, github, wfe):
-        import requests
+    def test_a_run_not_in_the_job_history(self, evidence, github):
+        assert f"run {RUN_ID} is not in the exporter's job history" in refused(evidence)
+        assert github.calls == []
 
+    @pytest.mark.parametrize("status", [401, 403, 404])
+    def test_a_private_repository_that_refuses_the_token(self, evidence, github, status):
+        """The incident of 2026-11-14: a scheduled run's artifact is in
+        osac-ci-artifacts, and the token cannot read it."""
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
+        github.add(PRIVATE_LIST_PATH, FakeResponse(status, text="Not Found"))
+
+        message = refused(evidence)
+
+        assert f"osac-project/osac-ci-artifacts answered HTTP {status} to the artifact listing" in message
+        assert TOKEN_FIX in message
+        assert github.count(LIST_PATH) == 0, "no second place is tried"
+
+    def test_github_failing_on_the_run(self, evidence, github):
+        seed_merge_queue_run(evidence)
+        github.add(LIST_PATH, FakeResponse(502, text="bad gateway"))
+
+        assert refused(evidence, f"caas-main-{RUN_ID}-a1") == (
+            f"run {RUN_ID} of osac-project/osac answered HTTP 502 to the artifact listing")
+
+    def test_a_network_error(self, evidence, github, wfe):
         seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, requests.exceptions.ConnectionError())
+        github.add(PRIVATE_LIST_PATH, wfe.requests.exceptions.ConnectionError("connection reset"))
 
-        doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
+        assert "listing the artifacts of osac-project/osac-ci-artifacts failed: connection reset" in refused(evidence)
 
-        assert doc["run"]["repo"] == "osac"  # the response did not fail
-        assert doc["native"]["status"] == "not_requested"
-        assert any("network error" in n for n in doc["native"]["notes"])
-
-
-class TestCacheAndSecrets:
-    def test_available_result_is_cached(self, evidence, github, wfe):
+    @pytest.mark.parametrize("payload", [None, {"artifacts": 1}, {"artifacts": [None]}, {"no": "artifacts"}])
+    def test_an_answer_that_is_not_a_listing(self, evidence, github, payload):
         seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload=payload))
 
-        first = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-        second = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
+        assert "answered something that is not an artifact listing" in refused(evidence)
 
-        assert first["native"] == second["native"]
-        assert github.count(LIST_PATH) == 1
-        assert github.count(DOWNLOAD_PATH) == 1
-
-    def test_failed_lookup_is_cached_briefly(self, evidence, github, wfe):
+    def test_no_artifact_where_the_trigger_says(self, evidence, github):
         seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
 
-        evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-        evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-        assert github.count(LIST_PATH) == 1  # brief cache absorbs the repeat
+        assert refused(evidence) == (
+            f"no {ARTIFACT_NAME} artifact in osac-project/osac-ci-artifacts, where scheduled runs keep it")
 
-        # ... and expires, so a genuinely new state is picked up.
-        clock = {"now": 1000.0}
-        real_monotonic = wfe.time.monotonic
-        wfe.time.monotonic = lambda: clock["now"]
-        try:
-            clock["now"] = real_monotonic() + wfe.WorkflowExporter.NATIVE_FAILURE_CACHE_TTL_SECONDS + 1
-            evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-        finally:
-            wfe.time.monotonic = real_monotonic
-        assert github.count(LIST_PATH) == 2
+    def test_another_suites_or_runs_artifact_is_not_this_captures(self, evidence, github, wfe):
+        seed_merge_queue_run(evidence)
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 2, "artifacts": [
+            artifact_entry(wfe.API_URL, name=ARTIFACT_NAME),
+            artifact_entry(wfe.API_URL, art_id=43, name=f"osac-logs-caas-full-install-{RUN_ID + 1}")]}))
 
-    def test_head_sha_fetch_is_cached(self, evidence, github, wfe):
+        assert refused(evidence, f"caas-main-{RUN_ID}-a1") == (
+            f"no osac-logs-caas-full-install-{RUN_ID} artifact in run {RUN_ID} of osac-project/osac, "
+            "where merge_queue runs keep it")
+        assert not [call for call in github.calls if call.endswith("/zip")]
+
+    def test_a_trigger_with_no_artifact_place(self, evidence, github):
+        seed_direct_run(evidence, event="push")
+
+        assert "only pull-request and merge-queue runs" in refused(evidence)
+        assert not [call for call in github.calls if "/artifacts" in call]
+
+    def test_expired(self, evidence, github, wfe):
         seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            private_artifact_payload(wfe.API_URL, expired=True)]}))
 
-        evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-        evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-        assert github.count(RUN_PATH) == 1
+        assert refused(evidence) == (
+            f"{ARTIFACT_NAME} in osac-project/osac-ci-artifacts expired on 2026-10-17T10:00:00Z "
+            "(GitHub keeps artifacts 30 days)")
+        assert github.count(PRIVATE_DOWNLOAD_PATH) == 0
 
-    def test_stored_head_sha_needs_no_github_call(self, evidence, github):
-        """The run payload stored the SHA on the job row, so the endpoint
-        serves it without the live metadata fetch. Nothing is routed for
-        RUN_PATH here: a fetch would 404 and blank the field."""
-        seed_direct_run(evidence, head_sha="c" * 40)
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+    def test_too_large_without_download(self, evidence, github, wfe):
+        seed_direct_run(evidence)
+        size = wfe.WorkflowExporter.NATIVE_MAX_DOWNLOAD_BYTES + 1
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            private_artifact_payload(wfe.API_URL, size=size)]}))
 
-        doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
+        assert "over the" in refused(evidence) and "download bound" in refused(evidence)
+        assert github.count(PRIVATE_DOWNLOAD_PATH) == 0
 
-        assert doc["run"]["head_sha"] == "c" * 40
-        assert github.count(RUN_PATH) == 0
+    def test_download_bounded_mid_stream(self, evidence, github, wfe, monkeypatch):
+        seed_direct_run(evidence)
+        monkeypatch.setattr(wfe.WorkflowExporter, "NATIVE_MAX_DOWNLOAD_BYTES", 10)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            private_artifact_payload(wfe.API_URL, size=1)]}))
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=b"x" * 64))
+
+        assert refused(evidence).endswith("stopped: it is over the download bound")
+
+    def test_a_failed_download(self, evidence, github, wfe):
+        seed_direct_run(evidence)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            private_artifact_payload(wfe.API_URL)]}))
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(500, text="boom"))
+
+        assert refused(evidence) == (f"downloading {ARTIFACT_NAME} from osac-project/osac-ci-artifacts failed: "
+                                     "artifact download failed with HTTP 500")
+
+    @pytest.mark.parametrize(("content", "words"), [
+        (b"not a zip", "artifact is not a valid zip archive"),
+        (zip_bytes({"e2e.log": b"logs"}), "artifact has no junit.xml"),
+        (zip_bytes({"junit.xml": b"<testsuites><testsuite"}), "junit.xml is not valid XML"),
+        (zip_bytes({"junit.xml": b"<nothing/>"}), "junit.xml has no testsuite element"),
+    ])
+    def test_an_artifact_that_does_not_hold_a_readable_junit_file(self, evidence, github, wfe, content, words):
+        seed_direct_run(evidence)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            private_artifact_payload(wfe.API_URL)]}))
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=content))
+
+        assert refused(evidence) == f"{ARTIFACT_NAME} from osac-project/osac-ci-artifacts: {words}"
+
+    def test_a_failed_test_step_with_no_failed_test_in_the_junit_file(self, evidence, github, wfe):
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests (ci-observe capture)")
+        junit = PASSING_JUNIT
+        publish_privately(github, wfe.API_URL, junit=junit)
+
+        message = refused(evidence)
+
+        assert message.startswith("the test step failed (Run E2E tests (ci-observe capture)), but the junit.xml of ")
+        assert "The job log has the cause" in message
+
+    def test_an_earlier_attempt_cannot_be_told_apart(self, evidence, github):
+        seed_direct_run(evidence, run_attempt=2)
+
+        assert refused(evidence).startswith("the capture is attempt 1, and the job history holds attempt 2")
+        assert github.calls == []
+
+
+class TestFailedTestsCacheLogAndSecrets:
+    def test_a_result_is_cached(self, evidence, github, wfe):
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
+        publish_privately(github, wfe.API_URL)
+
+        first = failed_tests(evidence)
+        second = failed_tests(evidence)
+
+        assert first == second
+        assert github.count(PRIVATE_LIST_PATH) == 1
+        assert github.count(PRIVATE_DOWNLOAD_PATH) == 1
+
+    def test_an_error_is_logged_once_and_cached_briefly(self, evidence, github, wfe, caplog, monkeypatch):
+        seed_direct_run(evidence)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(404, text="Not Found"))
+
+        first = refused(evidence)
+        second = refused(evidence)
+
+        assert first == second
+        assert github.count(PRIVATE_LIST_PATH) == 1
+        errors = [record for record in caplog.records if record.levelname == "ERROR"]
+        assert len(errors) == 1
+        assert f"failed tests of {CAPTURE} cannot be read" in errors[0].getMessage()
+        assert TOKEN_FIX in errors[0].getMessage()
+        # Once the brief cache ends, GitHub is asked again.
+        monkeypatch.setattr(sys.modules["ci_observe_run_evidence"].time, "monotonic",
+                            lambda: 10 ** 9)
+        refused(evidence)
+        assert github.count(PRIVATE_LIST_PATH) == 2
 
     def test_no_token_leakage(self, evidence, github, wfe):
-        seed_direct_run(evidence)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests")
+        publish_privately(github, wfe.API_URL)
 
-        body = json.dumps(evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]}))
+        body = json.dumps(failed_tests(evidence))
 
         assert TOKEN not in body
         assert "Authorization" not in body
@@ -905,11 +701,9 @@ class TestHTTP:
         with urllib.request.urlopen(url, timeout=5) as resp:
             return resp.status, resp.headers, resp.read()
 
-    def test_endpoint_json_shape_and_cors(self, base_url, github, wfe):
-        seed_direct_run(github and wfe.ExporterHandler.exporter)
+    def test_the_run_endpoint_json_shape_and_cors(self, base_url, github, wfe):
+        seed_direct_run(wfe.ExporterHandler.exporter)
         github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
         status, headers, body = self.get(f"{base_url}/api/ci-observe/run?capture_id={CAPTURE}")
 
@@ -919,45 +713,47 @@ class TestHTTP:
         doc = json.loads(body)
         assert doc["parsed"] == "exact"
         assert doc["run"]["head_sha"] == "a" * 40
-        assert doc["native"]["status"] == "available"
 
-    def test_endpoint_survives_non_finite_junit_counts(self, base_url, github, wfe):
-        """A crafted tests="inf" in the artifact must not drop the HTTP
-        connection: the response is still 200 with bounded, valid JSON."""
-        exporter = wfe.ExporterHandler.exporter
-        seed_direct_run(exporter)
-        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-        junit = (
-            b'<testsuites><testsuite name="t" tests="inf" failures="nan" time="inf">'
-            b'<testcase classname="t" name="test_x" time="1e400">'
-            b'<failure type="AssertionError" message="boom"/></testcase>'
-            b"</testsuite></testsuites>"
-        )
-        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": junit})))
-
-        status, headers, body = self.get(f"{base_url}/api/ci-observe/run?capture_id={CAPTURE}")
-
-        assert status == 200
-        assert headers.get("Content-Type") == "application/json"
-        doc = json.loads(body)  # would raise on a bare Infinity/NaN
-        assert doc["native"]["status"] == "available"
-        assert doc["native"]["tests"] == 1  # testcase-count fallback, not a dropped reply
-        assert doc["native"]["time_s"] == 0
-
-    def test_endpoint_empty_capture_id(self, base_url):
+    def test_the_run_endpoint_with_an_empty_capture_id(self, base_url):
         status, headers, body = self.get(f"{base_url}/api/ci-observe/run")
         assert status == 200
         assert headers.get("Content-Type") == "application/json"
         assert json.loads(body)["parsed"] == "invalid"
 
+    def test_the_failed_tests_endpoint_answers_the_junit_file(self, base_url, github, wfe):
+        seed_direct_run(wfe.ExporterHandler.exporter, failed_step="e2e → Run E2E tests")
+        publish_privately(github, wfe.API_URL)
 
-# The failed-test table on the E2E run page reads /api/ci-observe/run. This
-# is the other half of that contract: the real endpoint's response must
-# resolve every root_selector/columns pair the table queries.
+        status, headers, body = self.get(f"{base_url}/api/ci-observe/failed-tests?capture_id={CAPTURE}")
+
+        assert status == 200
+        assert headers.get("Content-Type") == "application/json"
+        assert headers.get("Access-Control-Allow-Origin") == "*"
+        assert [t["name"] for t in json.loads(body)["failed_tests"]] == ["test_fail", "test_error"]
+
+    def test_the_failed_tests_endpoint_fails_with_the_reason(self, base_url, github, wfe):
+        """Grafana shows a panel's HTTP error by its status line, so the
+        reason is there, and in the body."""
+        seed_direct_run(wfe.ExporterHandler.exporter)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(404, text="Not Found"))
+
+        with pytest.raises(urllib.error.HTTPError) as raised:
+            self.get(f"{base_url}/api/ci-observe/failed-tests?capture_id={CAPTURE}")
+
+        error = raised.value
+        assert error.code == 502
+        assert "osac-project/osac-ci-artifacts answered HTTP 404 to the artifact listing" in error.reason
+        assert TOKEN_FIX in error.reason
+        body = json.loads(error.read())
+        assert body["capture_id"] == CAPTURE
+        assert TOKEN_FIX in body["error"]
+
+
+# The run page reads both endpoints. The real responses must resolve every
+# root_selector and column its panels query, so the endpoints and the page
+# cannot drift apart.
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
-CAPTURE_DASHBOARD = DASHBOARDS_DIR / "ci-observe-runs.json"
-RUN_ENDPOINT = "/api/ci-observe/run"
+RUN_PAGE = DASHBOARDS_DIR / "ci-observe-runs.json"
 
 
 def _iter_panels(panels):
@@ -966,18 +762,8 @@ def _iter_panels(panels):
         yield from _iter_panels(panel.get("panels", []))
 
 
-def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wfe):
-    """The real /api/ci-observe/run response must resolve every
-    root_selector and column the failed-test table queries, so the endpoint
-    and the dashboard cannot drift apart."""
-    dashboard = json.loads(CAPTURE_DASHBOARD.read_text())
-    panels = [
-        panel
-        for panel in _iter_panels(dashboard["panels"])
-        if panel["type"] not in ("row", "text")
-        and any(RUN_ENDPOINT in target.get("url", "") for target in panel.get("targets", []))
-    ]
-    assert panels, "no panel reads the run endpoint"
+def test_query_shape_resolves_against_the_endpoint_responses(evidence, github, wfe):
+    dashboard = json.loads(RUN_PAGE.read_text())
     seed_direct_run(
         evidence,
         steps=[{"name": "Run E2E tests", "duration_s": 500}],
@@ -985,19 +771,21 @@ def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wf
         failure_reason="test",
     )
     github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
-    github.add(LIST_PATH, artifact_payload(wfe.API_URL))
-    github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
-
-    doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-    assert doc["native"]["status"] == "available"
-    assert doc["native"]["failed_tests"]
-
-    for panel in panels:
-        for target in panel["targets"]:
-            node = doc
-            # Object roots use a JSONPath so Infinity keeps them as one row.
+    publish_privately(github, wfe.API_URL)
+    documents = {
+        "/api/ci-observe/run": evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]}),
+        "/api/ci-observe/failed-tests": failed_tests(evidence),
+    }
+    checked = set()
+    for panel in _iter_panels(dashboard["panels"]):
+        for target in panel.get("targets", []):
+            path = next((p for p in documents if f"9103{p}?" in target.get("url", "")), None)
+            if path is None:
+                continue
+            node = documents[path]
             selector = target["root_selector"]
             if selector.startswith("$."):
+                # Object roots use a JSONPath so Infinity keeps them as one row.
                 selector = selector[2:]
             for part in selector.split("."):
                 node = node[part]  # KeyError means dashboard/endpoint drift
@@ -1012,6 +800,8 @@ def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wf
                 assert column["selector"] in rows[0], (
                     f"{panel['title']}: column {column['selector']} not in the response"
                 )
+            checked.add(path)
+    assert checked == set(documents), "every endpoint has a panel that reads it"
 
 
 def test_deployment_ships_the_run_evidence_module():

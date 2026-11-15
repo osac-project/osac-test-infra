@@ -103,7 +103,7 @@ starts from that deploy. Every panel and the daily digest filter on
 | `org-runner-exporter` | central only | 127.0.0.1:9102 | GitHub Actions runner online/offline status (org-wide, via GitHub API) |
 | `workflow-exporter` | central only | 127.0.0.1:9103 | Workflow queue depth, run history/duration, failed-step counts (via GitHub API); SQLite-backed, 30-day retention. Also serves the JSON API the ci-observe dashboards read, including `/api/ci-observe/runs`, which joins the run history to Tempo's recording ids. The container runs with `Network=host` so it can reach the host's Tempo on 127.0.0.1:3210 (`CI_OBSERVE_TEMPO_URL` overrides it); `BIND_ADDRESS=127.0.0.1` keeps its own API off the network interfaces. |
 | `service-health-textfile.timer` | every machine | n/a | Writes `osac_service_active` textfile-collector metrics every 30s |
-| `ci-observe-audit.timer` | central only | n/a | Daily at 03:35 UTC: `ci_observe_audit.py` checks the ci-observe stores and API against GitHub (every completed E2E run of 28 days listed, a sample of runs and pull requests compared field by field, the Overview recounted) and writes `ci-observe-audit.json`, which every ci-observe page shows under **About these numbers** |
+| `ci-observe-audit.timer` | central only | n/a | Daily at 03:35 UTC: `ci_observe_audit.py` checks the ci-observe stores and API against GitHub (every completed E2E run of 28 days listed, a sample of runs and pull requests compared field by field, the Overview recounted, the test results' coverage, and the newest failed runs' failed tests on the run page and in the test history against their own JUnit files) and writes `ci-observe-audit.json`, which every ci-observe page shows under **About these numbers** |
 | `monitoring-tunnel@<host>--<port>.service` | central only, one per agent | n/a | Persistent SSH tunnel forwarding an agent's `node_exporter:9100` and `haproxy_exporter:9104` to local ports `<port>`/`<port>+1` on the central machine |
 | `ci-observe-tempo210` | central only | 127.0.0.1:3210 (API), 14418 (OTLP) | Tempo 2.10 traces backend for ci-observe, separate from the LGTM bundle (Tempo 3.1.1's TraceQL search bug grafana/tempo#8054 drops ~1/3 of matching spans). The LGTM bundle's Tempo stays up on 3200 as the read-only archive datasource `ci-observe-traces-archive`. See [The ci-observe live OTLP ingest](#the-ci-observe-live-otlp-ingest-caddy-vhost--haproxy-route). |
 | `otelcol-router.service` | central only (host service, root) | 127.0.0.1:14318 (OTLP), 127.0.0.1:18888 (self-metrics) | Splits the runner fleet's OTLP pushes by signal: traces → `ci-observe-tempo210` on 14418, logs + metrics → the ci-observe LGTM bundle's OTLP receiver on 4318. A host process on purpose (rootless podman/pasta cross-container networking silently ate OTLP in earlier container-based router attempts); deployed as root by `scripts/deploy-otelcol-router.sh`, not by `monitoring-setup.sh`. Scraped by central Prometheus for exporter errors and accepted/sent counters. |
@@ -153,6 +153,13 @@ them — it doesn't block on them):
    request's code-owner teams, so the token must be able to read the
    organization's teams: `admin:org` or `read:org` on a classic token, the
    organization permission **Members: Read-only** on a fine-grained one.
+   Scheduled and manual E2E runs publish their logs artifact (with the
+   JUnit file) to the private repository `osac-project/osac-ci-artifacts`,
+   so the run pages' failed tests and the test history need a token that
+   can read it: the `repo` scope on a classic token, that repository with
+   **Actions: Read-only** on a fine-grained one. Without it the Failed
+   tests panel shows the error, the test history pass exits 1, and the
+   daily check (`ci-observe-audit.timer`) says so on every E2E page.
 2. **Grafana**: place a real TLS cert/key at
    `~/.monitoring-server/certs/grafana.{crt,key}` (Grafana won't start
    without both), and edit `~/.monitoring-server/.env.grafana` with a

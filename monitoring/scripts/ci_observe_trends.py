@@ -15,9 +15,17 @@ the only way to keep it, and trends.db keeps it for CI_OBSERVE_KEEP_DAYS
 
 The pass is incremental and runs every hour. A run whose JUnit was already
 read (`run_fetches`) is not downloaded again: its stored rows are reused
-when its day is rebuilt. Only finished runs that were never read, runs read
-by an older parser, and runs whose artifact could not be fetched are read.
-Rebuilding a day replaces its rows, so rerunning never doubles a day.
+when its day is rebuilt. Only finished runs that were never read and runs
+read by an older parser are read. Rebuilding a day replaces its rows, so
+rerunning never doubles a day.
+
+A run's artifact is read from the one place its trigger says (see
+ci_observe_run_evidence.artifact_place): its own run for a pull-request or
+merge-queue run, osac-ci-artifacts for a scheduled or manual one. A run
+with no artifact there, an expired one or one without junit.xml is stored
+with that reason. GitHub refusing or failing to answer (an HTTP error, a
+network error) is not a fact about one run: the pass stops there, logs the
+reason, stores nothing, and exits 1; the next pass reads those runs again.
 
     # On the central machine, next to the exporter's data directory:
     set -a; . ~/.monitoring-server/.env; set +a
@@ -46,9 +54,9 @@ one window of days, the tests both revisions ran and how they differ.
 
 Reuse: the bounded artifact download and the zip/JUnit extraction come
 from ci_observe_run_evidence.py, imported directly (that module starts no
-server). Only the per-testcase walk below is new: the run-evidence parser
-aggregates counts per testsuite and caps failed tests, which is right for
-one run's page and wrong for a per-test time series.
+server), and so do the artifact place and names. Only the per-testcase walk
+below is new: the run-evidence parser aggregates counts for one run's page,
+which is wrong for a per-test time series.
 """
 
 from __future__ import annotations
@@ -70,7 +78,14 @@ import requests
 # sys.path the way workflow-exporter.py does before importing it.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_observe_phases as phases
-from ci_observe_run_evidence import CIObserveRunEvidence, private_native_artifacts
+from ci_observe_run_evidence import (
+    SUITE_ARTIFACTS,
+    CIObserveRunEvidence,
+    EvidenceError,
+    GitHubRefused,
+    artifact_place,
+    find_artifacts,
+)
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -589,15 +604,6 @@ def artifact_suite(name):
     return match.group(1) or "vmaas"
 
 
-def fetch_state(reason):
-    """"error" for a failure worth retrying (GitHub did not answer), "no_data"
-    for an answer that will not change (no artifact, expired, unparseable)."""
-    text = (reason or "").lower()
-    if text.startswith("artifact listing failed") or "download failed" in text:
-        return "error"
-    return "no_data"
-
-
 class ArtifactFetcher:
     """One run's JUnit outcomes, from GitHub.
 
@@ -631,58 +637,40 @@ class ArtifactFetcher:
         if remaining is not None:
             logger.debug("GitHub API rate limit remaining: %s", remaining)
 
-    def _artifacts(self, repo, run_id):
-        """The run's own artifacts that match the native-evidence name
-        pattern: (artifacts, reason)."""
-        url = f"{self.api_url}/repos/{self.org}/{repo}/actions/runs/{run_id}/artifacts?per_page=100"
-        try:
-            response = requests.get(url, headers=self.headers, timeout=60)
-        except requests.exceptions.RequestException:
-            return None, "artifact listing failed (network error)"
-        if not response.ok:
-            return None, f"artifact listing failed with HTTP {response.status_code}"
-        artifacts = [
-            artifact for artifact in response.json().get("artifacts") or []
-            if CIObserveRunEvidence._is_native_artifact(artifact.get("name") or "", run_id)
-        ]
-        private_reason = None
-        if not artifacts:
-            # A job that published to the private artifact repository has
-            # nothing on its run.
-            artifacts, private_reason = private_native_artifacts(
-                lambda private_url: requests.get(private_url, headers=self.headers, timeout=60), run_id,
-                org=self.org, api_url=self.api_url)
-        if not artifacts:
-            if private_reason and "HTTP 404" not in private_reason:
-                # GitHub did not answer for the private repository (a timeout,
-                # a 403, a 5xx): say so in the words fetch_state reads as a
-                # failure worth retrying, not as "this run has no artifact".
-                # A 404 is the repository not being visible to this token --
-                # a setting that retrying does not fix -- so it stays "no
-                # artifact" rather than being asked again on every pass.
-                return None, f"artifact listing failed ({private_reason})"
-            if private_reason:
-                # Kept in the stored reason so a trend can tell a repository
-                # this token cannot see from a lookup that found nothing; the
-                # words fetch_state retries on are absent, so it stays no_data.
-                logger.warning("run %s: %s", run_id, private_reason)
-                return None, f"no osac-logs-[<suite>-]full-install artifact ({private_reason})"
-            return None, "no osac-logs-[<suite>-]full-install artifact"
-        # A live artifact before an expired one, so a rerun that left both
-        # behind still parses the ones that exist.
-        return sorted(artifacts, key=lambda artifact: bool(artifact.get("expired"))), None
+    def _artifacts(self, run):
+        """The run's artifacts at the one place its trigger says (see
+        ci_observe_run_evidence.artifact_place): every suite's that is
+        there. Raises GitHubRefused when GitHub does not answer, which stops
+        the pass; raises EvidenceError for a run whose trigger has no
+        artifact place."""
+        run_id = run["run_id"]
+        names = [pattern.format(run_id=run_id) for pattern in SUITE_ARTIFACTS.values()]
+        found = find_artifacts(
+            lambda url: requests.get(url, headers=self.headers, timeout=60), run.get("trigger"), run["repo"],
+            run_id, names, org=self.org, api_url=self.api_url)
+        return [artifact for _, artifact, _, _ in found]
 
-    def fetch(self, repo, run_id):
+    def fetch(self, run):
         """(cases, reason) for one run: the per-testcase rows of every live
-        artifact it still has, or a short reason when it has none.
+        artifact it has, or a short reason when it has none. The reason is
+        this run's own fact (no artifact where its trigger says, expired,
+        too large, no junit.xml); GitHub not answering raises GitHubRefused
+        instead, and the pass stops.
 
         A run with no readable artifact returns (None, reason) and is never
         recorded as a run with zero failures: "the evidence is gone" and
         "the tests passed" must not look the same on a trend.
         """
-        artifacts, reason = self._artifacts(repo, run_id)
-        if artifacts is None:
-            return None, reason
+        run_id = run["run_id"]
+        try:
+            artifacts = self._artifacts(run)
+        except GitHubRefused:
+            raise
+        except EvidenceError as error:
+            return None, str(error)
+        if not artifacts:
+            _, place, _ = artifact_place(run.get("trigger"), run["repo"], run_id, self.org)
+            return None, f"no osac-logs-[<suite>-]full-install-{run_id} artifact in {place}"
         files = []
         unfinished = []
         for artifact in artifacts[:MAX_ARTIFACTS_PER_RUN]:
@@ -694,9 +682,11 @@ class ArtifactFetcher:
                 unfinished.append(f"{name}: larger than the download bound")
                 continue
             data, download_reason = self._evidence._download_artifact(artifact.get("archive_download_url") or "")
-            if data is None:
-                unfinished.append(f"{name}: {download_reason}")
+            if data is None and download_reason == "too_large":
+                unfinished.append(f"{name}: larger than the download bound")
                 continue
+            if data is None:
+                raise GitHubRefused(f"downloading {name} failed: {download_reason}")
             artifact_files, extract_reason = self._evidence._extract_junit_files(data)
             if artifact_files is None:
                 unfinished.append(f"{name}: {extract_reason}")
@@ -739,6 +729,17 @@ def open_trends_db(path):
     for column in added:
         conn.execute(f"ALTER TABLE test_runs ADD COLUMN {column} TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_test_runs_key ON test_runs(test_key, day)")
+    # Before 2026-11-15 a 404 from the private artifact repository, the
+    # answer to a token that cannot see it, was stored as "this run has no
+    # artifact" and never asked again. It is a refusal, which now stops the
+    # pass; the runs stored that way are read again.
+    forgotten = conn.execute(
+        "DELETE FROM run_fetches WHERE state = 'no_data' AND reason LIKE ?",
+        ("%private artifact lookup in % failed with HTTP 404%",),
+    ).rowcount
+    if forgotten:
+        logger.info("%d run(s) stored without test results after a 404 from the private artifact repository "
+                    "will be read again", forgotten)
     conn.commit()
     _fill_test_keys(conn)
     return conn
@@ -1085,9 +1086,11 @@ def read_decision(run, fetch, has_stored, now, force=False):
     "stored" rows, or "skip" it (unfinished, or known to have no data).
 
     A run is read again only when that can change the answer: it was never
-    read, an older parser read it while its artifact may still exist, or
-    GitHub failed to answer. A run known to have no artifact is checked once
-    more when the first check came within NO_DATA_RECHECK_WITHIN of its end.
+    read, an older parser read it while its artifact may still exist, or an
+    older version stored it as a failed lookup. A run known to have no
+    artifact is checked once more when the first check came within
+    NO_DATA_RECHECK_WITHIN of its end: a privately published artifact
+    arrives a few minutes after its run ends.
     """
     if force:
         return "fetch"
@@ -1194,7 +1197,14 @@ def main(argv=None):
             logger.info("no stored e2e runs on or after %s: nothing to roll up", start)
             phases.record_pass(conn, "trends", now, "no stored e2e run to roll up")
             return 0
-        _roll_up(conn, runs, args.force, now)
+        try:
+            _roll_up(conn, runs, args.force, now)
+        except GitHubRefused as error:
+            # The same for every run: stop, store nothing of this pass, and
+            # leave the last pass's time on the pages, which then say the
+            # test results are stale. The next pass reads every run again.
+            logger.error("the test history pass stopped, nothing was stored: %s", error)
+            return 1
         phases.record_pass(conn, "trends", now, f"{len(runs)} run(s) considered")
     finally:
         conn.close()
@@ -1223,7 +1233,7 @@ def _roll_up(conn, runs, force, now):
             run["cases"] = []
             continue
         fetcher = fetcher or ArtifactFetcher()
-        cases, reason = fetcher.fetch(run["repo"], run_id)
+        cases, reason = fetcher.fetch(run)
         entry = {
             "run_id": run_id, "day": run["day"], "reason": reason or "", "version": PARSER_VERSION,
             "checked_at": checked_at, "finished_at": run.get("finished_at") or "",
@@ -1242,7 +1252,9 @@ def _roll_up(conn, runs, force, now):
             no_data.append({**entry, "state": "parsed"})
             continue
         run["cases"] = []
-        no_data.append({**entry, "state": fetch_state(reason)})
+        # A run's own fact (no artifact where its trigger says, expired, no
+        # junit.xml): it does not change, so the run is not asked again.
+        no_data.append({**entry, "state": "no_data"})
     logger.info(
         "%d run(s): %d read now, %d reused from trends.db, %d skipped",
         len(runs), plan["fetch"], plan["stored"], plan["skip"],

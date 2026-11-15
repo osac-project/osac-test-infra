@@ -240,10 +240,9 @@ class CIObserveCaptureView:
     """The /api/ci-observe/capture document.
 
     The exporter argument provides the SQLite registry and job history
-    (``_db``) and, when present, the cache of already-parsed JUnit evidence
-    (``_run_evidence._cache``). This view never downloads an artifact and
-    never calls GitHub. Tempo is reached over HTTP with the standard library,
-    read-only.
+    (``_db``). This view never downloads an artifact and never calls GitHub:
+    a capture's failed tests are /api/ci-observe/failed-tests. Tempo is
+    reached over HTTP with the standard library, read-only.
     """
 
     # A complete trace is stable, so a positive answer is cached for ten
@@ -306,7 +305,7 @@ class CIObserveCaptureView:
         """The Capture document for ?capture_id=.
 
         Returns capture_id, state, session, coverage, identity, tests,
-        waits, fixtures, fixture_uses, failed_tests, transient and notes.
+        waits, fixtures, fixture_uses, transient and notes.
         Every state returns the full shape: a failed lookup has empty buckets
         and a note saying why, never a partial table. `transient` marks a
         failure of the source (Tempo unreachable or 5xx), which is cached for
@@ -524,7 +523,6 @@ class CIObserveCaptureView:
             fixture_uses=self._cap(buckets["fixture_uses"], "fixture_uses", notes),
         )
         document["identity"]["session_trace_id"] = trace_id
-        document["failed_tests"] = self._cached_failed_tests(run_id, run_attempt, notes)
         document["notes"] = notes
         return document
 
@@ -592,7 +590,6 @@ class CIObserveCaptureView:
             "waits": [],
             "fixtures": [],
             "fixture_uses": [],
-            "failed_tests": [],
             "notes": [],
         }
 
@@ -1177,32 +1174,6 @@ class CIObserveCaptureView:
             return rows
         notes.append(f"{bucket} is capped at {self.MAX_ROWS_PER_BUCKET} of {len(rows)} rows")
         return rows[: self.MAX_ROWS_PER_BUCKET]
-
-    # -- JUnit evidence ----------------------------------------------------
-    def _cached_failed_tests(self, run_id, run_attempt, notes):
-        """Failed tests from an already-populated JUnit evidence cache entry.
-
-        The artifact is fetched by the /api/ci-observe/run endpoint, which the
-        Capture page's CI evidence table already calls. This endpoint must
-        never trigger that download: a cold artifact fetch costs more than
-        the Capture cold budget. A cache miss returns no rows and points the
-        reader at the CI evidence panel; it is not an empty test result.
-        """
-        evidence = getattr(self.exporter, "_run_evidence", None)
-        cache = getattr(evidence, "_cache", None)
-        if cache is None or run_id is None or run_attempt is None:
-            notes.append("failed test detail is in the CI evidence panel")
-            return []
-        cached = cache.get(("native", run_id, run_attempt))
-        if not isinstance(cached, dict):
-            notes.append("failed test detail is in the CI evidence panel")
-            return []
-        status = cached.get("status")
-        if status != "available":
-            notes.append(f"failed test detail is not available in the CI evidence panel (JUnit artifact is {status!r})")
-            return []
-        failed = cached.get("failed_tests")
-        return failed if isinstance(failed, list) else []
 
     @staticmethod
     def _param(params, name):

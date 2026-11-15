@@ -383,12 +383,28 @@ class TestWriteDay:
         }
 
 
+def fetched(trends, trigger="pr", repo="osac", **fetcher):
+    """One run as the pass hands it to the fetcher: a pull-request run keeps
+    its artifact on the run, a scheduled one publishes it privately."""
+    return trends.ArtifactFetcher(token=TOKEN, **fetcher).fetch({"run_id": RUN_ID, "repo": repo, "trigger": trigger})
+
+
+PRIVATE_NAME_PATH = "/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100"
+
+
+def private_entry(api_url, name=f"osac-logs-full-install-{RUN_ID}"):
+    entry = artifact_payload(api_url).json()["artifacts"][0]
+    entry["name"] = name
+    entry["archive_download_url"] = f"{api_url}/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip"
+    return entry
+
+
 class TestArtifactFetch:
     def test_reads_the_run_artifact(self, trends, github, wfe):
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))
         github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
-        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+        cases, reason = fetched(trends)
 
         assert reason is None
         assert len(cases) == 3
@@ -396,7 +412,7 @@ class TestArtifactFetch:
     def test_an_expired_artifact_is_no_test_data_not_a_pass(self, trends, github, wfe):
         github.add(LIST_PATH, artifact_payload(wfe.API_URL, expired=True))
 
-        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+        cases, reason = fetched(trends)
 
         assert cases is None
         assert "expired" in reason
@@ -405,97 +421,89 @@ class TestArtifactFetch:
     def test_a_missing_artifact_is_a_reason(self, trends, github):
         github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
 
-        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+        cases, reason = fetched(trends)
 
         assert cases is None
-        assert "no osac-logs" in reason
+        assert reason == f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in run {RUN_ID} of osac-project/osac"
 
-    def test_reads_the_artifact_from_the_private_repository(self, trends, github, wfe):
-        name = f"osac-logs-full-install-{RUN_ID}"
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        entry = artifact_payload(wfe.API_URL).json()["artifacts"][0]
-        entry["archive_download_url"] = f"{wfe.API_URL}/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip"
-        github.add(
-            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
-            FakeResponse(payload={"total_count": 1, "artifacts": [entry]}),
-        )
-        github.add(
-            "/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip",
-            FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})),
-        )
+    def test_a_scheduled_run_is_read_from_the_private_repository_only(self, trends, github, wfe):
+        for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
+                     f"osac-logs-bmaas-full-install-{RUN_ID}"):
+            github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_NAME_PATH.format(name=f"osac-logs-full-install-{RUN_ID}"),
+                   FakeResponse(payload={"total_count": 1, "artifacts": [private_entry(wfe.API_URL)]}))
+        github.add("/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip",
+                   FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
-        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+        cases, reason = fetched(trends, "scheduled")
 
         assert reason is None
         assert len(cases) == 3
+        assert github.count(LIST_PATH) == 0, "a scheduled run's own artifacts are not asked"
 
-    def test_a_private_lookup_that_fails_is_part_of_the_reason(self, trends, github):
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(
-            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name=osac-logs-full-install-{RUN_ID}&per_page=100",
-            FakeResponse(403, text="forbidden"),
-        )
+    @pytest.mark.parametrize("status", [401, 403, 404])
+    def test_a_private_repository_that_refuses_the_token_stops_the_pass(self, trends, github, status):
+        github.add(PRIVATE_NAME_PATH.format(name=f"osac-logs-full-install-{RUN_ID}"),
+                   FakeResponse(status, text="refused"))
 
-        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+        with pytest.raises(trends.GitHubRefused) as raised:
+            fetched(trends, "manual")
+
+        message = str(raised.value)
+        assert f"osac-project/osac-ci-artifacts answered HTTP {status}" in message
+        assert "PRIVATE_GITHUB_TOKEN needs read access to the Actions artifacts of osac-project/osac-ci-artifacts" in message
+
+    def test_a_github_error_on_the_run_stops_the_pass(self, trends, github):
+        github.add(LIST_PATH, FakeResponse(502, text="bad gateway"))
+
+        with pytest.raises(trends.GitHubRefused, match=f"run {RUN_ID} of osac-project/osac answered HTTP 502"):
+            fetched(trends)
+
+    def test_an_answer_that_is_not_a_listing_stops_the_pass(self, trends, github):
+        github.add(PRIVATE_NAME_PATH.format(name=f"osac-logs-full-install-{RUN_ID}"), BadJsonResponse())
+
+        with pytest.raises(trends.GitHubRefused, match="not an artifact listing"):
+            fetched(trends, "scheduled")
+
+    def test_a_failed_download_stops_the_pass(self, trends, github, wfe):
+        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
+        github.add(DOWNLOAD_PATH, FakeResponse(500, text="boom"))
+
+        with pytest.raises(trends.GitHubRefused, match="download failed with HTTP 500"):
+            fetched(trends)
+
+    def test_a_run_with_no_private_artifact_is_a_reason(self, trends, github):
+        for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
+                     f"osac-logs-bmaas-full-install-{RUN_ID}"):
+            github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        cases, reason = fetched(trends, "scheduled")
 
         assert cases is None
-        assert "HTTP 403" in reason
-        # A failed lookup is retried, not stored as a run with no artifact.
-        assert trends.fetch_state(reason) == "error"
+        assert reason == f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in osac-project/osac-ci-artifacts"
 
-    def test_a_repository_the_token_cannot_see_is_not_retried_forever(self, trends, github):
-        # Unrouted private URLs answer 404, as a repository the token cannot
-        # see does: that is a setting, not a state that retrying fixes.
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-
-        _, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
-
-        assert trends.fetch_state(reason) == "no_data"
-        # ...but the stored reason still says the private lookup was refused,
-        # so a trend can tell it from a lookup that found nothing.
-        assert "HTTP 404" in reason
-
-    def test_an_answer_that_is_not_json_is_a_failed_lookup(self, trends, github):
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        github.add(
-            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name=osac-logs-full-install-{RUN_ID}&per_page=100",
-            BadJsonResponse(),
-        )
-
-        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+    def test_a_trigger_without_an_artifact_place_is_a_reason(self, trends, github):
+        cases, reason = fetched(trends, "other")
 
         assert cases is None
-        assert trends.fetch_state(reason) == "error"
+        assert "have a known artifact place" in reason
+        assert github.calls == []
 
-    def test_a_run_with_no_private_artifact_is_still_no_data(self, trends, github):
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        for name in ("", "bmaas-", "caas-"):
-            github.add(
-                f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name=osac-logs-{name}full-install-{RUN_ID}&per_page=100",
-                FakeResponse(payload={"total_count": 0, "artifacts": []}),
-            )
+    def test_the_fetchers_org_and_api_url_reach_the_private_repository(self, trends, github):
+        for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
+                     f"osac-logs-bmaas-full-install-{RUN_ID}"):
+            github.add(f"/repos/other-org/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
+                       FakeResponse(payload={"total_count": 0, "artifacts": []}))
 
-        _, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+        fetched(trends, "scheduled", "runs-here", org="other-org", api_url="https://api.github.com")
 
-        assert trends.fetch_state(reason) == "no_data"
+        assert github.calls and all(call.startswith("/repos/other-org/osac-ci-artifacts/") for call in github.calls)
 
-    def test_the_fetchers_org_and_api_url_reach_the_private_lookup(self, trends, github):
-        github.add(
-            "/repos/other-org/runs-here/actions/runs/{}/artifacts?per_page=100".format(RUN_ID),
-            FakeResponse(payload={"total_count": 0, "artifacts": []}),
-        )
-
-        trends.ArtifactFetcher(token=TOKEN, org="other-org", api_url="https://api.github.com").fetch("runs-here", RUN_ID)
-
-        private_calls = [call for call in github.calls if "osac-ci-artifacts" in call]
-        assert private_calls
-        assert all(call.startswith("/repos/other-org/osac-ci-artifacts/") for call in private_calls)
-
-    def test_the_run_artifact_is_read_without_asking_the_private_repository(self, trends, github, wfe):
+    def test_a_pull_request_run_is_read_without_asking_the_private_repository(self, trends, github, wfe):
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))
         github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
-        trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+        fetched(trends)
 
         assert not [call for call in github.calls if "osac-ci-artifacts" in call]
 
@@ -503,7 +511,7 @@ class TestArtifactFetch:
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))
         github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
-        cases, _ = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+        cases, _ = fetched(trends)
 
         assert TOKEN not in json.dumps(cases)
 
