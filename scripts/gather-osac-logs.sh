@@ -64,12 +64,23 @@ mkdir -p "$ARTIFACT_DIR" "$MGMT_CLUSTER_DIR"
 
 echo "Gathering OSAC logs from namespace ${E2E_NAMESPACE}..."
 
+capture_with_timeout() {
+    local label="$1" duration="$2" rc
+    shift 2
+    timeout "${duration}" "$@" || {
+        rc=$?
+        printf '%s: exit status %s\n' "${label}" "${rc}" >&2
+        return "${rc}"
+    }
+}
+
 if [[ -d "${BMH_CONSOLE_LOG_DIR:-}" ]]; then
     mkdir -p "$ARTIFACT_DIR/worker-console"
     printf 'Console log directory: %s\n' "${BMH_CONSOLE_LOG_DIR}" > "$ARTIFACT_DIR/worker-console/collection.txt"
     for console_log in "${BMH_CONSOLE_LOG_DIR}"/*.serial.log; do
         [[ -f "${console_log}" ]] || continue
-        timeout 30s cp -- "${console_log}" "$ARTIFACT_DIR/worker-console/" \
+        capture_with_timeout "console copy $(basename "${console_log}")" 30s \
+            cp -- "${console_log}" "$ARTIFACT_DIR/worker-console/" \
             2>> "$ARTIFACT_DIR/worker-console/collection.txt" || true
         if [[ ! -s "${console_log}" ]]; then
             printf '%s: empty console recording\n' "$(basename "${console_log}")" \
@@ -79,12 +90,13 @@ if [[ -d "${BMH_CONSOLE_LOG_DIR:-}" ]]; then
 fi
 if [[ -f "${SUSHY_LOG_FILE:-}" ]]; then
     mkdir -p "$MGMT_CLUSTER_DIR/bare-metal"
-    timeout 30s cp -- "${SUSHY_LOG_FILE}" "$MGMT_CLUSTER_DIR/bare-metal/sushy.log" \
+    capture_with_timeout "sushy log copy" 30s \
+        cp -- "${SUSHY_LOG_FILE}" "$MGMT_CLUSTER_DIR/bare-metal/sushy.log" \
         2> "$MGMT_CLUSTER_DIR/bare-metal/sushy-copy-errors.txt" || true
 fi
 if [[ -n "${SUSHY_CACHE_CONTAINER:-}" ]]; then
     mkdir -p "$MGMT_CLUSTER_DIR/bare-metal"
-    timeout 30s podman logs --timestamps "${SUSHY_CACHE_CONTAINER}" \
+    capture_with_timeout "virtual-media cache logs" 30s podman logs --timestamps "${SUSHY_CACHE_CONTAINER}" \
         > "$MGMT_CLUSTER_DIR/bare-metal/virtual-media-cache.log" 2>&1 || true
 fi
 
@@ -97,21 +109,28 @@ collect_namespace_logs() {
         return 0
     fi
     mkdir -p "${dir}"
-    timeout 30s oc get pods -n "${ns}" -o wide > "${dir}/pods.txt" 2>&1 || true
-    timeout 30s oc get events -n "${ns}" --sort-by=.lastTimestamp > "${dir}/events.txt" 2>&1 || true
-    timeout 30s oc describe pods -n "${ns}" > "${dir}/pods-describe.txt" 2>&1 || true
-    timeout 30s oc get deployments -n "${ns}" -o wide > "${dir}/deployments.txt" 2>&1 || true
-    timeout 30s oc get jobs -n "${ns}" -o wide > "${dir}/jobs.txt" 2>&1 || true
-    timeout 30s oc get statefulsets -n "${ns}" -o wide > "${dir}/statefulsets.txt" 2>&1 || true
+    capture_with_timeout "pods ${ns}" 30s oc get pods -n "${ns}" -o wide > "${dir}/pods.txt" 2>&1 || true
+    capture_with_timeout "events ${ns}" 30s oc get events -n "${ns}" --sort-by=.lastTimestamp \
+        > "${dir}/events.txt" 2>&1 || true
+    capture_with_timeout "pod descriptions ${ns}" 30s oc describe pods -n "${ns}" \
+        > "${dir}/pods-describe.txt" 2>&1 || true
+    capture_with_timeout "deployments ${ns}" 30s oc get deployments -n "${ns}" -o wide \
+        > "${dir}/deployments.txt" 2>&1 || true
+    capture_with_timeout "jobs ${ns}" 30s oc get jobs -n "${ns}" -o wide > "${dir}/jobs.txt" 2>&1 || true
+    capture_with_timeout "statefulsets ${ns}" 30s oc get statefulsets -n "${ns}" -o wide \
+        > "${dir}/statefulsets.txt" 2>&1 || true
     local pods_json pod container kind log_prefix pending=0
-    pods_json=$(timeout 30s oc get pods -n "${ns}" -o json 2> "${dir}/pod-discovery-errors.txt") || true
+    pods_json=$(capture_with_timeout "pod discovery ${ns}" 30s oc get pods -n "${ns}" -o json \
+        2> "${dir}/pod-discovery-errors.txt") || true
     while IFS=$'\t' read -r pod container kind; do
         # Kubernetes names exclude underscores, keeping each filename component distinct.
         log_prefix="${dir}/pod-${pod}__${kind}__${container}"
         (
-            timeout 60s oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps \
+            capture_with_timeout "pod logs ${ns}/${pod}/${container} current" 60s \
+                oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps \
                 > "${log_prefix}__current.log" 2>&1 || true
-            timeout 60s oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps --previous \
+            capture_with_timeout "pod logs ${ns}/${pod}/${container} previous" 60s \
+                oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps --previous \
                 > "${log_prefix}__previous.log" 2>&1 || true
         ) &
         pending=$((pending + 1))
@@ -129,11 +148,13 @@ collect_namespace_logs() {
 collect_resource_status() {
     local resource="$1" ns="$2" dir="$3"
     mkdir -p "${dir}"
-    timeout 30s oc get "${resource}" -n "${ns}" -o json 2> "${dir}/${resource}-errors.txt" \
+    : > "${dir}/${resource}-errors.txt"
+    capture_with_timeout "${resource} ${ns}" 30s oc get "${resource}" -n "${ns}" -o json \
+        2>> "${dir}/${resource}-errors.txt" \
         | jq '{apiVersion, kind, items: [.items[]? | {
             apiVersion, kind,
             metadata: (.metadata | del(.managedFields, .annotations)),
-            status
+            status: (if .kind == "InfraEnv" then .status | del(.isoDownloadURL) else .status end)
         }]}' > "${dir}/${resource}.json" 2>> "${dir}/${resource}-errors.txt" || true
 }
 
@@ -228,7 +249,8 @@ echo "Collecting router hop evidence (routes, endpoints, router access log)..."
 collect_router_evidence "$E2E_NAMESPACE"
 
 for ns in keycloak ansible-aap openshift-cnv; do
-    if timeout 30s oc get namespace "${ns}" >/dev/null 2>> "$MGMT_CLUSTER_DIR/namespace-discovery-errors.txt"; then
+    if capture_with_timeout "namespace lookup ${ns}" 30s oc get namespace "${ns}" \
+        >/dev/null 2>> "$MGMT_CLUSTER_DIR/namespace-discovery-errors.txt"; then
         echo "Gathering logs from namespace ${ns}..."
         collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
     fi
@@ -310,7 +332,8 @@ oc get routes -n keycloak -o wide > "$MGMT_CLUSTER_DIR/routes-keycloak.txt" 2>&1
 
 read -r -a extra_log_namespaces <<< "${OSAC_LOG_NAMESPACES:-}"
 for ns in cert-manager openshift-machine-api osac-operators multicluster-engine hypershift "${extra_log_namespaces[@]}"; do
-    if timeout 30s oc get namespace "${ns}" >/dev/null 2>> "$MGMT_CLUSTER_DIR/namespace-discovery-errors.txt"; then
+    if capture_with_timeout "namespace lookup ${ns}" 30s oc get namespace "${ns}" \
+        >/dev/null 2>> "$MGMT_CLUSTER_DIR/namespace-discovery-errors.txt"; then
         echo "Gathering logs from namespace ${ns}..."
         collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
     fi
