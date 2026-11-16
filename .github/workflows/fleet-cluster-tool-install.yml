@@ -1,0 +1,139 @@
+---
+name: Fleet cluster-tool install
+
+# Installs a tagged osac-project/cluster-tool release on the persistent CI
+# runner hosts (osac-1..osac-15). Run it by hand from the Actions tab:
+#
+#   gh workflow run fleet-cluster-tool-install.yml -f tag=v1.0.1
+#   gh workflow run fleet-cluster-tool-install.yml -f tag=v1.0.1 -f hosts=osac-9   # canary
+#
+# On-demand only: no schedule, no push or PR trigger.
+#
+# Each host runs the root-owned /usr/local/sbin/osac-install-cluster-tool
+# helper through sudo (scripts/osac-install-cluster-tool; the runner user's
+# sudo policy allows exactly that command with one vX.Y.Z argument). The
+# helper clones the release from GitHub, refuses a tag that is not on
+# cluster-tool's main branch, checks the file compiles, and replaces
+# /usr/local/bin/cluster-tool atomically. A cluster-tool command that
+# already started keeps running the old version.
+#
+# osac-ci-1 (the monitoring host) is deliberately left out: its cluster-tool
+# is not part of the E2E fleet.
+#
+# This workflow holds no secrets. It cannot do anything the helper does not
+# allow, and it cannot run from a branch other than main.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "cluster-tool release tag to install, e.g. v1.0.1 (must be on cluster-tool's main branch)"
+        required: true
+        type: string
+      hosts:
+        description: "Hosts to install on: 'all', or a comma-separated list such as osac-9 or osac-1,osac-2. Start with one host as a canary."
+        required: false
+        type: string
+        default: "all"
+
+permissions: {}
+
+jobs:
+  plan:
+    # workflow_dispatch can target any branch; only main may touch the fleet.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      hosts: ${{ steps.plan.outputs.hosts }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate the tag and pick the hosts
+        id: plan
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          HOSTS_INPUT: ${{ inputs.hosts }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must look like v1.0.1 (got '${TAG}')" >&2
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags \
+              https://github.com/osac-project/cluster-tool.git "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::${TAG} is not a tag of osac-project/cluster-tool" >&2
+            exit 1
+          fi
+
+          fleet="$(yq -o=json '.all.children.ci_runners.hosts | keys' fleet/inventory/hosts.yml \
+            | jq -c '[.[] | select(test("^osac-[0-9]+$"))] | sort_by(ltrimstr("osac-") | tonumber)')"
+          if [[ "$(jq length <<<"${fleet}")" -eq 0 ]]; then
+            echo "::error::no osac-<N> hosts found in fleet/inventory/hosts.yml" >&2
+            exit 1
+          fi
+
+          wanted="$(tr -d '[:space:]' <<<"${HOSTS_INPUT:-all}")"
+          if [[ -z "${wanted}" || "${wanted}" == "all" ]]; then
+            hosts="${fleet}"
+          else
+            hosts="$(jq -c -n --argjson fleet "${fleet}" --arg wanted "${wanted}" '
+              ($wanted | split(",")) as $w
+              | ($w - $fleet) as $unknown
+              | if ($unknown | length) > 0
+                then error("unknown hosts: " + ($unknown | join(", ")))
+                else [$fleet[] | select(IN($w[]))] end')"
+          fi
+
+          echo "Installing ${TAG} on $(jq length <<<"${hosts}") host(s): $(jq -r 'join(", ")' <<<"${hosts}")"
+          echo "hosts=${hosts}" >> "$GITHUB_OUTPUT"
+
+  install:
+    needs: plan
+    strategy:
+      # A bad release stops after the first few hosts instead of reaching all.
+      fail-fast: true
+      max-parallel: 3
+      matrix:
+        host: ${{ fromJson(needs.plan.outputs.hosts) }}
+    runs-on: ${{ matrix.host }}
+    # One install per host at a time; never cancel one half way through.
+    concurrency:
+      group: fleet-cluster-tool-install-${{ matrix.host }}
+      cancel-in-progress: false
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - name: Install cluster-tool ${{ inputs.tag }} on ${{ matrix.host }}
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          HOST: ${{ matrix.host }}
+        run: |
+          set -euo pipefail
+          helper=/usr/local/sbin/osac-install-cluster-tool
+          if [[ ! -x "${helper}" ]]; then
+            echo "::error::${helper} is missing on ${HOST}. Roll out the runner helpers first: ansible-playbook fleet/playbooks/update.yml --limit ${HOST} --tags runner-user (see fleet/README.md)" >&2
+            exit 1
+          fi
+          sudo -n /usr/local/sbin/osac-install-cluster-tool "${TAG}"
+
+      - name: Check the installed tool as the runner user
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 /usr/local/bin/cluster-tool --help >/dev/null
+          recorded="$(cat /usr/local/share/cluster-tool/VERSION)"
+          if [[ "${recorded%% *}" != "${TAG}" ]]; then
+            echo "::error::$(hostname) records '${recorded}', expected ${TAG}" >&2
+            exit 1
+          fi
+          sum="$(sha256sum /usr/local/bin/cluster-tool | cut -c1-12)"
+          echo "$(hostname): ${recorded} sha256 ${sum}"
+          echo "- $(hostname): \`${recorded%% *}\` (commit \`${recorded##* }\`), sha256 \`${sum}\`" >> "${GITHUB_STEP_SUMMARY}"

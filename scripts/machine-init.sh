@@ -178,7 +178,8 @@ create_runner_user() {
     # installs these root-owned helpers separately.
     for helper in \
         osac-hosts-entry osac-compact-dns cluster-tool-compact-boot \
-        osac-compact-boot-diagnostics osac-compact-kubeconfig; do
+        osac-compact-boot-diagnostics osac-compact-kubeconfig \
+        osac-install-cluster-tool; do
         if [[ -f "${SCRIPT_DIR}/${helper}" ]]; then
             install -m 0755 "${SCRIPT_DIR}/${helper}" "/usr/local/sbin/${helper}"
             echo "    Installed /usr/local/sbin/${helper}"
@@ -237,6 +238,10 @@ Cmnd_Alias CLUSTER_TOOL_BOOT            = /usr/bin/python3 ${CLUSTER_TOOL_BIN} b
 Cmnd_Alias CLUSTER_TOOL_COMPACT_BOOT    = /usr/local/sbin/cluster-tool-compact-boot *
 Cmnd_Alias COMPACT_BOOT_DIAGNOSTICS     = /usr/local/sbin/osac-compact-boot-diagnostics *
 Cmnd_Alias CLUSTER_TOOL_CLEANUP_HAPROXY = /usr/bin/python3 ${CLUSTER_TOOL_BIN} cleanup-haproxy
+# Installs a tagged cluster-tool release (the "Fleet cluster-tool install"
+# workflow). The helper re-validates its single vX.Y.Z argument and only
+# ever fetches osac-project/cluster-tool tags that are on its main branch.
+Cmnd_Alias CLUSTER_TOOL_INSTALL = /usr/local/sbin/osac-install-cluster-tool v[0-9]*.[0-9]*.[0-9]*
 
 Cmnd_Alias BRIDGE_DOWN   = /usr/sbin/ip link set br-* down
 Cmnd_Alias BRIDGE_DELETE = /usr/sbin/ip link delete br-*
@@ -257,7 +262,7 @@ ${KUBECONFIG_COPY_ALIAS}
 ${KUBECONFIG_CHOWN_ALIAS}
 
 ${RUNNER_USER} ALL=(root) NOPASSWD: CLUSTER_TOOL_FLAVORS, CLUSTER_TOOL_FLAVORS_DELETE, \\
-    CLUSTER_TOOL_PULL, CLUSTER_TOOL_DESTROY, CLUSTER_TOOL_BOOT, CLUSTER_TOOL_COMPACT_BOOT, COMPACT_BOOT_DIAGNOSTICS, CLUSTER_TOOL_CLEANUP_HAPROXY, \\
+    CLUSTER_TOOL_PULL, CLUSTER_TOOL_DESTROY, CLUSTER_TOOL_BOOT, CLUSTER_TOOL_COMPACT_BOOT, COMPACT_BOOT_DIAGNOSTICS, CLUSTER_TOOL_CLEANUP_HAPROXY, CLUSTER_TOOL_INSTALL, \\
     BRIDGE_DOWN, BRIDGE_DELETE, \\
     AUTH_JSON_MKDIR, AUTH_JSON_COPY, AUTH_JSON_CHMOD, AUTH_JSON_RM, \\
     HOSTS_ENTRY_ADD, HOSTS_ENTRY_REMOVE, COMPACT_DNS_ADD, COMPACT_DNS_REMOVE, \\

@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Install a tagged cluster-tool release on this runner host.
+
+Installed by the fleet role to /usr/local/sbin/osac-install-cluster-tool and
+invoked through sudo by the "Fleet cluster-tool install" workflow:
+
+    sudo /usr/local/sbin/osac-install-cluster-tool vX.Y.Z
+
+github-runner may run exactly this command, so the helper takes the least
+from its caller: one strictly formatted tag, nothing else. The source is
+always https://github.com/osac-project/cluster-tool and the tag must be on
+that repository's main branch, so a tag pushed from an unmerged branch can
+never reach the fleet.
+
+The binary is replaced atomically (rename), so a job that already started
+keeps the version it launched with.
+"""
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import os
+import pathlib
+import py_compile
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+_REPO_URL = "https://github.com/osac-project/cluster-tool.git"
+_BIN = "/usr/local/bin/cluster-tool"
+_VERSION_FILE = "/usr/local/share/cluster-tool/VERSION"
+_LOCK = "/var/lock/osac-install-cluster-tool.lock"
+# Process names that mean an E2E job is using cluster-tool right now.
+_BUSY = re.compile(r"cluster-tool(\s+\S+)*\s+(boot|pull|destroy|compact-boot)\b")
+
+
+def fail(message: str, code: int = 1) -> None:
+    print(f"ERROR: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def settings() -> dict[str, str]:
+    """Paths and source. Only an unprivileged run (the tests) may override them.
+
+    sudo resets the environment and root ignores it here, so the runner user
+    cannot point a privileged run at another repository or location.
+    """
+    values = {
+        "repo": _REPO_URL,
+        "bin": _BIN,
+        "version_file": _VERSION_FILE,
+        "lock": _LOCK,
+    }
+    if os.geteuid() != 0:
+        for key, variable in (
+            ("repo", "OSAC_CT_REPO_URL"),
+            ("bin", "OSAC_CT_BIN"),
+            ("version_file", "OSAC_CT_VERSION_FILE"),
+            ("lock", "OSAC_CT_LOCK"),
+        ):
+            values[key] = os.environ.get(variable, values[key])
+    return values
+
+
+def git(*args: str, cwd: pathlib.Path | None = None) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "GIT_TERMINAL_PROMPT": "0", "LANG": "C"},
+    )
+    if result.returncode != 0:
+        fail(f"git {args[0]} failed: {result.stderr.strip() or result.stdout.strip()}")
+    return result.stdout.strip()
+
+
+def sha256(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def busy_count() -> int:
+    """Count cluster-tool commands running now (a warning, never a blocker)."""
+    result = subprocess.run(
+        ["ps", "-eo", "args="], check=False, capture_output=True, text=True
+    )
+    return sum(1 for line in result.stdout.splitlines() if _BUSY.search(line))
+
+
+def fetch_release(repo: str, tag: str, workdir: pathlib.Path) -> tuple[pathlib.Path, str]:
+    source = workdir / "source"
+    git("clone", "--quiet", repo, str(source))
+    found = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
+        cwd=source,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if found.returncode != 0:
+        fail(f"{tag} is not a tag of {repo}")
+    commit = found.stdout.strip()
+    on_main = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, "origin/HEAD"],
+        cwd=source,
+        check=False,
+        capture_output=True,
+    )
+    if on_main.returncode != 0:
+        fail(f"{tag} ({commit[:12]}) is not on the default branch; refusing to install it")
+    git("checkout", "--quiet", "--detach", commit, cwd=source)
+    tool = source / "cluster-tool"
+    if not tool.is_file():
+        fail(f"{tag} has no cluster-tool file")
+    try:
+        py_compile.compile(str(tool), cfile=str(workdir / "check.pyc"), doraise=True)
+    except py_compile.PyCompileError as error:
+        fail(f"{tag} does not compile: {error.msg}")
+    return tool, commit
+
+
+def install_file(tool: pathlib.Path, destination: pathlib.Path) -> None:
+    """Replace destination with tool in one rename, mode 0755."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staged = destination.with_name(f".{destination.name}.new.{os.getpid()}")
+    try:
+        shutil.copyfile(tool, staged)
+        os.chmod(staged, 0o755)
+        if os.geteuid() == 0:
+            os.chown(staged, 0, 0)
+        with open(staged, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(staged, destination)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2 or not _TAG.fullmatch(argv[1]):
+        fail("usage: osac-install-cluster-tool vMAJOR.MINOR.PATCH", 2)
+    tag = argv[1]
+    config = settings()
+    binary = pathlib.Path(config["bin"])
+    version_file = pathlib.Path(config["version_file"])
+
+    lock_path = pathlib.Path(config["lock"])
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with tempfile.TemporaryDirectory(prefix="osac-install-cluster-tool.") as work:
+            tool, commit = fetch_release(config["repo"], tag, pathlib.Path(work))
+            new_sum = sha256(tool)
+            old_sum = sha256(binary) if binary.is_file() else "none"
+            if busy_count():
+                print(
+                    "WARNING: cluster-tool is running on this host; jobs already "
+                    "started keep their version, the next call uses the new one."
+                )
+            if old_sum == new_sum:
+                print(f"cluster-tool already matches {tag}; refreshing the version record")
+            else:
+                install_file(tool, binary)
+            version_file.parent.mkdir(parents=True, exist_ok=True)
+            version_file.write_text(f"{tag} {commit}\n")
+
+    print(f"cluster-tool {tag} ({commit[:12]})")
+    print(f"  previous sha256 {old_sum[:12]}")
+    print(f"  installed sha256 {new_sum[:12]}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

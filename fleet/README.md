@@ -122,6 +122,35 @@ ansible ci_runners -m shell -a "<command>" --limit osac-3,osac-4
 
 This directly replaces "manually SSH to each machine one at a time."
 
+## Releasing a new cluster-tool version to the fleet
+
+1. Cut the release in [osac-project/cluster-tool](https://github.com/osac-project/cluster-tool)
+   (an annotated `vX.Y.Z` tag on `main`, plus a GitHub release).
+2. Run the on-demand workflow
+   [`fleet-cluster-tool-install.yml`](../.github/workflows/fleet-cluster-tool-install.yml)
+   with that tag. Start with one host as a canary, then the rest:
+   ```bash
+   gh workflow run fleet-cluster-tool-install.yml -f tag=v1.0.1 -f hosts=osac-9
+   gh workflow run fleet-cluster-tool-install.yml -f tag=v1.0.1
+   ```
+   It covers `osac-1`..`osac-15` (not `osac-ci-1`), three hosts at a time, and
+   stops starting new hosts after the first failure. Each host installs through
+   the root-owned `osac-install-cluster-tool` helper, which only takes a tag
+   that is on cluster-tool's `main` branch. The installed version is recorded in
+   `/usr/local/share/cluster-tool/VERSION`.
+3. Rolling back is the same run with the older tag.
+
+A host that does not have the helper yet fails with a message saying so. Roll it
+out once with `--tags runner-user` (this also refreshes the scoped sudo policy):
+
+```bash
+ansible-playbook fleet/playbooks/update.yml --limit osac-9 --tags runner-user
+```
+
+The `cluster-tool` step above (`--tags cluster-tool`) is for provisioning: it
+checks out `main` in `/opt/cluster-tool` and leaves an installed binary alone, so
+it does not change the installed version.
+
 ## Not (yet) included
 
 Intentionally out of scope for this Ansible layer today — see the project
