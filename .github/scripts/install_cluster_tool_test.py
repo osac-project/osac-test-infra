@@ -64,8 +64,10 @@ class HelperTest(unittest.TestCase):
         # A tag on a branch that never reached main.
         git(work, "checkout", "-q", "-b", "unmerged")
         self.commit("cluster-tool", GOOD_V2 + "# unreviewed\n", "v9.9.9")
+        self.commit("cluster-tool", GOOD_V2 + "# unreviewed 2\n", "v9.9.8", lightweight=True)
         # A tag on main whose file does not compile.
         git(work, "checkout", "-q", "main")
+        self.commit("cluster-tool", GOOD_V1 + "# lightweight\n", "v1.0.3", lightweight=True)
         self.commit("cluster-tool", BROKEN, "v1.0.2")
         git(work, "push", "-q", "origin", "main", "unmerged", "--tags")
 
@@ -79,11 +81,14 @@ class HelperTest(unittest.TestCase):
             "OSAC_CT_LOCK": str(root / "lock"),
         }
 
-    def commit(self, name: str, content: str, tag: str) -> None:
+    def commit(self, name: str, content: str, tag: str, lightweight: bool = False) -> None:
         (self.work / name).write_text(content)
         git(self.work, "add", name)
         git(self.work, "commit", "-q", "-m", tag)
-        git(self.work, "tag", "-a", tag, "-m", tag)
+        if lightweight:
+            git(self.work, "tag", tag)
+        else:
+            git(self.work, "tag", "-a", tag, "-m", tag)
 
     def install(self, *args: str, env: dict | None = None):
         return run(sys.executable, "-I", str(HELPER), *args, env=env or self.env)
@@ -130,6 +135,35 @@ class HelperTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not compile", result.stderr)
         self.assertEqual(self.bin.read_text(), GOOD_V1)
+
+    def test_lightweight_tags_resolve_to_their_commit_like_annotated_ones(self) -> None:
+        result = self.install("v1.0.3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.version.read_text(), f"v1.0.3 {git(self.work, 'rev-parse', 'v1.0.3')}\n"
+        )
+        self.assertEqual(self.bin.read_text(), GOOD_V1 + "# lightweight\n")
+
+    def test_lightweight_tag_not_on_main_is_refused(self) -> None:
+        result = self.install("v9.9.8")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not on the default branch", result.stderr)
+        self.assertFalse(self.bin.exists())
+
+    def test_version_record_is_world_readable_even_under_a_restrictive_umask(self) -> None:
+        previous = os.umask(0o077)
+        try:
+            result = self.install("v1.0.1")
+        finally:
+            os.umask(previous)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.version.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(self.version.parent.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(self.bin.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(
+            sorted(p.name for p in self.version.parent.iterdir()), ["VERSION"],
+            "no staged record may be left behind",
+        )
 
     def test_unknown_tag_is_refused(self) -> None:
         result = self.install("v7.7.7")

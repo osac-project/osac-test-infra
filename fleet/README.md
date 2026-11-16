@@ -134,7 +134,9 @@ This directly replaces "manually SSH to each machine one at a time."
    gh workflow run fleet-cluster-tool-install.yml -f tag=v1.0.1
    ```
    It covers `osac-1`..`osac-15` (not `osac-ci-1`), three hosts at a time, and
-   stops starting new hosts after the first failure. Each host installs through
+   cancels the rest after the first failure (a host that is mid-install
+   finishes its swap first; the helper holds cancellation signals until the
+   binary and its version record are both written). Each host installs through
    the root-owned `osac-install-cluster-tool` helper, which only takes a tag
    that is on cluster-tool's `main` branch. The installed version is recorded in
    `/usr/local/share/cluster-tool/VERSION`.

@@ -24,6 +24,7 @@ import pathlib
 import py_compile
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -139,10 +140,35 @@ def install_file(tool: pathlib.Path, destination: pathlib.Path) -> None:
         staged.unlink(missing_ok=True)
 
 
+def write_record(path: pathlib.Path, text: str) -> None:
+    """Replace the version record in one rename, readable by every user."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o755)
+    staged = path.with_name(f".{path.name}.new.{os.getpid()}")
+    try:
+        with open(staged, "w") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(staged, 0o644)
+        os.replace(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def terminate(signum: int, _frame: object) -> None:
+    """Turn a cancellation into a normal exit so temporary files are removed."""
+    raise SystemExit(128 + signum)
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2 or not _TAG.fullmatch(argv[1]):
         fail("usage: osac-install-cluster-tool vMAJOR.MINOR.PATCH", 2)
     tag = argv[1]
+    # Whatever umask sudo hands over, files other users read must stay readable.
+    os.umask(0o022)
+    for name in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(name, terminate)
     config = settings()
     binary = pathlib.Path(config["bin"])
     version_file = pathlib.Path(config["version_file"])
@@ -162,10 +188,18 @@ def main(argv: list[str]) -> int:
                 )
             if old_sum == new_sum:
                 print(f"cluster-tool already matches {tag}; refreshing the version record")
-            else:
-                install_file(tool, binary)
-            version_file.parent.mkdir(parents=True, exist_ok=True)
-            version_file.write_text(f"{tag} {commit}\n")
+            # A cancelled workflow run (matrix fail-fast, a manual cancel) signals
+            # this process. Hold the signals until the binary and its record are
+            # both written, so a host never ends up with the new binary and the
+            # old record. They are delivered right after.
+            held = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+            signal.pthread_sigmask(signal.SIG_BLOCK, held)
+            try:
+                if old_sum != new_sum:
+                    install_file(tool, binary)
+                write_record(version_file, f"{tag} {commit}\n")
+            finally:
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
 
     print(f"cluster-tool {tag} ({commit[:12]})")
     print(f"  previous sha256 {old_sum[:12]}")

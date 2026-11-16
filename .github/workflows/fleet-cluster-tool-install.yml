@@ -96,12 +96,15 @@ jobs:
     needs: plan
     strategy:
       # A bad release stops after the first few hosts instead of reaching all.
+      # fail-fast also cancels hosts that are running right now; that is safe
+      # because the helper holds those signals until the binary and its
+      # version record are both written.
       fail-fast: true
       max-parallel: 3
       matrix:
         host: ${{ fromJson(needs.plan.outputs.hosts) }}
     runs-on: ${{ matrix.host }}
-    # One install per host at a time; never cancel one half way through.
+    # One install per host at a time; a newer run waits instead of replacing it.
     concurrency:
       group: fleet-cluster-tool-install-${{ matrix.host }}
       cancel-in-progress: false
