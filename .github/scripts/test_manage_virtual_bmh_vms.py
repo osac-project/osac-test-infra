@@ -229,6 +229,10 @@ class CreateDeleteEndToEndTests(unittest.TestCase):
                 self.assertEqual(serial.find("target").attrib, {"type": "isa-serial", "port": "0"})
                 self.assertEqual(domain.find("./devices/console/target").attrib, {"type": "serial", "port": "0"})
                 disks = domain.findall("./devices/disk")
+                self.assertEqual(disks[0].find("serial").text, "osac-virt-root")
+                self.assertLessEqual(len(disks[0].find("serial").text.encode()), 20)
+                if arguments:
+                    self.assertIsNone(disks[1].find("serial"))
                 self.assertEqual(
                     [disk.find("target").get("dev") for disk in disks], ["vda", "vdb"] if arguments else ["vda"]
                 )

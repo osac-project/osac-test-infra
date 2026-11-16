@@ -115,6 +115,7 @@ def validate_data_storage(host: Host, disk_dir: Path) -> None:
     if root.findtext("./os/nvram") != str(nvram) or not nvram.is_file() or nvram.is_symlink():
         fail(f"VM '{host.name}' has incompatible NVRAM storage")
 
+
 # Stable disk identity for the Metal3 root device hint to match on.
 DISK_SERIAL = "osac-virt-root"
 

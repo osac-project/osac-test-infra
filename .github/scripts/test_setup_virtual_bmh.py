@@ -30,6 +30,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
         invalid_inventory: bool = False,
         orphan_inventory: str | None = None,
         dangling: bool = False,
+        resources: dict[str, str] | None = None,
     ) -> tuple:
         """Execute real orchestration, VM CLI and reconciliation without services."""
         with tempfile.TemporaryDirectory() as directory:
@@ -61,12 +62,14 @@ class SetupVirtualBmhTests(unittest.TestCase):
             env = fakes.env(
                 HOME=str(temp),
                 CLONE_NAME="contract",
-                BMH_COUNT="2",
                 VM_DISK_DIR=str(temp / "custom"),
                 VM_EFI_VARS=str(firmware),
                 GITHUB_ENV=str(temp / "github-env"),
             )
             env.pop("BMH_DATA_DISK_SIZE", None)
+            for option in ("BMH_COUNT", "BMH_CPU", "BMH_MEMORY_MIB"):
+                env.pop(option, None)
+            env.update(resources or {})
             if size is not None:
                 env["BMH_DATA_DISK_SIZE"] = size
             result = subprocess.run(
@@ -93,6 +96,13 @@ class SetupVirtualBmhTests(unittest.TestCase):
                 recording = os_disk.with_suffix(".serial.log")
                 self.assertEqual(domain.find("./devices/serial/log").attrib, {"file": str(recording), "append": "on"})
                 self.assertEqual(recording.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(domain.find("./devices/disk/serial").text, "osac-virt-root")
+                self.assertLessEqual(len(domain.find("./devices/disk/serial").text.encode()), 20)
+                self.assertEqual(domain.find("./devices/serial").get("type"), "pty")
+                self.assertEqual(domain.find("./devices/console/target").attrib, {"type": "serial", "port": "0"})
+                for disk in domain.findall("./devices/disk")[1:]:
+                    self.assertIsNone(disk.find("serial"))
+                    self.assertIsNone(disk.find("backingStore"))
             if invalid_inventory:
                 self.assertEqual(inventory.read_text(), "invalid inventory")
                 self.assertFalse((temp / "custom").exists())
@@ -113,21 +123,30 @@ class SetupVirtualBmhTests(unittest.TestCase):
         self.assertIsNotNone(match, "CaaS must opt in to a data disk")
         self.assertEqual(match.group(1), "50G")
         self.assertNotIn("BMH_DATA_DISK_SIZE:", (ROOT / ".github/workflows/e2e-bmaas-full-install.yml").read_text())
+        resources = {
+            option: re.search(rf'{option}: "([^\"]+)"', step).group(1)
+            for option in ("BMH_COUNT", "BMH_CPU", "BMH_MEMORY_MIB")
+        }
+        self.assertEqual(resources, {"BMH_COUNT": "3", "BMH_CPU": "8", "BMH_MEMORY_MIB": "12288"})
         for size in (None, "", match.group(1)):
             with self.subTest(size=size):
-                result, calls, domains, manifests = self._run_setup(size)
+                result, calls, domains, manifests = self._run_setup(size, resources=resources if size else None)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(len(domains), 2)
+                count = 3 if size else 2
+                self.assertEqual(len(domains), count)
                 for domain in domains:
+                    self.assertEqual(domain.find("vcpu").text, "8" if size else "4")
+                    self.assertEqual(domain.find("memory").attrib, {"unit": "MiB"})
+                    self.assertEqual(domain.find("memory").text, "12288" if size else "8192")
                     disks = domain.findall("./devices/disk")
                     self.assertEqual(len(disks), 2 if size else 1)
                     self.assertEqual(disks[0].find("target").get("dev"), "vda")
                     self.assertIn(f"{disks[0].find('source').get('file')} 150G", calls)
                     if size:
                         self.assertEqual(disks[1].find("target").get("dev"), "vdb")
-                        self.assertIn(f"{disks[1].find('source').get('file')} 50G", calls)
+                        self.assertIn(f"qemu-img create -f qcow2 {disks[1].find('source').get('file')} 50G", calls)
                 hosts = [manifest for manifest in manifests if "kind: BareMetalHost" in manifest]
-                self.assertEqual(len(hosts), 2)
+                self.assertEqual(len(hosts), count)
                 for manifest in hosts:
                     self.assertIn("  rootDeviceHints:\n    deviceName: /dev/vda\n", manifest)
 
@@ -227,6 +246,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
         self.assertIn('BMH_MEMORY_MIB="${BMH_MEMORY_MIB:-8192}"', setup)
         self.assertIn('  --cpu "${BMH_CPU}"', setup)
         self.assertIn('  --memory-mib "${BMH_MEMORY_MIB}"', setup)
+
 
 if __name__ == "__main__":
     unittest.main()
