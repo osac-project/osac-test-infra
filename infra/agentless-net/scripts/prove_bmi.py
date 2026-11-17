@@ -406,9 +406,13 @@ def delete_proof(api: Api, state: dict[str, str], state_path: Path | None = None
         try:
             api.call(service, {"id": resource_id})
         except RuntimeError as exc:
-            ok = False
-            print(f"ERROR: failed to delete {key} {resource_id}: {exc}", file=sys.stderr)
-            continue
+            # NotFound means an earlier attempt already removed it. Drop the id
+            # so the next proof creates a new resource instead of reusing it.
+            already_gone = isinstance(exc, GrpcError) and exc.code.lower().replace("_", "") == "notfound"
+            if not already_gone:
+                ok = False
+                print(f"ERROR: failed to delete {key} {resource_id}: {exc}", file=sys.stderr)
+                continue
         print(f"deleted {key} {resource_id}")
         state.pop(key, None)
         if state_path is not None:

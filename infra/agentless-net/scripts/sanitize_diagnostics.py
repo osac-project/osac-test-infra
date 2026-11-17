@@ -13,10 +13,10 @@ from pathlib import Path
 
 
 _PRIVATE_KEY = re.compile(
-    rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----",
     re.DOTALL,
 )
-_PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
+_PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----")
 _AUTHORIZATION = re.compile(rb"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)[^\r\n]+")
 _SECRET_NAME = (
     rb"\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data|auth[_-]?config)[A-Za-z0-9_.-]*\""
@@ -26,11 +26,11 @@ _SECRET_NAME = (
 _SECRET_ASSIGNMENT = re.compile(
     rb"(?i)(" + _SECRET_NAME + rb")"
     rb"(\s*[:=]\s*)"
-    rb"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\r\n]+)"
+    rb"(\"(?:\\.|[^\"\\])*\"|'(?:''|[^'])*'|[^\r\n]+)"
 )
 _REDACTED = b"[REDACTED]"
 _JSON_AUTH = re.compile(
-    rb"""(?i)((?:"auth"|'auth')\s*:\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')"""
+    rb"""(?i)((?:"auth"|'auth')\s*:\s*)("(?:\\.|[^"\\])*"|'(?:''|[^'])*')"""
 )
 # YAML block header: | or >, optional chomp, optional single-digit indent, in either order.
 _BLOCK_HEADER = re.compile(rb"^[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:[ \t]+#.*)?[ \t]*$")
@@ -91,7 +91,7 @@ def _closed_quote(value: bytes, quote: bytes) -> bool:
     if quote == b'"':
         pattern = rb'"(?:\\.|[^"\\])*"\Z'
     else:
-        pattern = rb"'(?:\\.|[^'\\])*'\Z"
+        pattern = rb"'(?:''|[^'])*'\Z"
     return re.fullmatch(pattern, value) is not None
 
 
@@ -103,7 +103,10 @@ def _flow_closed(value: bytes) -> bool:
     while index < len(value):
         char = value[index:index + 1]
         if quote:
-            if char == b"\\":
+            if quote == b"'" and value[index:index + 2] == b"''":
+                index += 2
+                continue
+            if char == b"\\" and quote != b"'":
                 index += 2
                 continue
             if char == quote:
@@ -148,13 +151,18 @@ def redact(data: bytes) -> bytes:
     index = 0
     while index < len(lines):
         line = lines[index]
-        match = _SECRET_ASSIGNMENT.search(line)
-        value = match.group(3) if match else b""
-        if match and value[:1] in (b"&", b"*", b"!"):
-            raise RuntimeError("unsupported secret anchor or tag")
-        if match and value[:1] in (b"|", b">"):
-            if _BLOCK_HEADER.fullmatch(value.strip()) is None:
+        matches = list(_SECRET_ASSIGNMENT.finditer(line))
+        for candidate in matches:
+            candidate_value = candidate.group(3)
+            if candidate_value[:1] in (b"&", b"*", b"!"):
+                raise RuntimeError("unsupported secret anchor or tag")
+            if candidate_value[:1] in (b"|", b">") and _BLOCK_HEADER.fullmatch(candidate_value.strip()) is None:
                 raise RuntimeError("unsupported secret block scalar")
+            if _multiline_secret(candidate_value):
+                raise RuntimeError("unsupported multiline secret value")
+        match = matches[0] if matches else None
+        value = match.group(3) if match else b""
+        if match and value[:1] in (b"|", b">"):
             output.append(line[: match.start(3)] + _REDACTED + line[match.end(3) :])
             index, consumed_value = _drop_indented_block(lines, index + 1, _line_indent(line))
             if not consumed_value:

@@ -21,6 +21,14 @@ CLONE_NAME="${MGMT_CLONE_NAME:-agentless-lab-mgmt}"
 BMH_COUNT=1
 FABRIC_MAC="${FABRIC_MAC:-52:54:00:bb:dd:01}"
 FABRIC_BRIDGE="${FABRIC_BRIDGE:-br-host1}"
+case "$FABRIC_BRIDGE" in
+    br-host1) FABRIC_SWITCH=leaf-1; FABRIC_PORT=swp2 ;;
+    br-host2) FABRIC_SWITCH=leaf-2; FABRIC_PORT=swp2 ;;
+    *)
+        echo "ERROR: FABRIC_BRIDGE ${FABRIC_BRIDGE} is not a fabric bridge (br-host1 or br-host2)" >&2
+        exit 1
+        ;;
+esac
 SSH_KEY="${HOME}/.ssh/id_rsa"
 SSH_PUB="${SSH_KEY}.pub"
 INVENTORY_FILE="${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json"
@@ -83,7 +91,8 @@ oc -n "$BMH_NAMESPACE" label baremetalhost "$BMH_NAME" \
 
 info "Publishing the AgentlessNet inventory for ${BMH_NAME}"
 INVENTORY_JSON="$(python3 "${SCRIPT_DIR}/bmaas_inventory.py" \
-    --mgmt-prefix "$MGMT_PREFIX" --host-name "$BMH_NAME")"
+    --mgmt-prefix "$MGMT_PREFIX" --host-name "$BMH_NAME" \
+    --switch "$FABRIC_SWITCH" --port "$FABRIC_PORT")"
 INVENTORY_PATCH="$(INV="$INVENTORY_JSON" python3 -c 'import json, os; print(json.dumps({"data": {"AGENTLESS_NET_VN_INVENTORY": os.environ["INV"]}}))')"
 oc -n "$OSAC_NAMESPACE" patch configmap network-fulfillment-ig --type merge -p "$INVENTORY_PATCH"
 

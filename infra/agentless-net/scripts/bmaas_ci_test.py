@@ -40,6 +40,15 @@ class InventoryTest(unittest.TestCase):
         self.assertNotIn("private_key", rendered)
         host_ports = document["all"]["vars"]["agentless_net_host_ports"]
         self.assertEqual(host_ports["virtual-bmh-1"]["eth9"], {"switch": "leaf-1", "port": "swp2"})
+        second = bmaas_inventory.inventory_document(
+            mgmt_prefix="192.168.160", host_name="virtual-bmh-1", switch="leaf-2", port="swp2"
+        )
+        self.assertEqual(
+            second["all"]["vars"]["agentless_net_host_ports"]["virtual-bmh-1"]["eth9"],
+            {"switch": "leaf-2", "port": "swp2"},
+        )
+        with self.assertRaises(ValueError):
+            bmaas_inventory.inventory_document(mgmt_prefix="192.168.160", host_name="virtual-bmh-1", switch="leaf-9", port="swp2")
         switches = document["all"]["children"]["switches"]["hosts"]
         for switch in switches.values():
             self.assertNotIn("swp2", switch["trunk_ports"])
@@ -245,6 +254,31 @@ class ProofPayloadTest(unittest.TestCase):
         self.assertNotIn("vnet_id", remaining)
         self.assertEqual(remaining["address"], "10.100.1.9")
 
+    def test_not_found_delete_drops_the_recorded_id(self) -> None:
+        class Missing:
+            def call(self, service: str, data: dict | None = None) -> dict:
+                raise prove_bmi.GrpcError(service, "Code: NotFound", "NotFound")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state_path.write_text('{"bmi_id": "bmi-1"}')
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(prove_bmi.delete_proof(Missing(), {"bmi_id": "bmi-1"}, state_path))
+            self.assertEqual(json.loads(state_path.read_text()), {})
+
+    def test_unavailable_delete_keeps_the_recorded_id(self) -> None:
+        class Unavailable:
+            def call(self, service: str, data: dict | None = None) -> dict:
+                raise prove_bmi.GrpcError(service, "Code: Unavailable", "Unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state = {"bmi_id": "bmi-1"}
+            state_path.write_text(json.dumps(state))
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(prove_bmi.delete_proof(Unavailable(), state, state_path))
+            self.assertEqual(json.loads(state_path.read_text())["bmi_id"], "bmi-1")
+
 
 class SanitizeTest(unittest.TestCase):
     def test_private_keys_passwords_and_bearers_are_removed(self) -> None:
@@ -322,8 +356,8 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("bridge sysctl is 0", cleaned)
 
     def test_plain_secret_continuation_is_not_published(self) -> None:
-        secret = "second-half"
-        raw = f"password: first-half\n  {secret}\nbridge sysctl is 0\n"
+        test_secret = "second-half"
+        raw = f"password: first-half\n  {test_secret}\nbridge sysctl is 0\n"
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "logs"
             destination = Path(tmp) / "clean"
@@ -332,9 +366,40 @@ class SanitizeTest(unittest.TestCase):
             sanitize_diagnostics.sanitize_tree(source, destination)
             cleaned = (destination / "job.log").read_text()
         self.assertNotIn("first-half", cleaned)
-        self.assertNotIn(secret, cleaned)
+        self.assertNotIn(test_secret, cleaned)
         self.assertIn("password: [REDACTED]", cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
+
+    def test_doubled_single_quotes_stay_inside_the_secret(self) -> None:
+        test_suffix = "credential-suffix"
+        raw = f"password: 'prefix''{test_suffix}'\nbridge sysctl is 0\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn("prefix", cleaned)
+        self.assertNotIn(test_suffix, cleaned)
+        self.assertIn("password: '[REDACTED]'", cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+
+    def test_later_multiline_assignment_on_the_same_line_is_rejected(self) -> None:
+        test_secret = "hunter2"
+        raw = '{"password": "closed", "token": {\n  "value": "' + test_secret + '"\n}}\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            with self.assertRaises(RuntimeError) as caught:
+                sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
+            self.assertIn("multiline", str(caught.exception))
+            destination = Path(tmp) / "clean"
+            if destination.exists():
+                for path in destination.rglob("*"):
+                    if path.is_file():
+                        self.assertNotIn(test_secret, path.read_text())
 
     def test_explicit_block_indent_is_redacted_and_unknown_headers_fail(self) -> None:
         test_literal = "indented-secret"
@@ -373,13 +438,13 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("bridge sysctl is 0", cleaned)
 
     def test_diagnostic_symlinks_are_rejected(self) -> None:
-        outside_secret = "outside-secret"
+        test_outside_secret = "outside-secret"
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "logs"
             source.mkdir()
             outside = root / "outside.txt"
-            outside.write_text(outside_secret)
+            outside.write_text(test_outside_secret)
             (source / "linked.log").symlink_to(outside)
             with self.assertRaises(RuntimeError) as caught:
                 sanitize_diagnostics.sanitize_tree(source, root / "clean")
@@ -387,7 +452,7 @@ class SanitizeTest(unittest.TestCase):
             published = (root / "clean").rglob("*") if (root / "clean").exists() else []
             for path in published:
                 if path.is_file() and not path.is_symlink():
-                    self.assertNotIn(outside_secret, path.read_text())
+                    self.assertNotIn(test_outside_secret, path.read_text())
             with self.assertRaises(RuntimeError) as caught:
                 sanitize_diagnostics._diagnostic_bytes(source.resolve(), outside)
             self.assertIn("outside", str(caught.exception))
@@ -424,10 +489,10 @@ class SanitizeTest(unittest.TestCase):
         self.assertNotIn(b"hunter2", sanitize_diagnostics.redact(prefixed))
 
     def test_registry_credentials_are_redacted(self) -> None:
-        credential = "dXNlcjpwYXNz"
+        test_credential = "dXNlcjpwYXNz"
         raw = (
             'DOCKER_AUTH_CONFIG={"auths":{"registry.example":{"auth":"'
-            + credential
+            + test_credential
             + '"}}}\nbridge sysctl is 0\n'
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -437,18 +502,18 @@ class SanitizeTest(unittest.TestCase):
             (source / "job.log").write_text(raw)
             sanitize_diagnostics.sanitize_tree(source, destination)
             cleaned = (destination / "job.log").read_text()
-        self.assertNotIn(credential, cleaned)
+        self.assertNotIn(test_credential, cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
         quoted = sanitize_diagnostics.redact(b'"auth": "dXNlcjpwYXNz"\n')
         self.assertNotIn(b"dXNlcjpwYXNz", quoted)
         self.assertIn(b'"auth": "[REDACTED]"', quoted)
 
     def test_anchored_secret_blocks_are_rejected(self) -> None:
-        secret = "hunter2"
+        test_secret = "hunter2"
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "logs"
             source.mkdir()
-            (source / "job.log").write_text(f"password: &credential |\n  {secret}\n")
+            (source / "job.log").write_text(f"password: &credential |\n  {test_secret}\n")
             with self.assertRaises(RuntimeError) as caught:
                 sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
             self.assertIn("anchor", str(caught.exception))
@@ -456,7 +521,7 @@ class SanitizeTest(unittest.TestCase):
             if destination.exists():
                 for path in destination.rglob("*"):
                     if path.is_file():
-                        self.assertNotIn(secret, path.read_text())
+                        self.assertNotIn(test_secret, path.read_text())
 
     def test_private_key_header_without_an_end_marker_fails(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
@@ -466,6 +531,24 @@ class SanitizeTest(unittest.TestCase):
             (source / "job.log").write_text(f"{begin}\npartial\n")
             with self.assertRaises(RuntimeError):
                 sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
+
+    def test_pgp_private_key_is_redacted_and_an_open_header_fails(self) -> None:
+        begin = "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----"
+        end = "-----END " + "PGP PRIVATE KEY BLOCK-----"
+        material = "pgp-key-material"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(f"{begin}\n{material}\n{end}\nbridge sysctl is 0\n")
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+            self.assertNotIn(material, cleaned)
+            self.assertNotIn(begin, cleaned)
+            self.assertIn("bridge sysctl is 0", cleaned)
+            (source / "open.log").write_text(f"{begin}\npartial\n")
+            with self.assertRaises(RuntimeError):
+                sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean-open")
 
     def test_nested_secret_mappings_are_redacted(self) -> None:
         test_secret = "nested-secret"
@@ -483,8 +566,8 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("bridge sysctl is 0", cleaned)
 
     def test_sequence_secret_entries_are_redacted(self) -> None:
-        secret = "hunter2"
-        raw = f"- password:\n    value: {secret}\nbridge sysctl is 0\n"
+        test_secret = "hunter2"
+        raw = f"- password:\n    value: {test_secret}\nbridge sysctl is 0\n"
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "logs"
             destination = Path(tmp) / "clean"
@@ -492,7 +575,7 @@ class SanitizeTest(unittest.TestCase):
             (source / "job.log").write_text(raw)
             sanitize_diagnostics.sanitize_tree(source, destination)
             cleaned = (destination / "job.log").read_text()
-        self.assertNotIn(secret, cleaned)
+        self.assertNotIn(test_secret, cleaned)
         self.assertNotIn("value:", cleaned)
         self.assertIn("- password: [REDACTED]", cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
@@ -589,6 +672,8 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(copy_fn.index("mktemp"), copy_fn.index('rm -rf "$LOG_DIR"'))
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertIn('sh -s -- "$home" "$PUB_KEY"', setup)
+        self.assertIn("--switch", setup)
+        self.assertIn("br-host2", setup)
         self.assertIn("<<'EOF'", setup)
         teardown = next(step for step in steps if "teardown.sh" in step.get("run", ""))
         self.assertEqual(teardown["if"], "always()")
@@ -621,7 +706,10 @@ class WorkflowContractTest(unittest.TestCase):
 
         upload = next(step for step in steps if step.get("name") == "Upload sanitized diagnostics")
         self.assertIn("steps.publish-attestation.outcome == 'success'", upload["if"])
+        self.assertIn("inputs.pr-number != ''", upload["if"])
+        self.assertIn("steps.sanitize.outcome == 'success'", upload["if"])
         attest = next(step for step in steps if "attest-build-provenance" in step.get("uses", ""))
+        self.assertIn("inputs.pr-number == ''", attest["if"])
         self.assertIn("e8998f949152b193b063cb0ec769d69d929409be", attest["uses"])
         self.assertIn("logs-sanitized/**", attest["with"]["subject-path"])
         sanitize = next(step for step in steps if step.get("name") == "Sanitize diagnostics")
@@ -681,7 +769,8 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("leaf1-swp2", bridges)
         self.assertIn("sysctl -n net.bridge.bridge-nf-call-iptables", bridges)
         self.assertIn("sysctl -n net.bridge.bridge-nf-call-ip6tables", bridges)
-        self.assertIn("/var/tmp/osac-host-bridge-sysctl.prior", bridges)
+        self.assertIn("/var/lib/osac-host-bridges/sysctl.prior", bridges)
+        self.assertLess(bridges.index("not a root-owned private"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
         self.assertLess(bridges.index("sysctl -n net.bridge.bridge-nf-call-iptables"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
         self.assertIn("restore_host_bridge_sysctls", bridges)
         restore = bridges.split("restore_host_bridge_sysctls()", 1)[1].split("prepare_failed()", 1)[0]
