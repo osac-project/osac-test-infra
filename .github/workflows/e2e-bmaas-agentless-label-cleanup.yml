@@ -1,5 +1,5 @@
 ---
-name: Remove BMaaS Agentless trigger on new push
+name: Cancel the BMaaS Agentless suite on a new push
 
 on:
   pull_request_target:
@@ -7,27 +7,18 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   # Same PR-scoped group as e2e-pr-bmaas-agentless.yml, so a new commit cancels
   # that suite. This workflow does not check out the pull request.
+  # The suite starts from /test, not from a label, so there is nothing to remove.
   group: e2e-bmaas-agentless-net-full-install-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  reset-trigger:
-    name: Reset BMaaS Agentless trigger
-    if: contains(github.event.pull_request.labels.*.name, 'e2e-bmaas-agentless')
+  cancel-stale-run:
+    name: Cancel the in-progress Agentless suite
     runs-on: ubuntu-latest
     steps:
-      - name: Remove stale Agentless trigger label
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "e2e-bmaas-agentless"
-          gh pr comment "${PR_NUMBER}" --repo "${REPO}" \
-            --body "Removed \`e2e-bmaas-agentless\` due to new commits. Re-run \`/test bmaas-agentless\` for the new revision."
+      - name: Join the suite concurrency group
+        run: echo "A new commit cancels the in-progress Agentless suite."
