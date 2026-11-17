@@ -24,6 +24,14 @@ ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "
 ERROR = re.compile(rb"\b(error|exception|failed|could not|unable to)\b", re.IGNORECASE)
 
 
+def cleaner_error(output):
+    return any(
+        (b"[cleaner" in line or b"Unable to obfuscate report:" in line or b"private map file:" in line)
+        and ERROR.search(line)
+        for line in output.splitlines()
+    )
+
+
 def capture(command, timeout=100, limit=MAX_LOG, cwd=None):
     result = bytearray()
     deadline = time.monotonic() + timeout
@@ -50,14 +58,18 @@ def capture(command, timeout=100, limit=MAX_LOG, cwd=None):
                             result.extend(chunk)
                             if len(result) > limit:
                                 raise ValueError("collection output limit")
-            if process.wait(timeout=max(0.1, deadline - time.monotonic())):
-                raise ValueError("collection failed")
+            while os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("collection deadline")
+                time.sleep(0.01)
         finally:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             process.wait()
+        if process.returncode:
+            raise ValueError("collection failed")
     return bytes(result)
 
 
@@ -71,6 +83,7 @@ def report_command(scratch, binary):
         "--no-update",
         "--build",
         "--log-size=1",
+        "--journal-size=1",
         "--plugin-timeout=15",
         "--cmd-timeout=10",
         "--threads=2",
@@ -82,7 +95,7 @@ def report_command(scratch, binary):
 
 def selected_tree(scratch, output):
     completions = list(re.finditer(rb"(?m)^Successfully obfuscated 1 report\(s\)[ \t]*$", output))
-    if ERROR.search(output) or len(completions) != 1:
+    if cleaner_error(output) or len(completions) != 1:
         raise ValueError("masking was not confirmed")
     matches = list(re.finditer(rb"Your sos report build tree has been generated in:\s*\n\s*([^\r\n]+)", output))
     if len(matches) != 1 or matches[0].start() <= completions[0].end():
@@ -135,15 +148,27 @@ def worker():
         (scratch / "mapping.json").write_text("{}")
         binary = next(path for path in ("/usr/sbin/sos", "/usr/bin/sos") if pathlib.Path(path).is_file())
         help_output = capture([binary, "report", "--help"], timeout=10, cwd=scratch)
-        for option in ("--no-env-vars", "--cleaner", "--no-update", "--build", "--batch", "--map-file"):
+        for option in (
+            "--no-env-vars",
+            "--cleaner",
+            "--no-update",
+            "--build",
+            "--batch",
+            "--map-file",
+            "--journal-size",
+        ):
             if option.encode() not in help_output:
                 raise ValueError("required SOS option unavailable")
         output = capture(report_command(scratch, binary), cwd=scratch)
         tree = selected_tree(scratch, output)
-        for log in (tree / "sos_logs").glob("*.log"):
-            if log.is_symlink() or log.stat().st_size > MAX_MEMBER:
+        logs = tree / "sos_logs"
+        if logs.is_symlink() or not logs.is_dir():
+            raise ValueError("SOS logs unavailable")
+        for name in ("sos.log", "ui.log"):
+            log = logs / name
+            if log.is_symlink() or not stat.S_ISREG(log.stat().st_mode) or log.stat().st_size > MAX_MEMBER:
                 raise ValueError("SOS log inspection limit")
-            if any(b"[cleaner" in line and ERROR.search(line) for line in log.read_bytes().splitlines()):
+            if cleaner_error(log.read_bytes()):
                 raise ValueError("SOS logged a masking error")
         transport = io.BytesIO()
         pack_tree(tree, transport)

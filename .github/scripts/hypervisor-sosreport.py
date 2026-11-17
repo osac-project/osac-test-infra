@@ -88,6 +88,7 @@ def eligible():
         try:
             if (
                 not saved.is_symlink()
+                and stat.S_ISREG(saved.stat().st_mode)
                 and saved.stat().st_size < 4096
                 and matches(json.loads(saved.read_text()))
                 and not report.is_symlink()
@@ -221,6 +222,9 @@ def scan(tree, work):
     subprocess.run(
         command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45, preexec_fn=limit_file, check=True
     )
+    gate_report = json.loads((work / "gate.json").read_text())
+    if gate_report.get("withheld") != [] or gate_report.get("censored") != []:
+        raise ValueError("release gate did not inspect the complete report")
     engine = shutil.which("docker") or shutil.which("podman")
     if not engine:
         raise ValueError("scanner unavailable")
@@ -277,7 +281,10 @@ def scan(tree, work):
 def publish():
     verify_destination()
     path = candidate()
-    state = json.loads((path.parent / "publish-private-artifacts.json").read_text())
+    state_file = path.parent / "publish-private-artifacts.json"
+    if state_file.is_symlink() or not stat.S_ISREG(state_file.stat().st_mode) or state_file.stat().st_size > 4096:
+        raise ValueError("invalid private staging state")
+    state = json.loads(state_file.read_text())
     staged = pathlib.Path(state["dir"])
     if (
         staged.parent != STAGING_ROOT
@@ -296,10 +303,7 @@ def publish():
             tree.mkdir(mode=0o700)
             unpack(path / "report.tar", tree)
             scan(tree, work)
-            output = work / "hypervisor-sosreport.tar.gz"
-            with tarfile.open(output, "w:gz") as archive:
-                archive.add(tree, arcname="hypervisor-sosreport", recursive=True)
-            os.replace(output, staged / output.name)
+            os.rename(tree, staged / "hypervisor-sosreport")
     except Exception:
         print("::notice::Hypervisor report withheld")
     finally:
@@ -310,12 +314,14 @@ def publish():
 def inventory():
     path = candidate()
     source = pathlib.Path(os.environ.get("K8S_SECRETS_FILE") or path.parent / "osac-secret-inventory/k8s-secrets.json")
-    if not path.is_symlink() and path.is_dir() and source.is_file() and not source.is_symlink():
+    if eligible() and source.is_file() and not source.is_symlink():
         if source.stat().st_size > MAX_MEMBER:
             raise ValueError("secret inventory too large")
-        with source.open("rb") as incoming, (path / "k8s-secrets.json").open("xb") as outgoing:
-            os.chmod(outgoing.name, 0o600)
-            shutil.copyfileobj(incoming, outgoing, length=65536)
+        with tempfile.TemporaryDirectory(prefix="inventory-", dir=path) as temporary:
+            output = pathlib.Path(temporary) / "inventory.json"
+            with source.open("rb") as incoming, output.open("xb") as outgoing:
+                shutil.copyfileobj(incoming, outgoing, length=65536)
+            os.replace(output, path / "k8s-secrets.json")
 
 
 def interrupted(_signum, _frame):
@@ -344,10 +350,10 @@ def main():
     except Exception:
         try:
             discard()
-        except OSError:
+        except Exception:
             pass
         print("::notice::Hypervisor report withheld")
-        return 1 if operation == ["publish"] else 0
+        return 2 if operation == ["publish"] else int(operation == ["eligible"])
     return 0
 
 

@@ -147,10 +147,15 @@ runs:
         KNOWN_SECRET_FILES: ${{ inputs.known-secret-files }}
         KNOWN_SECRET_ENV: ${{ inputs.known-secret-env }}
       run: |
-        if python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" publish; then
+        status=0
+        python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" publish || status=$?
+        if [[ ${status} -eq 0 ]]; then
           echo "verified=true" >> "${GITHUB_OUTPUT}"
-        else
+        elif [[ ${status} -eq 1 ]]; then
           echo "::notice::Private publication withheld"
+        else
+          echo "::error::Private publication verification failed"
+          exit 1
         fi
 
     - name: Dispatch the collect workflow

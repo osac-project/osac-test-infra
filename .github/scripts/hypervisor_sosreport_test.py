@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -42,6 +43,9 @@ class HostTest(unittest.TestCase):
         self.report = self.root / "sosreport-fixture-obfuscated"
         self.report.mkdir()
         (self.report / "fixture.txt").write_text("fixture diagnostic\n")
+        (self.report / "sos_logs").mkdir()
+        for name in ("sos.log", "ui.log"):
+            (self.report / "sos_logs" / name).write_text("fixture benign plugin diagnostic\n")
         self.output = (
             f"Successfully obfuscated 1 report(s)\nYour sos report build tree has been generated in:\n\t{self.report}\n"
         ).encode()
@@ -59,6 +63,47 @@ class HostTest(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 HOST.selected_tree(self.root, output)
 
+    def test_benign_plugin_failures_do_not_invalidate_cleaner_completion(self):
+        output = b"[plugin:libvirt] Could not query fixture inactive domain\n" + self.output
+        self.assertEqual(HOST.selected_tree(self.root, output), self.report)
+        with self.assertRaises(ValueError):
+            HOST.selected_tree(self.root, self.output + b"[cleaner] Failed to obfuscate directories\n")
+
+    def test_process_group_cleanup_precedes_reaping(self):
+        events = []
+        original_wait = subprocess.Popen.wait
+        original_killpg = os.killpg
+
+        def fixture_wait(process, *args, **kwargs):
+            events.append("reap")
+            return original_wait(process, *args, **kwargs)
+
+        def fixture_killpg(*args):
+            events.append("signal")
+            return original_killpg(*args)
+
+        with mock.patch.object(subprocess.Popen, "wait", fixture_wait), mock.patch.object(os, "killpg", fixture_killpg):
+            self.assertEqual(HOST.capture([sys.executable, "-c", "print('fixture')"]), b"fixture\n")
+        self.assertEqual(events[0], "signal")
+
+    def test_normal_completion_also_stops_remaining_descendants(self):
+        command = (
+            "import subprocess,sys; "
+            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(2)'],"
+            "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(child.pid)"
+        )
+        child = int(HOST.capture([sys.executable, "-c", command]))
+        state = pathlib.Path(f"/proc/{child}/stat")
+        deadline = time.monotonic() + 0.5
+        while state.exists():
+            try:
+                if state.read_text().split()[2] in ("Z", "X"):
+                    break
+            except FileNotFoundError:
+                break
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+
     def test_rejects_symlink_and_outside_output(self):
         link = self.root / "fixture_link"
         link.symlink_to(self.report, target_is_directory=True)
@@ -70,11 +115,12 @@ class HostTest(unittest.TestCase):
         command = HOST.report_command(self.root, "/usr/sbin/sos")
         for option in ("--no-env-vars", "--cleaner", "--no-update", "--batch", "--build"):
             self.assertIn(option, command)
+        self.assertIn("--journal-size=1", command)
         self.assertFalse(any(argument.startswith("--upload") for argument in command))
         self.assertIn(f"--config-file={self.root}/sos.conf", command)
 
     def test_log_and_mapping_not_in_transport(self):
-        (self.report / "sos_logs").mkdir()
+        (self.report / "sos_logs").mkdir(exist_ok=True)
         (self.report / "sos_logs/sos.log").write_text("fixture raw log")
         (self.report / "fixture-private_map").write_text("fixture mapping")
         (self.report / "fixture_link").symlink_to("fixture.txt")
@@ -115,7 +161,7 @@ class HostTest(unittest.TestCase):
                         self.assertLessEqual(capture.call_count, 1)
 
     def test_supported_worker_has_a_real_positive_path_without_host_commands(self):
-        help_output = b"--no-env-vars --cleaner --no-update --build --batch --map-file"
+        help_output = b"--no-env-vars --cleaner --no-update --build --batch --map-file --journal-size"
         with (
             mock.patch.dict(sys.modules, {"sos": mock.Mock(__version__="4.10.0")}),
             mock.patch.object(HOST.tempfile, "TemporaryDirectory") as temporary,
@@ -129,6 +175,37 @@ class HostTest(unittest.TestCase):
                 HOST.worker()
                 self.assertTrue(output.buffer.write.called)
             self.assertEqual(capture.call_count, 2)
+
+    def test_missing_or_failed_cleaner_logs_withhold_after_positive_completion(self):
+        for mode in ("missing", "failed"):
+            log = self.report / "sos_logs/sos.log"
+            if mode == "missing":
+                log.unlink()
+            else:
+                log.write_text("2026-11-17 INFO: [cleaner] Failed to obfuscate directories\n")
+            with (
+                self.subTest(mode=mode),
+                mock.patch.dict(sys.modules, {"sos": mock.Mock(__version__="4.10.0")}),
+                mock.patch.object(HOST.tempfile, "TemporaryDirectory") as temporary,
+                mock.patch.object(
+                    HOST,
+                    "capture",
+                    side_effect=[
+                        b" ".join(
+                            value.encode()
+                            for value in HOST.report_command(self.root, "fixture")
+                            if value.startswith("--")
+                        ),
+                        self.output,
+                    ],
+                ),
+                mock.patch.object(HOST.pathlib.Path, "is_file", return_value=True),
+                mock.patch.object(HOST.sys, "stdout") as output,
+            ):
+                temporary.return_value.__enter__.return_value = str(self.root)
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    HOST.worker()
+                output.buffer.write.assert_not_called()
 
 
 class HandoffTest(unittest.TestCase):
@@ -179,6 +256,92 @@ class HandoffTest(unittest.TestCase):
         HANDOFF.check_metadata({"private": True, "full_name": HANDOFF.DESTINATION}, HANDOFF.DESTINATION)
         with mock.patch.dict(os.environ, {"GH_DISPATCH_TOKEN": ""}), self.assertRaises(ValueError):
             HANDOFF.verify_destination()
+        with self.assertRaises(ValueError):
+            HANDOFF.NoRedirect().redirect_request(None, None, 302, "fixture", None, "https://fixture.invalid/")
+
+    def test_candidate_binding_fifo_is_never_read(self):
+        path = HANDOFF.candidate()
+        path.mkdir()
+        os.mkfifo(path / "binding.json")
+        (path / "report.tar").write_bytes(b"fixture")
+        with mock.patch.object(pathlib.Path, "read_text", side_effect=AssertionError("fixture FIFO read")):
+            self.assertFalse(HANDOFF.eligible())
+
+    def test_inventory_copy_is_idempotent_on_same_job_retry(self):
+        self.seed_candidate()
+        inventory = self.root / "fixture_inventory.json"
+        inventory.write_text('{"items": []}')
+        with mock.patch.dict(os.environ, {"K8S_SECRETS_FILE": str(inventory)}):
+            HANDOFF.inventory()
+            HANDOFF.inventory()
+        self.assertTrue(HANDOFF.eligible())
+
+    def test_security_failure_is_not_silenced_when_ordinary_artifacts_exist(self):
+        stage = self.seed_candidate()
+        action = yaml.safe_load((REPO / ".github/actions/publish-private-artifacts/action.yml").read_text())
+        step = next(step for step in action["runs"]["steps"] if step.get("id") == "private-gate")
+        outputs = self.root / "fixture_gate_outputs"
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+            env=os.environ | {"GITHUB_WORKSPACE": str(REPO), "GH_DISPATCH_TOKEN": "", "GITHUB_OUTPUT": str(outputs)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Private publication verification failed", result.stdout)
+        self.assertFalse(outputs.exists())
+        self.assertTrue((stage / "fixture_ordinary.txt").exists())
+        self.assertFalse(HANDOFF.candidate().exists())
+
+    def test_optional_scanner_cancellation_keeps_ordinary_artifacts_dispatchable(self):
+        stage = self.seed_candidate()
+        with (
+            mock.patch.object(HANDOFF, "verify_destination"),
+            mock.patch.object(HANDOFF, "scan", side_effect=InterruptedError("fixture private scanner detail")),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertTrue(HANDOFF.publish())
+        self.assertNotIn("fixture private scanner detail", output.getvalue())
+        self.assertTrue((stage / "fixture_ordinary.txt").exists())
+        self.assertFalse((stage / "hypervisor-sosreport").exists())
+        self.assertFalse(HANDOFF.candidate().exists())
+
+    def test_pax_paths_are_checked_and_malformed_transports_rejected(self):
+        for name in ("fixture_" * 24, "../fixture_escape", "/fixture_absolute"):
+            with self.subTest(name=name):
+                archive = self.root / "fixture_pax.tar"
+                with tarfile.open(archive, "w", format=tarfile.PAX_FORMAT) as stream:
+                    member = tarfile.TarInfo("fixture_header")
+                    member.pax_headers = {"path": name}
+                    member.size = 7
+                    stream.addfile(member, io.BytesIO(b"fixture"))
+                with tempfile.TemporaryDirectory(dir=self.root) as output:
+                    if name.startswith("fixture_"):
+                        HANDOFF.unpack(archive, pathlib.Path(output))
+                        self.assertEqual((pathlib.Path(output) / name).read_bytes(), b"fixture")
+                    else:
+                        with self.assertRaises(ValueError):
+                            HANDOFF.unpack(archive, pathlib.Path(output))
+        archive.write_bytes(b"fixture_malformed_tar")
+        with tempfile.TemporaryDirectory(dir=self.root) as output, self.assertRaises(tarfile.ReadError):
+            HANDOFF.unpack(archive, pathlib.Path(output))
+
+    def test_fleet_provisioning_installs_helper_and_package(self):
+        tasks = yaml.safe_load((REPO / "fleet/roles/machine_base/tasks/runner_user.yml").read_text())
+        self.assertIn("osac-hypervisor-sosreport", tasks[0]["loop"])
+        packages = yaml.safe_load((REPO / "fleet/roles/machine_base/tasks/packages.yml").read_text())
+        self.assertIn("sos", packages[0]["ansible.builtin.dnf"]["name"])
+
+    def test_scanner_pin_and_config_match_postrun_consumer(self):
+        scanner = (REPO / ".github/scripts/scan-run-logs.sh").read_text()
+        self.assertIn(f'GITLEAKS_IMAGE="{HANDOFF.IMAGE}"', scanner)
+        self.assertIn("GITLEAKS_CONFIG:-${SCRIPT_DIR}/.gitleaks.toml", scanner)
+        self.assertIn("/.github/scripts/.gitleaks.toml", (REPO / ".github/scripts/hypervisor-sosreport.py").read_text())
+        upload = yaml.safe_load((REPO / ".github/actions/upload-artifacts/action.yml").read_text())
+        scan = next(step for step in upload["runs"]["steps"] if step["name"] == "Scan artifacts with gitleaks")
+        self.assertEqual(scan["env"]["GITLEAKS_IMAGE"], HANDOFF.IMAGE)
+        self.assertTrue(scan["env"]["GITLEAKS_CONFIG"].endswith("/.github/scripts/.gitleaks.toml"))
 
     def test_transport_rejects_links_traversal_duplicates_and_large_members(self):
         for name, kind in (
@@ -242,10 +405,9 @@ class HandoffTest(unittest.TestCase):
         ):
             HANDOFF.publish()
         self.assertEqual(log.getvalue(), "")
-        archive = stage / "hypervisor-sosreport.tar.gz"
-        self.assertTrue(archive.is_file())
-        with tarfile.open(archive) as report:
-            self.assertEqual(report.extractfile("hypervisor-sosreport/fixture.txt").read(), b"fixture diagnostics")
+        report = stage / "hypervisor-sosreport"
+        self.assertTrue(report.is_dir())
+        self.assertEqual((report / "fixture.txt").read_bytes(), b"fixture diagnostics")
         self.assertFalse(HANDOFF.candidate().exists())
         self.assertFalse((self.root / "osac-artifacts").exists())
 
@@ -258,10 +420,10 @@ class HandoffTest(unittest.TestCase):
             mock.patch.object(sys, "argv", ["fixture", "publish"]),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            self.assertEqual(HANDOFF.main(), 1)
+            self.assertEqual(HANDOFF.main(), 2)
         scan.assert_not_called()
         self.assertFalse(HANDOFF.candidate().exists())
-        self.assertFalse((stage / "hypervisor-sosreport.tar.gz").exists())
+        self.assertFalse((stage / "hypervisor-sosreport").exists())
 
     def test_missing_cluster_artifacts_still_use_private_publisher_staging(self):
         for mode in ("clean", "failure"):
@@ -300,7 +462,7 @@ class HandoffTest(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()),
                 ):
                     self.assertEqual(HANDOFF.publish(), mode == "clean")
-                self.assertEqual((stage / "hypervisor-sosreport.tar.gz").exists(), mode == "clean")
+                self.assertEqual((stage / "hypervisor-sosreport").exists(), mode == "clean")
                 self.assertFalse((self.root / "osac-artifacts").exists())
                 self.assertFalse(HANDOFF.candidate().exists())
                 shutil.rmtree(staging)
@@ -341,7 +503,7 @@ class HandoffTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
-        self.assertTrue((stage / "hypervisor-sosreport.tar.gz").is_file())
+        self.assertTrue((stage / "hypervisor-sosreport").is_dir())
 
     def test_scanner_findings_failure_and_missing_result_withhold(self):
         for mode in ("failure", "finding", "missing"):
@@ -355,7 +517,7 @@ class HandoffTest(unittest.TestCase):
                 ):
                     HANDOFF.publish()
                 self.assertNotIn("fixture_private_scanner_log", log.getvalue())
-                self.assertFalse((stage / "hypervisor-sosreport.tar.gz").exists())
+                self.assertFalse((stage / "hypervisor-sosreport").exists())
                 self.assertTrue((stage / "fixture_ordinary.txt").exists())
                 self.assertFalse(HANDOFF.candidate().exists())
                 (stage / "fixture_ordinary.txt").unlink()
@@ -366,6 +528,7 @@ class HandoffTest(unittest.TestCase):
             gzip.compress(gzip.compress(b"fixture nested")),
             self.fixture_archive().read_bytes(),
             b"fixture_sensitive_value_1029384756",
+            b"\x00fixture_sensitive_value_1029384756",
         ):
             with self.subTest(data=data):
                 stage = self.seed_candidate(data)
@@ -379,7 +542,7 @@ class HandoffTest(unittest.TestCase):
                 ):
                     HANDOFF.publish()
                 scanner.assert_not_called()
-                self.assertFalse((stage / "hypervisor-sosreport.tar.gz").exists())
+                self.assertFalse((stage / "hypervisor-sosreport").exists())
                 (stage / "fixture_ordinary.txt").unlink()
                 stage.rmdir()
 
@@ -396,10 +559,10 @@ class HandoffTest(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()) as log,
                 ):
                     opener.return_value.open.return_value = response
-                    self.assertEqual(HANDOFF.main(), 1)
+                    self.assertEqual(HANDOFF.main(), 2)
                 self.assertNotIn("fixture_token", log.getvalue())
                 self.assertFalse(HANDOFF.candidate().exists())
-                self.assertFalse((stage / "hypervisor-sosreport.tar.gz").exists())
+                self.assertFalse((stage / "hypervisor-sosreport").exists())
                 (stage / "fixture_ordinary.txt").unlink()
                 stage.rmdir()
 
@@ -414,7 +577,7 @@ class HandoffTest(unittest.TestCase):
                 ):
                     HANDOFF.publish()
                 scan.assert_not_called()
-                self.assertFalse((stage / "hypervisor-sosreport.tar.gz").exists())
+                self.assertFalse((stage / "hypervisor-sosreport").exists())
                 self.assertFalse(HANDOFF.candidate().exists())
                 (stage / "fixture_ordinary.txt").unlink()
                 stage.rmdir()
@@ -424,7 +587,7 @@ class HandoffTest(unittest.TestCase):
             mock.patch.object(sys, "argv", ["fixture", "publish"]),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            self.assertEqual(HANDOFF.main(), 1)
+            self.assertEqual(HANDOFF.main(), 2)
         self.assertFalse(HANDOFF.candidate().exists())
 
     def test_metadata_network_error_never_uses_a_public_fallback(self):
@@ -436,9 +599,9 @@ class HandoffTest(unittest.TestCase):
             contextlib.redirect_stdout(io.StringIO()),
         ):
             opener.return_value.open.side_effect = TimeoutError("fixture metadata timeout")
-            self.assertEqual(HANDOFF.main(), 1)
+            self.assertEqual(HANDOFF.main(), 2)
         self.assertFalse(HANDOFF.candidate().exists())
-        self.assertFalse((stage / "hypervisor-sosreport.tar.gz").exists())
+        self.assertFalse((stage / "hypervisor-sosreport").exists())
 
     def test_retry_reuses_completed_candidate_and_stale_attempt_is_replaced(self):
         self.seed_candidate()
