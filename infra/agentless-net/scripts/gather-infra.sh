@@ -51,3 +51,4 @@ if [ -f "${INFRA_DIR}/.mgmt-network" ]; then
 fi
 
 info "Diagnostics saved to $LOG_DIR"
+touch "${LOG_DIR}/.gather-infra-complete"

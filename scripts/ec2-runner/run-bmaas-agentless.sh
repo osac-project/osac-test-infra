@@ -100,10 +100,20 @@ case "$phase" in
 esac
 
 if [ "$phase" = "copy-logs" ]; then
-    # prove-bmi can be killed before gather-infra and gather-bmaas. Collect
-    # best-effort snapshots, then copy. One minute each leaves two minutes
-    # of the workflow step for the transfer.
+    # A finished gather already holds the snapshot from before destroy-bmaas.
+    # Running it again would replace that snapshot with deleted objects.
+    # An interrupted proof has no marker, so collect before the host is removed.
+    # One minute each leaves two minutes of the workflow step for the transfer.
     for target in gather-infra gather-bmaas; do
+        marker=""
+        case "$target" in
+            gather-infra) marker="${REMOTE_LOG_DIR}/.gather-infra-complete" ;;
+            gather-bmaas) marker="${REMOTE_LOG_DIR}/bmaas/.gather-bmaas-complete" ;;
+        esac
+        if ssh_exec "test -f $(printf '%q' "$marker")"; then
+            echo "Keeping the ${target} snapshot already collected"
+            continue
+        fi
         echo "Running make ${target}"
         status=0
         run_remote 1 "$(printf 'cd %q && DEPLOY_SUITE=bmaas make %q' "$REMOTE_INFRA" "$target")" || status=$?

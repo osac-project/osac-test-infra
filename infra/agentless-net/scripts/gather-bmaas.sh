@@ -28,4 +28,5 @@ done
 LAB_PREFIX="${LAB_PREFIX:-clab-agentless-net-lab}"
 supervisor_status="$(sudo docker exec "${LAB_PREFIX}-net-node" supervisorctl -c /etc/agentless-net/supervisord.conf status 2>&1 || true)"
 printf '%s\n' "$supervisor_status" >"${LOG_DIR}/supervisor-status.txt"
+touch "${LOG_DIR}/.gather-bmaas-complete"
 echo "gather-bmaas complete"
