@@ -281,6 +281,14 @@ class ProofPayloadTest(unittest.TestCase):
 
 
 class SanitizeTest(unittest.TestCase):
+    def test_escaped_json_password_key_is_redacted(self) -> None:
+        cleaned = sanitize_diagnostics.redact(b'{"pass\\u0077ord":"hunter2"}\n')
+        self.assertNotIn(b"hunter2", cleaned)
+        self.assertIn(b"[REDACTED]", cleaned)
+        with self.assertRaises(RuntimeError) as caught:
+            sanitize_diagnostics.redact(b'{"pass\\u12":"hunter2"}\n')
+        self.assertIn("unsupported escaped secret key", str(caught.exception))
+
     def test_private_keys_passwords_and_bearers_are_removed(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
         end = "-----END " + "OPENSSH PRIVATE KEY-----"
@@ -815,6 +823,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(restore.index('net.bridge.bridge-nf-call-iptables=${ipt}'), removal)
         self.assertLess(restore.index('net.bridge.bridge-nf-call-ip6tables=${ip6}'), removal)
         self.assertLess(restore.rindex("return 1"), removal)
+        corrupt = restore.split("has no saved bridge sysctl values", 1)[1]
+        self.assertLess(corrupt.index("return 1"), corrupt.index("sysctl -w"))
+        self.assertIn("restore_host_bridge_sysctls || exit", bridges)
         fabric_teardown = (INFRA / "scripts" / "destroy-fabric.sh").read_text()
         self.assertIn('prepare-host-bridges.sh" restore', fabric_teardown)
 
@@ -839,7 +850,18 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn('"${DEPLOY_SUITE:-caas}" != "bmaas"', fabric)
         self.assertIn("osac-bmaas-install-stamp", deploy)
         self.assertLess(deploy.index('sha256sum "$overlay_dst"'), deploy.index("make install"))
+        self.assertLess(deploy.index("oc delete configmap osac-bmaas-install-stamp"), deploy.index("make install"))
         self.assertLess(deploy.index("make install"), deploy.index('--from-literal=overlay="$installed_overlay"'))
+        self.assertLess(deploy.index("forwarded_kubeconfig"), deploy.index('source "${INFRA_DIR}/.mgmt-network"'))
+        ocp = (INFRA / "scripts" / "deploy-ocp.sh").read_text()
+        self.assertIn('KUBECONFIG="${KUBECONFIG:-$HOME/.kube/${MGMT_CLONE_NAME}.kubeconfig}"', ocp)
+        backend = (INFRA / "Makefile").read_text()
+        self.assertIn("prepare-suite && $(MAKE) deploy-suite-workload", backend)
+        self.assertIn('if [ "$(DEPLOY_SUITE)" = bmaas ]; then $(MAKE) prove-bmi', backend)
+        root = (ROOT / "Makefile").read_text()
+        root_suite = root.split("deploy-suite: _validate-backend", 1)[1].split("\nrun-tests:", 1)[0]
+        self.assertLess(root_suite.index("prepare-suite"), root_suite.index("_validate-suite-contract"))
+        self.assertLess(root_suite.index("_validate-suite-contract"), root_suite.index("stage=workload"))
         self.assertIn("{.data.profile}", deploy)
         self.assertIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()

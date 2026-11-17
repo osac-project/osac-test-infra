@@ -12,7 +12,9 @@ PULL_SECRET="${OSAC_PULL_SECRET_PATH:-/root/pull-secret}"
 MGMT_VM_NAME="test-infra-cluster-${MGMT_CLONE_NAME}-master-0"
 MGMT_LIBVIRT_NET="test-infra-net-${MGMT_CLONE_NAME}"
 CLUSTER_DOMAIN="test-infra-cluster-${MGMT_CLONE_NAME}.redhat.com"
-KUBECONFIG="$HOME/.kube/${MGMT_CLONE_NAME}.kubeconfig"
+# Keep a caller-supplied kubeconfig. The default matches the Makefile.
+KUBECONFIG="${KUBECONFIG:-$HOME/.kube/${MGMT_CLONE_NAME}.kubeconfig}"
+export KUBECONFIG
 
 info() { echo "==> $*"; }
 

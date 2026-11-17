@@ -11,8 +11,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${SCRIPT_DIR}/.."
 
+# A kubeconfig passed by make is the one .env.infra records. .mgmt-network
+# supplies it only when the caller did not.
+forwarded_kubeconfig="${KUBECONFIG:-}"
 # shellcheck source=/dev/null
 source "${INFRA_DIR}/.mgmt-network"
+if [[ -n "$forwarded_kubeconfig" ]]; then
+    KUBECONFIG="$forwarded_kubeconfig"
+    export KUBECONFIG
+fi
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 OSAC_VALUES_FILE="${OSAC_VALUES_FILE:-values/caas-ci/values.yaml}"
@@ -112,6 +119,9 @@ if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
             echo "ERROR: values overlay changed while it was copied" >&2
             exit 1
         fi
+        # Drop the previous stamp before replacing the install. It is published
+        # again only after validation, so a failed install cannot be skipped.
+        KUBECONFIG="$KUBECONFIG" oc delete configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" --ignore-not-found
         (cd "$INSTALLER_DIR" && \
             KUBECONFIG="$KUBECONFIG" \
             make install \
