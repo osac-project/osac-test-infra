@@ -14,7 +14,6 @@ Run directly: python3 .github/scripts/manage-virtual-bmh-vms.py --help
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import secrets
 import shutil
@@ -52,6 +51,10 @@ BMC_ADDRESS_TEMPLATE = "redfish-virtualmedia+http://{host}:{port}/redfish/v1/Sys
 # Storage files are named after the VM: <name>.qcow2 and <name>-VARS.fd.
 DISK_SUFFIX = ".qcow2"
 VARS_SUFFIX = "-VARS.fd"
+SERIAL_LOG_SUFFIX = ".serial.log"
+
+# Stable disk identity for the Metal3 root device hint to match on.
+DISK_SERIAL = "osac-virt-root"
 
 
 def fail(message: str) -> None:
@@ -60,8 +63,7 @@ def fail(message: str) -> None:
 
 
 def run_virsh(
-    virsh_args: list[str], *, stdin: str | None = None, check: bool = True, capture: bool = False,
-    timeout: int | None = None,
+    virsh_args: list[str], *, stdin: str | None = None, check: bool = True, capture: bool = False
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [*VIRSH, *virsh_args],
@@ -69,7 +71,7 @@ def run_virsh(
         text=True,
         check=check,
         capture_output=capture,
-        timeout=COMMAND_TIMEOUT_SECONDS if timeout is None else timeout,
+        timeout=COMMAND_TIMEOUT_SECONDS,
     )
 
 
@@ -104,15 +106,11 @@ def render_vm_xml(
     vars_path: str,
     efi_code: str,
     network: str,
-    serial_log: Path | None = None,
 ) -> str:
     # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails
     # with "Unable to find 'efi' firmware". The pflash paths already
     # select UEFI.
-    serial = ""
-    if serial_log is not None:
-        serial = (f'<serial type="pty"><log file={quoteattr(str(serial_log))} '
-                  'append="on"/><target port="0"/></serial>')
+    serial_log = Path(disk_path).with_suffix(SERIAL_LOG_SUFFIX)
     return f"""<domain type='kvm'>
   <name>{name}</name>
   <memory unit='MiB'>{memory_mib}</memory>
@@ -134,14 +132,20 @@ def render_vm_xml(
       <driver name='qemu' type='qcow2'/>
       <source file='{disk_path}'/>
       <target dev='vda' bus='virtio'/>
+      <serial>{DISK_SERIAL}</serial>
     </disk>
     <interface type='network'>
       <mac address='{mac}'/>
       <source network='{network}'/>
       <model type='virtio'/>
     </interface>
-    {serial}
-    <console type='pty'/>
+    <serial type='pty'>
+      <log file={quoteattr(str(serial_log))} append='on'/>
+      <target type='isa-serial' port='0'/>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
   </devices>
   <seclabel type='none'/>
 </domain>
@@ -169,7 +173,6 @@ def create_vm(
     network: str,
     redfish_host: str,
     redfish_port: int,
-    history: Path | None = None,
 ) -> Host:
     disk_path = disk_dir / f"{name}{DISK_SUFFIX}"
     vars_path = disk_dir / f"{name}{VARS_SUFFIX}"
@@ -180,15 +183,11 @@ def create_vm(
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
     shutil.copyfile(EFI_VARS, vars_path)
+    # Each new VM starts a private recording; libvirt appends across reboots.
+    serial_log = disk_path.with_suffix(SERIAL_LOG_SUFFIX)
+    with os.fdopen(os.open(serial_log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as recording:
+        os.fchmod(recording.fileno(), 0o600)
 
-    serial_log = None
-    if history is not None:
-        try:
-            state = json.loads((history / "status.json").read_text())
-            if state["serial"] == "bounded virtlogd":
-                serial_log = Path(state["serial_root"]) / f"{name}.serial.log"
-        except (OSError, ValueError, KeyError):
-            pass
     xml = render_vm_xml(
         name=name,
         mac=mac,
@@ -198,36 +197,9 @@ def create_vm(
         vars_path=str(vars_path),
         efi_code=EFI_CODE,
         network=network,
-        serial_log=serial_log,
     )
-    if history is not None:
-        (history / (name + ".defined")).unlink(missing_ok=True)
     run_virsh(["define", "/dev/stdin"], stdin=xml)
-    if history is not None:
-        try:
-            recording = json.loads((history / "status.json").read_text())
-            for attempt in range(3):
-                if bmh_history.defined(history, name):
-                    break
-                if (attempt == 2 or not (history / "ready.json").exists() or
-                        name not in (bmh_history.inventory_names(Path(recording["inventory"]), recording["prefix"]) or set())):
-                    raise ValueError("no acknowledgment")
-                state = run_virsh(["domstate", name], check=False, capture=True, timeout=2)
-                if state.returncode or state.stdout.strip() != "shut off":
-                    raise ValueError("not confirmed inactive")
-                run_virsh(["define", "/dev/stdin"], stdin=xml, timeout=2)
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-            print("WARNING: BMH Defined event not observed before first start; event history may be incomplete.", file=sys.stderr)
-    result = run_virsh(["start", name], check=False, capture=True)
-    if result.returncode and serial_log is not None and str(serial_log) in result.stderr:
-        state = run_virsh(["domstate", name], check=False, capture=True)
-        if state.returncode == 0 and state.stdout.strip() == "shut off":
-            root = ET.fromstring(xml)
-            root.find("./devices/serial").remove(root.find("./devices/serial/log"))
-            run_virsh(["define", "/dev/stdin"], stdin=ET.tostring(root, encoding="unicode"))
-            result = run_virsh(["start", name], check=False, capture=True)
-            print("WARNING: retrying BMH start without optional serial logging.", file=sys.stderr)
-    result.check_returncode()
+    run_virsh(["start", name])
 
     uuid = run_virsh(["domuuid", name], capture=True).stdout.strip()
 
@@ -304,6 +276,10 @@ def cmd_create(args: argparse.Namespace) -> None:
     inventory = RawInventory.load(args.inventory_file)
     name_prefix = inventory.ensure_name_prefix(args.inventory_file)
 
+    args.disk_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(args.disk_dir, 0o755)
+
+    print(f"==> Creating {args.count} VM(s) on network {args.network}...")
     tokens = []
     if args.record_history:
         for _ in range(args.count):
@@ -311,12 +287,7 @@ def cmd_create(args: argparse.Namespace) -> None:
             inventory.planned_names.append(f"{name_prefix}-{token}")
             tokens.append(token)
         inventory.save(args.inventory_file)
-    history = bmh_history.start(args.inventory_file, name_prefix) if args.record_history else None
-
-    args.disk_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(args.disk_dir, 0o755)
-
-    print(f"==> Creating {args.count} VM(s) on network {args.network}...")
+        bmh_history.start(args.inventory_file, name_prefix)
     created: list[str] = []
     for index in range(args.count):
         token = tokens[index] if args.record_history else generate_vm_token(inventory.hosts, name_prefix, inventory.planned_names)
@@ -334,7 +305,6 @@ def cmd_create(args: argparse.Namespace) -> None:
                 network=args.network,
                 redfish_host=args.redfish_host,
                 redfish_port=args.redfish_port,
-                history=history,
             )
         )
         # Save after each VM: a crash leaves an accurate inventory.
@@ -372,8 +342,6 @@ def cmd_delete(args: argparse.Namespace) -> None:
     for name in unknown_names:
         if not delete_vm(name):
             failed_names.append(name)
-        else:
-            deleted_names.append(name)
 
     inventory.remove_hosts(deleted_names)
     inventory.save(args.inventory_file)
@@ -397,7 +365,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     create.add_argument("--redfish-port", type=int, default=8000, help="sushy-emulator port (default: 8000)")
     create.add_argument("--count", type=int, default=1, help="number of VMs to create (default: 1)")
-    create.add_argument("--record-history", action="store_true", help="record run-owned lifecycle, reboot and serial history")
     create.add_argument("--cpu", type=int, default=DEFAULT_CPU, help=f"vCPUs per VM (default: {DEFAULT_CPU})")
     create.add_argument(
         "--memory-mib",
@@ -410,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_DISK_SIZE,
         help=f"qcow2 virtual disk size (default: {DEFAULT_DISK_SIZE})",
     )
+    create.add_argument("--record-history", action="store_true", help="record run-owned lifecycle and reboot events")
     create.set_defaults(func=cmd_create)
 
     delete = subparsers.add_parser("delete", help="remove VMs from libvirt and the raw inventory")
