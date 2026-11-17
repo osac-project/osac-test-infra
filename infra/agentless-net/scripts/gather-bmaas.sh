@@ -22,7 +22,9 @@ oc -n "$BMH_NAMESPACE" get baremetalhosts -o yaml >"${LOG_DIR}/baremetalhosts.ya
 oc -n "$OSAC_NAMESPACE" get baremetalinstances -o yaml >"${LOG_DIR}/baremetalinstances.yaml" 2>&1 || true
 oc -n "$OSAC_NAMESPACE" get virtualnetworks,subnets -o yaml >"${LOG_DIR}/networks.yaml" 2>&1 || true
 sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables >"${LOG_DIR}/bridge-sysctl.txt" 2>&1 || true
-ip -d link show br-host1 >"${LOG_DIR}/br-host1.txt" 2>&1 || true
+for bridge in br-host1 br-host2; do
+    ip -d link show "$bridge" >"${LOG_DIR}/${bridge}.txt" 2>&1 || true
+done
 LAB_PREFIX="${LAB_PREFIX:-clab-agentless-net-lab}"
 supervisor_status="$(sudo docker exec "${LAB_PREFIX}-net-node" supervisorctl -c /etc/agentless-net/supervisord.conf status 2>&1 || true)"
 printf '%s\n' "$supervisor_status" >"${LOG_DIR}/supervisor-status.txt"

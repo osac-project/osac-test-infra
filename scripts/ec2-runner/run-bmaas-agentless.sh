@@ -116,7 +116,7 @@ run_required() {
         return 0
     fi
     echo "Running make ${target}"
-    remote_cmd=$(printf 'cd %q && make %q' "$REMOTE_INFRA" "$target")
+    remote_cmd=$(printf 'cd %q && DEPLOY_SUITE=bmaas make %q' "$REMOTE_INFRA" "$target")
     status=0
     run_remote "$minutes" "$remote_cmd" || status=$?
     if [ "$status" -ne 0 ]; then
@@ -130,7 +130,7 @@ run_optional() {
     local target="$2"
     local remote_cmd
     echo "Running make ${target}"
-    remote_cmd=$(printf 'cd %q && make %q' "$REMOTE_INFRA" "$target")
+    remote_cmd=$(printf 'cd %q && DEPLOY_SUITE=bmaas make %q' "$REMOTE_INFRA" "$target")
     status=0
     run_remote "$minutes" "$remote_cmd" || status=$?
     if [ "$status" -ne 0 ]; then
@@ -178,7 +178,7 @@ run_required 30 setup-infra
 run_required 60 deploy-ocp
 if [ "$install_status" -eq 0 ]; then
     echo "Running make deploy-osac"
-    deploy_cmd=$(printf 'cd %q && OSAC_PROFILE=bmaas-ci OSAC_REPO=%q OSAC_BRANCH=%q make deploy-osac' \
+    deploy_cmd=$(printf 'cd %q && DEPLOY_SUITE=bmaas OSAC_REPO=%q OSAC_BRANCH=%q make deploy-osac' \
         "$REMOTE_INFRA" "$OSAC_REPO" "$OSAC_BRANCH")
     status=0
     run_remote 90 "$deploy_cmd" || status=$?
@@ -189,6 +189,9 @@ if [ "$install_status" -eq 0 ]; then
 fi
 if [ "$phase" = "cluster" ]; then
     if [ "$install_status" -ne 0 ]; then
+        # The prove phase is skipped after this failure, so collect cluster
+        # diagnostics here. copy-logs still runs from the workflow.
+        run_optional 10 gather-infra
         exit "$install_status"
     fi
     exit 0

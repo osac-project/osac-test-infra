@@ -69,9 +69,11 @@ wait
 info "All switches ready."
 
 # Host bridges must exist before a virtual BMH fabric NIC is attached.
-# setup-caas skips bridge creation when these already exist.
-info "Preparing host bridges for fabric NICs..."
-"${SCRIPT_DIR}/prepare-host-bridges.sh"
+# The sysctl change is BMaaS-only. CaaS still creates its bridges in setup-caas.
+if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
+    info "Preparing host bridges for fabric NICs..."
+    "${SCRIPT_DIR}/prepare-host-bridges.sh"
+fi
 
 # ---------- fix sudo on switches ----------
 

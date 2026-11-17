@@ -609,7 +609,7 @@ class WorkflowContractTest(unittest.TestCase):
         caller = yaml.safe_load(CALLER.read_text())
         caller_trigger = caller[True]
         self.assertIn("workflow_dispatch", caller_trigger)
-        self.assertEqual(caller_trigger["schedule"][0]["cron"], "0 0 * * *")
+        self.assertEqual(caller_trigger["schedule"][0]["cron"], "15 1 * * *")
         self.assertNotIn("pull_request_target", caller_trigger)
         self.assertNotIn("pull_request", caller_trigger)
         self.assertNotIn("github.event.pull_request", CALLER.read_text())
@@ -678,7 +678,10 @@ class WorkflowContractTest(unittest.TestCase):
             "destroy-bmaas",
         ):
             self.assertIn(target, remote)
-        self.assertIn("OSAC_PROFILE=bmaas-ci", remote)
+        self.assertIn("DEPLOY_SUITE=bmaas", remote)
+        self.assertNotIn("OSAC_PROFILE=bmaas-ci", remote)
+        cluster_exit = remote.split('if [ "$phase" = "cluster" ]', 1)[1].split("exit 0", 1)[0]
+        self.assertLess(cluster_exit.index("gather-infra"), cluster_exit.index('exit "$install_status"'))
         self.assertNotRegex(remote, r"timeout\b[^\n]*\bssh_exec\b")
         self.assertIn('timeout "${minutes}m" ssh', remote)
         self.assertIn("copy-logs", remote)
@@ -811,9 +814,10 @@ class WorkflowContractTest(unittest.TestCase):
         deploy = (INFRA / "scripts" / "deploy-osac.sh").read_text()
         self.assertIn('PROFILE="$OSAC_PROFILE"', deploy)
         self.assertIn("VALUES_FILE=values/agentless-net-ci/values.yaml", deploy)
-        self.assertLess(deploy.index('if [[ -z "${OSAC_PROFILE:-}" ]];'), deploy.index("Merging values overlay"))
+        self.assertLess(deploy.index('if [[ "${DEPLOY_SUITE:-}" != "bmaas" ]];'), deploy.index("Merging values overlay"))
+        self.assertLess(deploy.index('if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]];'), deploy.index("values-bmaas-overlay.yaml"))
         fabric = (INFRA / "scripts" / "deploy-fabric.sh").read_text()
-        self.assertIn("prepare-host-bridges.sh", fabric)
+        self.assertLess(fabric.index('"${DEPLOY_SUITE:-}" == "bmaas"'), fabric.index("prepare-host-bridges.sh"))
         self.assertIn("caas-l2-advertisement", fabric)
         self.assertIn("--ignore-not-found", fabric)
         self.assertLess(fabric.index("l2advertisements.metallb.io"), fabric.index("oc get l2advertisement"))
@@ -830,6 +834,22 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf pid", setup)
         gather = (INFRA / "scripts" / "gather-bmaas.sh").read_text()
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf status", gather)
+        self.assertIn("br-host1", gather)
+        self.assertIn("br-host2", gather)
+        setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
+        self.assertIn("OSAC_BMI_NETWORK_INTERFACE=eth9", setup)
+        self.assertIn("OSAC_BMI_INSTANCE_TYPE=bmaas-agentless-ci", setup)
+        self.assertLess(setup.index("Publishing the AgentlessNet inventory"), setup.index("OSAC_BMI_NETWORK_INTERFACE=eth9"))
+        makefile = (INFRA / "Makefile").read_text()
+        capabilities = (INFRA / "capabilities").read_text()
+        self.assertIn('SUPPORTED_DEPLOY_SUITES="caas bmaas"', capabilities)
+        self.assertIn("OSAC_PROFILE is derived from DEPLOY_SUITE", makefile)
+        self.assertIn("deploy-setup: setup-infra", makefile)
+        self.assertIn("prepare-suite:", makefile)
+        self.assertIn("setup-$(DEPLOY_SUITE)", makefile)
+        contract = (INFRA / "contracts" / "bmaas").read_text()
+        self.assertIn("OSAC_BMI_INSTANCE_TYPE", contract)
+        self.assertIn("OSAC_BMI_NETWORK_INTERFACE", contract)
 
 
 if __name__ == "__main__":

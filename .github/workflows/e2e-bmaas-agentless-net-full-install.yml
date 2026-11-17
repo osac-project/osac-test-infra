@@ -16,7 +16,7 @@ on:
         description: "Deployment scenario recorded on the diagnostics artifact"
         required: false
         type: string
-        default: "bmaas-agentless"
+        default: "bmaas"
       instance-type:
         description: "EC2 instance type"
         required: false
@@ -36,7 +36,7 @@ on:
         description: "Commands to verify on the box before the install"
         required: false
         type: string
-        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+        default: "dnf install -y ansible-core python3-pip make; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make"
       osac-repo:
         description: "Override osac mono-repo git URI -- empty means upstream"
         required: false

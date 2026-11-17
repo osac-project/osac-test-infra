@@ -4,18 +4,31 @@ EXTRA_VARS ?=
 ENV_INFRA := .env.infra
 SCRIPTS := scripts
 
+# DEPLOY_SUITE selects the scenario. The profile is derived from it.
+# caas (default) keeps the existing CaaS flow. bmaas installs the bmaas-ci profile.
+# The root Makefile also forwards KUBECONFIG, OSAC_VM_KUBECONFIG, OSAC_PULL_SECRET_PATH,
+# and EXTRA_VARS. This backend records KUBECONFIG and does not consume EXTRA_VARS.
+DEPLOY_SUITE ?= caas
+ifeq ($(origin OSAC_PROFILE),command line)
+$(error OSAC_PROFILE is derived from DEPLOY_SUITE; choose the deployment scenario with DEPLOY_SUITE)
+endif
+OSAC_PROFILE = $(if $(filter bmaas,$(DEPLOY_SUITE)),bmaas-ci,caas-ci)
+
 MGMT_CLONE_NAME ?= agentless-lab-mgmt
 OSAC_NAMESPACE ?= osac-e2e-ci
 OSAC_VALUES_FILE ?= values/caas-ci/values.yaml
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
+KUBECONFIG ?= $(HOME)/.kube/$(MGMT_CLONE_NAME).kubeconfig
 
-export MGMT_CLONE_NAME OSAC_NAMESPACE OSAC_VALUES_FILE OSAC_PULL_SECRET_PATH
+export DEPLOY_SUITE OSAC_PROFILE MGMT_CLONE_NAME OSAC_NAMESPACE OSAC_VALUES_FILE OSAC_PULL_SECRET_PATH KUBECONFIG
 
 # ─── Contract targets ──────────────────────────────────────────────
 #
 # Called individually from the workflow or command line.
-# Order: setup-infra → deploy-ocp → deploy-osac → deploy-fabric → setup-caas → test-e2e
-# BMaaS: setup-infra → deploy-ocp → deploy-osac (OSAC_PROFILE=bmaas-ci) → deploy-fabric → setup-bmaas → prove-bmi
+# Root order: deploy-setup → deploy-infra → deploy-ocp → deploy-osac → prepare-suite.
+# Fabric attaches to the running management VM, so prepare-suite runs it after OSAC.
+# BMaaS: DEPLOY_SUITE=bmaas. The profile is bmaas-ci. prove-bmi is the one-BMI proof
+# until the mono-repo has a one-host test selection.
 
 setup-infra:
 	@echo "=== Installing prerequisites ==="
@@ -29,8 +42,9 @@ deploy-osac:
 	@echo "=== Installing OSAC via Helm ==="
 	$(SCRIPTS)/deploy-osac.sh
 	@printf '%s\n' \
-		'KUBECONFIG=$(HOME)/.kube/$(MGMT_CLONE_NAME).kubeconfig' \
+		'KUBECONFIG=$(abspath $(KUBECONFIG))' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
+		'OSAC_VM_KUBECONFIG=$(abspath $(KUBECONFIG))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
 
@@ -88,9 +102,33 @@ gather-bmaas:
 	@echo "=== Gathering virtual BMH and BMI diagnostics ==="
 	$(SCRIPTS)/gather-bmaas.sh || true
 
+# Root contract names. deploy-infra and destroy-setup have nothing to do on this backend.
+deploy-setup: setup-infra
+
+deploy-infra:
+	@echo "=== agentless-net has no separate infra provisioning step ==="
+
+destroy-setup:
+	@echo "=== agentless-net setup leaves nothing to remove ==="
+
+destroy-infra: destroy-fabric
+
+prepare-suite:
+	@case "$(DEPLOY_SUITE)" in caas|bmaas) ;; *) echo "Unsupported deployment suite: $(DEPLOY_SUITE)" >&2; exit 2;; esac
+	$(MAKE) deploy-fabric
+	$(MAKE) setup-$(DEPLOY_SUITE)
+
+deploy-suite: prepare-suite
+
+destroy-suite:
+	@case "$(DEPLOY_SUITE)" in caas|bmaas) ;; *) echo "Unsupported deployment suite: $(DEPLOY_SUITE)" >&2; exit 2;; esac
+	$(MAKE) destroy-$(DEPLOY_SUITE)
+	@if [ "$(DEPLOY_SUITE)" = bmaas ]; then $(MAKE) destroy-fabric; fi
+
 # ─── .PHONY ────────────────────────────────────────────────────────
 
-.PHONY: setup-infra deploy-ocp deploy-osac deploy-fabric \
-        setup-caas setup-bmaas prove-bmi test-e2e \
+.PHONY: setup-infra deploy-setup deploy-infra deploy-ocp deploy-osac deploy-fabric \
+        setup-caas setup-bmaas prepare-suite deploy-suite prove-bmi test-e2e \
         destroy-osac destroy-ocp destroy-fabric destroy-caas destroy-bmaas \
+        destroy-suite destroy-setup destroy-infra \
         gather-infra gather-e2e gather-bmaas
