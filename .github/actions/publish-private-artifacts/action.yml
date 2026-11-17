@@ -16,14 +16,6 @@ description: >-
   The runners of one host share /var/tmp, so any of them can pick it up.
 
 inputs:
-  known-secret-files:
-    description: "Known-secret files passed through from upload-artifacts"
-    required: false
-    default: ""
-  known-secret-env:
-    description: "Known-secret environment names passed through from upload-artifacts"
-    required: false
-    default: ""
   artifact-name:
     description: "Name for the artifact in the private repository"
     required: true
@@ -59,7 +51,6 @@ runs:
         SOURCE_DIR_INPUT: ${{ inputs.source-dir }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         HOST_LABEL: ${{ inputs.host-label }}
-        PRIVATE_REPO: ${{ inputs.private-repo }}
       run: |
         set -euo pipefail
         SOURCE_DIR="${SOURCE_DIR_INPUT:-${RUNNER_TEMP}/osac-artifacts}"
@@ -71,13 +62,7 @@ runs:
         # printed in the public run log, and neither belongs there.
         STATE_FILE="${RUNNER_TEMP}/publish-private-artifacts.json"
         rm -f "${STATE_FILE}"
-        HOST_CANDIDATE=false
-        if [[ -s "${RUNNER_TEMP}/osac-hypervisor-sosreport/binding.json" ]]; then
-          if python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" eligible; then
-            HOST_CANDIDATE=true
-          fi
-        fi
-        if [[ ! -d "${SOURCE_DIR}" && "${HOST_CANDIDATE}" != true ]]; then
+        if [[ ! -d "${SOURCE_DIR}" ]]; then
           echo "::warning::No artifact directory at ${SOURCE_DIR} -- nothing to publish"
           echo "staged=false" >> "${GITHUB_OUTPUT}"
           exit 0
@@ -91,9 +76,7 @@ runs:
         # mktemp creates the directory atomically, so two publishes from one
         # job can never share one, and it is private from the start.
         DEST=$(mktemp -d "${STAGING_ROOT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB//[^A-Za-z0-9._-]/_}-${SAFE_NAME}-XXXXXX")
-        if [[ -d "${SOURCE_DIR}" ]]; then
-          cp -a "${SOURCE_DIR}/." "${DEST}/"
-        fi
+        cp -a "${SOURCE_DIR}/." "${DEST}/"
         # cp -a copies the source directory's mode onto DEST too.
         chmod 700 "${DEST}"
         rm -f "${DEST}/.redaction-complete"
@@ -101,7 +84,7 @@ runs:
         # which can be old. The prune above goes by that time, so start the
         # staged directory's day now, when it is published.
         touch "${DEST}"
-        if [[ -z "$(ls -A "${DEST}")" && "${HOST_CANDIDATE}" != true ]]; then
+        if [[ -z "$(ls -A "${DEST}")" ]]; then
           echo "::warning::${SOURCE_DIR} is empty -- nothing to publish"
           rm -rf "${DEST}"
           echo "staged=false" >> "${GITHUB_OUTPUT}"
@@ -137,29 +120,27 @@ runs:
         repositories: ${{ steps.repo.outputs.name }}
         permissions: '{"actions":"write"}'
 
-    - name: Verify private visibility and prepare host report
-      id: private-gate
+    - name: Verify private destination
+      id: visibility
       if: steps.stage.outputs.staged == 'true'
       shell: bash
       env:
-        GH_DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
         PRIVATE_REPO: ${{ inputs.private-repo }}
-        KNOWN_SECRET_FILES: ${{ inputs.known-secret-files }}
-        KNOWN_SECRET_ENV: ${{ inputs.known-secret-env }}
+        GH_DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
       run: |
-        status=0
-        python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" publish || status=$?
-        if [[ ${status} -eq 0 ]]; then
-          echo "verified=true" >> "${GITHUB_OUTPUT}"
-        elif [[ ${status} -eq 1 ]]; then
-          echo "::notice::Private publication withheld"
-        else
-          echo "::error::Private publication verification failed"
-          exit 1
-        fi
+        set -euo pipefail
+        trap 'rm -f "${RUNNER_TEMP}/private-repository.json"' EXIT
+        [[ -n "${GH_DISPATCH_TOKEN}" ]]
+        [[ $(curl --silent --fail --max-time 20 --proto '=https' --write-out '%{http_code}' \
+          -H "Authorization: Bearer ${GH_DISPATCH_TOKEN}" \
+          "https://api.github.com/repos/${PRIVATE_REPO}" \
+          -o "${RUNNER_TEMP}/private-repository.json") == 200 ]]
+        jq -e --arg repo "${PRIVATE_REPO}" \
+          '.private == true and .full_name == $repo' \
+          "${RUNNER_TEMP}/private-repository.json" >/dev/null
 
     - name: Dispatch the collect workflow
-      if: steps.stage.outputs.staged == 'true' && steps.private-gate.outputs.verified == 'true'
+      if: steps.stage.outputs.staged == 'true' && steps.visibility.outcome == 'success'
       shell: bash
       env:
         GH_DISPATCH_TOKEN: ${{ steps.token.outputs.token }}

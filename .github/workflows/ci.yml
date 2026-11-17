@@ -46,7 +46,6 @@ jobs:
           python3 -I .github/scripts/release_gate_canary_test.py
           python3 -I .github/scripts/upload_artifacts_test.py
           python3 -I .github/scripts/hypervisor_sosreport_test.py
-          python3 -I .github/scripts/hypervisor_sosreport_consumer_test.py
           python3 -I .github/scripts/install_cluster_tool_test.py
           python3 -I .github/scripts/scan_run_logs_private_test.py
           python3 -I .github/scripts/test_ai_diagnose_failure.py

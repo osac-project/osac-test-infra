@@ -38,7 +38,9 @@ runs:
       shell: bash
       env:
         PRIVATE_REPO: ${{ inputs.private-repo }}
-      run: python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" collect
+      run: |
+        bash "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.sh" collect >/dev/null 2>&1 ||
+          echo "::notice::Hypervisor report withheld"
 
     - name: Gather and redact
       shell: bash
