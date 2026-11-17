@@ -3,9 +3,10 @@
 # run-bmaas-agentless.sh -- Copy the revision under test onto the ephemeral
 # host, run the BMaaS Agentless install over SSH, and copy diagnostics back.
 #
-# `copy-logs` copies diagnostics only. The workflow runs that after the
-# install so a step timeout still collects logs before the instance is
-# terminated.
+# `copy-logs` gathers whatever the install reached, then copies it. The
+# workflow runs that after the install so a step timeout still collects logs
+# before the instance is terminated. Gather and copy share that step's
+# four-minute budget.
 #
 # The host is not registered as a GitHub Actions runner. The workflow job that
 # calls this script also provisions the instance and tears it down, so a
@@ -99,7 +100,18 @@ case "$phase" in
 esac
 
 if [ "$phase" = "copy-logs" ]; then
-    copy_diagnostics 3
+    # prove-bmi can be killed before gather-infra and gather-bmaas. Collect
+    # best-effort snapshots, then copy. One minute each leaves two minutes
+    # of the workflow step for the transfer.
+    for target in gather-infra gather-bmaas; do
+        echo "Running make ${target}"
+        status=0
+        run_remote 1 "$(printf 'cd %q && DEPLOY_SUITE=bmaas make %q' "$REMOTE_INFRA" "$target")" || status=$?
+        if [ "$status" -ne 0 ]; then
+            echo "WARNING: make ${target} failed with status ${status}" >&2
+        fi
+    done
+    copy_diagnostics 2
     exit
 fi
 

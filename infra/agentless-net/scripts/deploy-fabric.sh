@@ -130,6 +130,10 @@ elif ! advertisement="$(KUBECONFIG="$KUBECONFIG" oc get l2advertisement caas-l2-
     echo "ERROR: failed to read caas-l2-advertisement" >&2
     exit 1
 fi
+if [[ -z "$advertisement" && "${DEPLOY_SUITE:-caas}" != "bmaas" ]]; then
+    echo "ERROR: caas-l2-advertisement is required for DEPLOY_SUITE=${DEPLOY_SUITE:-caas}" >&2
+    exit 1
+fi
 if [[ -n "$advertisement" ]]; then
     KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
         --type=merge -p "{\"spec\":{\"interfaces\":[\"$FABRIC_NIC\"]}}"
