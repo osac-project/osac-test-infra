@@ -73,16 +73,20 @@ copy_diagnostics() {
     local minutes="$1"
     local copy_status=0
     local copy_cmd
+    local staging
     : "${LOG_DIR:?LOG_DIR is required}"
+    staging="$(mktemp -d)"
     echo "Copying diagnostics back to ${LOG_DIR}"
-    rm -rf "$LOG_DIR"
-    mkdir -p "$LOG_DIR"
     copy_cmd=$(printf 'mkdir -p %q && tar -C %q -czf - .' "$REMOTE_LOG_DIR" "$REMOTE_LOG_DIR")
-    ssh_exec --timeout "$minutes" "$copy_cmd" | tar -xzf - -C "$LOG_DIR" || copy_status=$?
+    ssh_exec --timeout "$minutes" "$copy_cmd" | tar -xzf - -C "$staging" || copy_status=$?
     if [ "$copy_status" -ne 0 ]; then
+        rm -rf "$staging"
         echo "ERROR: failed to copy diagnostics (status ${copy_status})" >&2
         return "$copy_status"
     fi
+    rm -rf "$LOG_DIR"
+    mkdir -p "$(dirname "$LOG_DIR")"
+    mv "$staging" "$LOG_DIR"
 }
 
 if [ "${1:-}" = "copy-logs" ]; then

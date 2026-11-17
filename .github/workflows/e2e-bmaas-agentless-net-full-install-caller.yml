@@ -86,3 +86,4 @@ jobs:
       fork-pr-author-association: ${{ inputs.fork-pr-author-association || '' }}
       fork-pr-author: ${{ inputs.fork-pr-author || '' }}
       pr-number: ${{ inputs.pr-number || '' }}
+      notify-on-failure: ${{ github.event_name == 'schedule' }}

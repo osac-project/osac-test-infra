@@ -92,6 +92,11 @@ on:
         required: false
         type: string
         default: ""
+      notify-on-failure:
+        description: "Send a Slack message when a nightly run fails"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   authorize:
@@ -163,6 +168,11 @@ jobs:
   # be bound to the runner label of an instance teardown had already terminated.
   # This job provisions a new instance, runs the install over SSH, and tears
   # the instance down. The host is not registered as a GitHub runner.
+  #
+  # It stays on the orchestrator: that machine holds the SSH key and the Vault
+  # AppRole. Teardown is a step here, so this run does not queue its own
+  # cleanup. ec2-runner-orphan-watchdog.yml removes an instance whose teardown
+  # cannot get the runner.
   install:
     needs: authorize
     runs-on: ${{ inputs.orchestrator-runner-label }}
@@ -419,3 +429,47 @@ jobs:
           name: ${{ inputs.deploy-suite }}-diagnostics-${{ github.run_id }}
           path: infra/agentless-net/logs-sanitized
           if-no-files-found: warn
+
+  # Nightly failures only. The caller sets notify-on-failure from schedule,
+  # because inside this workflow the event is workflow_call. A failed
+  # authorize is included; teardown stays in the install job.
+  notify:
+    needs: [authorize, install]
+    if: always() && inputs.notify-on-failure && contains(needs.*.result, 'failure')
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch and write secrets
+        id: secrets
+        uses: ./.github/actions/fetch-and-write-secrets
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Notify Slack on failure
+        uses: ./.github/actions/notify-slack
+        with:
+          status: failure
+          workflow-name: "E2E BMaaS Agentless-Net Full Install"
+          slack-bot-token: ${{ steps.secrets.outputs.SLACK_BOT_TOKEN }}
+          slack-channel-id: ${{ steps.secrets.outputs.SLACK_CHANNEL_ID }}
+          workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch-name: ${{ github.ref_name }}
+          commit-sha: ${{ github.sha }}
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
