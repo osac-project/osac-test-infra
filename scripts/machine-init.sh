@@ -131,7 +131,8 @@ install_packages() {
         guestfs-tools \
         openssh-clients \
         iproute \
-        iputils
+        iputils \
+        sos
 
     # ansible-builder is needed for building AAP execution-environment images
     python3 -m pip install --quiet ansible-builder
@@ -179,7 +180,7 @@ create_runner_user() {
     for helper in \
         osac-hosts-entry osac-compact-dns cluster-tool-compact-boot \
         osac-compact-boot-diagnostics osac-compact-kubeconfig \
-        osac-install-cluster-tool; do
+        osac-install-cluster-tool osac-hypervisor-sosreport; do
         if [[ -f "${SCRIPT_DIR}/${helper}" ]]; then
             install -m 0755 "${SCRIPT_DIR}/${helper}" "/usr/local/sbin/${helper}"
             echo "    Installed /usr/local/sbin/${helper}"
@@ -237,6 +238,7 @@ Cmnd_Alias CLUSTER_TOOL_BOOT            = /usr/bin/python3 ${CLUSTER_TOOL_BIN} b
 # The wrapper validates runner arguments and always supplies --host local.
 Cmnd_Alias CLUSTER_TOOL_COMPACT_BOOT    = /usr/local/sbin/cluster-tool-compact-boot *
 Cmnd_Alias COMPACT_BOOT_DIAGNOSTICS     = /usr/local/sbin/osac-compact-boot-diagnostics *
+Cmnd_Alias HYPERVISOR_SOSREPORT         = /usr/local/sbin/osac-hypervisor-sosreport ""
 Cmnd_Alias CLUSTER_TOOL_CLEANUP_HAPROXY = /usr/bin/python3 ${CLUSTER_TOOL_BIN} cleanup-haproxy
 # Installs a tagged cluster-tool release (the "Fleet cluster-tool install"
 # workflow). The helper re-validates its single vX.Y.Z argument and only
@@ -263,7 +265,7 @@ ${KUBECONFIG_CHOWN_ALIAS}
 
 ${RUNNER_USER} ALL=(root) NOPASSWD: CLUSTER_TOOL_FLAVORS, CLUSTER_TOOL_FLAVORS_DELETE, \\
     CLUSTER_TOOL_PULL, CLUSTER_TOOL_DESTROY, CLUSTER_TOOL_BOOT, CLUSTER_TOOL_COMPACT_BOOT, COMPACT_BOOT_DIAGNOSTICS, CLUSTER_TOOL_CLEANUP_HAPROXY, CLUSTER_TOOL_INSTALL, \\
-    BRIDGE_DOWN, BRIDGE_DELETE, \\
+    HYPERVISOR_SOSREPORT, BRIDGE_DOWN, BRIDGE_DELETE, \\
     AUTH_JSON_MKDIR, AUTH_JSON_COPY, AUTH_JSON_CHMOD, AUTH_JSON_RM, \\
     HOSTS_ENTRY_ADD, HOSTS_ENTRY_REMOVE, COMPACT_DNS_ADD, COMPACT_DNS_REMOVE, \\
     KUBECONFIG_COPY, KUBECONFIG_CHOWN, COMPACT_KUBECONFIG_COPY

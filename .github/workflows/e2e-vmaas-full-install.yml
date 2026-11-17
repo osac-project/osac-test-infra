@@ -1536,6 +1536,7 @@ jobs:
         if: always() && !cancelled()
         uses: ./.github/actions/collect-artifacts
         with:
+          private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
           namespace: ${{ inputs.namespace }}
           kubeconfig-path: ${{ runner.temp }}/kubeconfig
           junit-path: ${{ runner.temp }}/test-output/junit.xml
@@ -1544,6 +1545,7 @@ jobs:
         if: cancelled() && (steps.gather.outcome == 'skipped' || steps.gather.outcome == 'cancelled')
         uses: ./.github/actions/collect-artifacts
         with:
+          private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
           namespace: ${{ inputs.namespace }}
           kubeconfig-path: ${{ runner.temp }}/kubeconfig
           junit-path: ${{ runner.temp }}/test-output/junit.xml
