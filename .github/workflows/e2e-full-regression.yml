@@ -393,6 +393,9 @@ jobs:
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+          # Match CaaS CI capacity for OpenShift guest workers.
+          BMH_CPU: "8"
+          BMH_MEMORY_MIB: "12288"
         run: bash .github/scripts/setup-virtual-bmh.sh
 
       # Loops over the `components` JSON array so any number of components
