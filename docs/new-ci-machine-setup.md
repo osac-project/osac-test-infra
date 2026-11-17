@@ -335,7 +335,7 @@ using `--build --clean --batch --no-report --no-env-vars --log-size=25
 --journal-size=25`. `--no-update` and isolated config/map paths avoid persistent
 cleaner mappings. Upstream SOS can swallow cleaner errors, including after its
 success message; the launcher also checks cleaner errors and final tree output.
-Only the cleaned tree, without `sos_logs` or maps, enters a verified private
+Only the cleaned tree, without `sos_logs`, maps or convenience symlinks, enters a verified private
 handoff through the existing release gate and Gitleaks scan. Reports remain
 sensitive. Missing flags, cleaning failure, timeout or unavailable private routing
 withhold SOS without changing teardown/test status. Fleet package support,
