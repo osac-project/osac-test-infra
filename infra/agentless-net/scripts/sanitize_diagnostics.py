@@ -78,12 +78,14 @@ def _drop_indented_block(lines: list[bytes], index: int, key_indent: int) -> tup
 
 
 def _drop_plain_continuation(lines: list[bytes], index: int, key_indent: int) -> int:
-    """Drop indented lines that continue a plain secret scalar. A blank line ends it."""
+    """Drop indented lines that continue a plain secret, including across blank lines."""
     while index < len(lines):
-        follower = lines[index]
-        if follower.strip() == b"" or _line_indent(follower) <= key_indent:
+        probe = index
+        while probe < len(lines) and lines[probe].strip() == b"":
+            probe += 1
+        if probe >= len(lines) or _line_indent(lines[probe]) <= key_indent:
             break
-        index += 1
+        index = probe + 1
     return index
 
 

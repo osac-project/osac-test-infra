@@ -27,12 +27,13 @@ STATE_FILE=/var/lib/osac-host-bridges/sysctl.prior
 info() { echo "==> $*"; }
 
 ensure_private_state_dir() {
-    if [[ -L "$STATE_DIR" ]]; then
+    # sudo test: the caller is not root, and a 700 directory is invisible to [[ -e ]].
+    if sudo test -L "$STATE_DIR"; then
         echo "ERROR: ${STATE_DIR} is a symlink; refusing to store rollback state there." >&2
         return 1
     fi
-    if [[ -e "$STATE_DIR" ]]; then
-        if [[ ! -d "$STATE_DIR" ]]; then
+    if sudo test -e "$STATE_DIR"; then
+        if ! sudo test -d "$STATE_DIR"; then
             echo "ERROR: ${STATE_DIR} is not a directory." >&2
             return 1
         fi
@@ -49,11 +50,11 @@ ensure_private_state_dir() {
 }
 
 state_file_is_trusted() {
-    if [[ -L "$STATE_FILE" ]]; then
+    if sudo test -L "$STATE_FILE"; then
         echo "ERROR: ${STATE_FILE} is a symlink; refusing to use it." >&2
         return 1
     fi
-    if [[ ! -f "$STATE_FILE" ]]; then
+    if ! sudo test -f "$STATE_FILE"; then
         echo "ERROR: ${STATE_FILE} is not a regular file; refusing to use it." >&2
         return 1
     fi
@@ -69,7 +70,7 @@ state_file_is_trusted() {
 
 restore_host_bridge_sysctls() {
     trap - ERR
-    if [[ ! -e "$STATE_FILE" && ! -L "$STATE_FILE" ]]; then
+    if ! sudo test -e "$STATE_FILE" && ! sudo test -L "$STATE_FILE"; then
         return 0
     fi
     if ! state_file_is_trusted; then
@@ -137,7 +138,7 @@ done
 
 info "Disabling bridge netfilter so DHCP discovers are forwarded"
 ensure_private_state_dir
-if [[ -e "$STATE_FILE" || -L "$STATE_FILE" ]]; then
+if sudo test -e "$STATE_FILE" || sudo test -L "$STATE_FILE"; then
     state_file_is_trusted
 else
     ipt="$(sudo sysctl -n net.bridge.bridge-nf-call-iptables)"
