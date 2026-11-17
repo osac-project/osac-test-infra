@@ -688,10 +688,11 @@ jobs:
             MAX_WAIT_SECONDS=300
             POLL_INTERVAL_SECONDS=15
             elapsed=0
-            until skopeo inspect --raw --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
-              "docker://${CHART_OCI_REPO}:${VERSION}" >/dev/null 2>&1; do
+            until PROBE_ERROR=$(skopeo inspect --raw --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
+              "docker://${CHART_OCI_REPO}:${VERSION}" 2>&1 >/dev/null); do
               if [[ "${elapsed}" -ge "${MAX_WAIT_SECONDS}" ]]; then
                 echo "::error::${CHART_OCI_REPO}:${VERSION} not available after ${MAX_WAIT_SECONDS}s"
+                printf '%s' "${PROBE_ERROR}" | python3 .github/scripts/chart_probe_error.py
                 exit 1
               fi
               echo "${CHART_OCI_REPO}:${VERSION} not available yet (${elapsed}s elapsed), retrying in ${POLL_INTERVAL_SECONDS}s..."
