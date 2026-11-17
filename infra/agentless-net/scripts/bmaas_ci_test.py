@@ -685,7 +685,10 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertNotRegex(remote, r"timeout\b[^\n]*\bssh_exec\b")
         self.assertIn('timeout "${minutes}m" ssh', remote)
         self.assertIn("copy-logs", remote)
-        recovery = remote.split('if [ "$phase" = "copy-logs" ]', 1)[1].split("\nfi", 1)[0]
+        recovery = remote.split('if [ "$phase" = "copy-logs" ]', 1)[1].split("\n    exit\n", 1)[0]
+        self.assertLess(recovery.index(".gather-infra-complete"), recovery.index("Running make"))
+        self.assertLess(recovery.index(".gather-bmaas-complete"), recovery.index("Running make"))
+        self.assertLess(recovery.index("Keeping the"), recovery.index("copy_diagnostics 2"))
         self.assertLess(recovery.index("gather-infra"), recovery.index("gather-bmaas"))
         self.assertLess(recovery.index("gather-bmaas"), recovery.index("copy_diagnostics 2"))
         copy_fn = remote.split("copy_diagnostics()", 1)[1].split('if [ "$phase" = "copy-logs" ]', 1)[0]
@@ -846,6 +849,8 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf pid", setup)
         gather = (INFRA / "scripts" / "gather-bmaas.sh").read_text()
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf status", gather)
+        self.assertIn(".gather-bmaas-complete", gather)
+        self.assertIn(".gather-infra-complete", (INFRA / "scripts" / "gather-infra.sh").read_text())
         self.assertIn("br-host1", gather)
         self.assertIn("br-host2", gather)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
