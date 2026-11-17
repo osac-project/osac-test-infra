@@ -93,16 +93,17 @@ PUB_KEY="$(cat "$SSH_PUB")"
 install_authorized_key() {
     local container="$1"
     local home="$2"
-    sudo docker exec -i "$container" sh -s -- "$home" <<EOF
+    sudo docker exec -i "$container" sh -s -- "$home" "$PUB_KEY" <<'EOF'
 set -eu
-home="\$1"
-mkdir -p "\${home}/.ssh"
-touch "\${home}/.ssh/authorized_keys"
-grep -qxF '${PUB_KEY}' "\${home}/.ssh/authorized_keys" || echo '${PUB_KEY}' >> "\${home}/.ssh/authorized_keys"
-chmod 700 "\${home}/.ssh"
-chmod 600 "\${home}/.ssh/authorized_keys"
-if [ "\${home}" != /root ]; then
-    chown -R cumulus:cumulus "\${home}/.ssh"
+home="$1"
+key="$2"
+mkdir -p "${home}/.ssh"
+touch "${home}/.ssh/authorized_keys"
+grep -qxF "${key}" "${home}/.ssh/authorized_keys" || echo "${key}" >> "${home}/.ssh/authorized_keys"
+chmod 700 "${home}/.ssh"
+chmod 600 "${home}/.ssh/authorized_keys"
+if [ "${home}" != /root ]; then
+    chown -R cumulus:cumulus "${home}/.ssh"
 fi
 EOF
 }

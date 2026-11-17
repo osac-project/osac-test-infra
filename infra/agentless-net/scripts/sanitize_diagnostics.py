@@ -19,9 +19,9 @@ _PRIVATE_KEY = re.compile(
 _PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 _AUTHORIZATION = re.compile(rb"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)[^\r\n]+")
 _SECRET_NAME = (
-    rb"\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*\""
-    rb"|'[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*'"
-    rb"|(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*"
+    rb"\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data|auth[_-]?config)[A-Za-z0-9_.-]*\""
+    rb"|'[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data|auth[_-]?config)[A-Za-z0-9_.-]*'"
+    rb"|(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data|auth[_-]?config)[A-Za-z0-9_.-]*"
 )
 _SECRET_ASSIGNMENT = re.compile(
     rb"(?i)(" + _SECRET_NAME + rb")"
@@ -29,6 +29,9 @@ _SECRET_ASSIGNMENT = re.compile(
     rb"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\r\n]+)"
 )
 _REDACTED = b"[REDACTED]"
+_JSON_AUTH = re.compile(
+    rb"""(?i)((?:"auth"|'auth')\s*:\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')"""
+)
 # YAML block header: | or >, optional chomp, optional single-digit indent, in either order.
 _BLOCK_HEADER = re.compile(rb"^[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:[ \t]+#.*)?[ \t]*$")
 # A secret key whose line has no value. The value is the indented block that follows.
@@ -46,6 +49,12 @@ def _redact_assignment(match: re.Match[bytes]) -> bytes:
     else:
         replacement = _REDACTED
     return match.group(1) + match.group(2) + replacement
+
+
+def _redact_json_auth(match: re.Match[bytes]) -> bytes:
+    value = match.group(2)
+    quote = b'"' if value.startswith(b'"') else b"'"
+    return match.group(1) + quote + _REDACTED + quote
 
 
 def _line_indent(line: bytes) -> int:
@@ -123,6 +132,7 @@ def _multiline_secret(value: bytes) -> bool:
 def redact(data: bytes) -> bytes:
     data = _PRIVATE_KEY.sub(b"[REDACTED PRIVATE KEY]", data)
     data = _AUTHORIZATION.sub(lambda match: match.group(1) + _REDACTED, data)
+    data = _JSON_AUTH.sub(_redact_json_auth, data)
     lines = data.splitlines(keepends=True)
     output: list[bytes] = []
     index = 0
@@ -130,6 +140,8 @@ def redact(data: bytes) -> bytes:
         line = lines[index]
         match = _SECRET_ASSIGNMENT.search(line)
         value = match.group(3) if match else b""
+        if match and value[:1] in (b"&", b"*", b"!"):
+            raise RuntimeError("unsupported secret anchor or tag")
         if match and value[:1] in (b"|", b">"):
             if _BLOCK_HEADER.fullmatch(value.strip()) is None:
                 raise RuntimeError("unsupported secret block scalar")

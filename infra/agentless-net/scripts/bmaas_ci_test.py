@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -397,6 +398,41 @@ class SanitizeTest(unittest.TestCase):
         prefixed = (b"a" * 64) + b"password: hunter2\n"
         self.assertNotIn(b"hunter2", sanitize_diagnostics.redact(prefixed))
 
+    def test_registry_credentials_are_redacted(self) -> None:
+        credential = "dXNlcjpwYXNz"
+        raw = (
+            'DOCKER_AUTH_CONFIG={"auths":{"registry.example":{"auth":"'
+            + credential
+            + '"}}}\nbridge sysctl is 0\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn(credential, cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+        quoted = sanitize_diagnostics.redact(b'"auth": "dXNlcjpwYXNz"\n')
+        self.assertNotIn(b"dXNlcjpwYXNz", quoted)
+        self.assertIn(b'"auth": "[REDACTED]"', quoted)
+
+    def test_anchored_secret_blocks_are_rejected(self) -> None:
+        secret = "hunter2"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            source.mkdir()
+            (source / "job.log").write_text(f"password: &credential |\n  {secret}\n")
+            with self.assertRaises(RuntimeError) as caught:
+                sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
+            self.assertIn("anchor", str(caught.exception))
+            destination = Path(tmp) / "clean"
+            if destination.exists():
+                for path in destination.rglob("*"):
+                    if path.is_file():
+                        self.assertNotIn(secret, path.read_text())
+
     def test_private_key_header_without_an_end_marker_fails(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
         with tempfile.TemporaryDirectory() as tmp:
@@ -457,7 +493,16 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("workflow_call", document[True])
         self.assertNotIn("workflow_dispatch", document[True])
         self.assertNotIn("pull_request", document[True])
-        self.assertEqual(set(document["jobs"]), {"authorize", "install"})
+        self.assertEqual(set(document["jobs"]), {"authorize", "install", "notify"})
+        self.assertFalse(document[True]["workflow_call"]["inputs"]["notify-on-failure"]["default"])
+        notify = document["jobs"]["notify"]
+        self.assertIn("inputs.notify-on-failure", notify["if"])
+        self.assertIn("contains(needs.*.result, 'failure')", notify["if"])
+        self.assertEqual(notify["runs-on"], "${{ inputs.orchestrator-runner-label }}")
+        self.assertEqual(
+            caller["jobs"]["e2e-bmaas-agentless"]["with"]["notify-on-failure"],
+            "${{ github.event_name == 'schedule' }}",
+        )
         install = document["jobs"]["install"]
         self.assertEqual(install["needs"], "authorize")
         self.assertEqual(install["runs-on"], "${{ inputs.orchestrator-runner-label }}")
@@ -500,6 +545,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertNotRegex(remote, r"timeout\b[^\n]*\bssh_exec\b")
         self.assertIn('timeout "${minutes}m" ssh', remote)
         self.assertIn("copy-logs", remote)
+        copy_fn = remote.split("copy_diagnostics()", 1)[1].split('if [ "${1:-}" = "copy-logs" ]', 1)[0]
+        self.assertLess(copy_fn.index("mktemp"), copy_fn.index('rm -rf "$LOG_DIR"'))
+        setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
+        self.assertIn('sh -s -- "$home" "$PUB_KEY"', setup)
+        self.assertIn("<<'EOF'", setup)
         teardown = next(step for step in steps if "teardown.sh" in step.get("run", ""))
         self.assertEqual(teardown["if"], "always()")
         names = [step.get("name") for step in steps]
@@ -553,23 +603,21 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("display_title", leak_script)
         self.assertIn("workflow_dispatch", leak_script)
         self.assertIn("SUITE_RUN_VALIDATED", leak_script)
-        self.assertLess(leak_script.index('capture("^E2E suite'), leak_script.index("OPEN_PR_COUNT="))
-        title = "E2E suite · bmaas-agentless · #795 · " + ("a" * 40)
-        parsed = subprocess.check_output(
-            [
-                "jq",
-                "-Rn",
-                "--arg",
-                "title",
-                title,
-                r'$title | capture("^E2E suite \u00b7 (?<suite>[A-Za-z0-9-]+) \u00b7 #(?<pr>[0-9]+) \u00b7 (?<sha>[0-9a-fA-F]{40})$")',
-            ],
-            text=True,
-        )
-        identity = json.loads(parsed)
-        self.assertEqual(identity["suite"], "bmaas-agentless")
-        self.assertEqual(identity["pr"], "795")
-        self.assertEqual(identity["sha"], "a" * 40)
+        self.assertLess(leak_script.index('capture("^(?:E2E suite'), leak_script.index("OPEN_PR_COUNT="))
+        pattern = re.search(r'capture\("([^"]+)"\)', leak_script)
+        self.assertIsNotNone(pattern)
+        program = '$title | capture("' + pattern.group(1) + '")'
+        for title, expected in (
+            ("E2E suite · bmaas-agentless · #795 · " + ("a" * 40), {"suite": "bmaas-agentless", "pr": "795", "sha": "a" * 40}),
+            ("E2E BMaaS Agentless-Net Full Install / PR #795 @ " + ("b" * 40), {"pr": "795", "sha": "b" * 40}),
+        ):
+            parsed = subprocess.check_output(["jq", "-Rn", "--arg", "title", title, program], text=True)
+            identity = json.loads(parsed)
+            for key, value in expected.items():
+                self.assertEqual(identity[key], value)
+        rerun = (ROOT / ".github" / "workflows" / "e2e-pr-rerun.yml").read_text()
+        self.assertIn('"E2E BMaaS Agentless PR suite"', rerun)
+        self.assertIn("728d1b064cdbfa429c68ce5bc5a35b47b6c127d7", PR_SUITE.read_text())
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
         bridges = (INFRA / "scripts" / "prepare-host-bridges.sh").read_text()
