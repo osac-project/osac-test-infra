@@ -6,6 +6,7 @@ from __future__ import annotations
 import unittest
 import json
 import os
+import select
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,125 @@ import bmh_history
 
 
 class SetupVirtualBmhTests(unittest.TestCase):
+    def test_stop_reaps_actual_listener_and_sigterm_ignoring_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            inventory = base / "inventory.json"
+            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+            directory = bmh_history.history_dir(inventory)
+            directory.mkdir()
+            fifo = base / "started"
+            os.mkfifo(fifo)
+            descriptor = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+            executable = base / "virsh"
+            executable.write_text(f"#!{sys.executable}\nimport os,signal,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nwith open({str(fifo)!r}, 'w') as ready: ready.write(str(os.getpid())+'\\n')\ntime.sleep(30)\n")
+            executable.chmod(0o755)
+            with subprocess.Popen([sys.executable, str(ROOT / ".github/scripts/bmh_history.py"), "listen", str(inventory), "virtual-bmh-aabbccdd"],
+                                  env=os.environ | {"PATH": f"{base}:{os.defpath}"},
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE) as listener:
+                try:
+                    self.assertTrue(select.select([descriptor], [], [], 5)[0])
+                    cli_pid = int(os.read(descriptor, 100).strip())
+                    self.assertTrue(bmh_history.stop(directory))
+                    self.assertEqual(listener.wait(timeout=5), 0)
+                    self.assertFalse(Path(f"/proc/{cli_pid}").exists())
+                    self.assertIn("stopped", json.loads((directory / "status.json").read_text()))
+                finally:
+                    os.close(descriptor)
+                    if listener.poll() is None:
+                        listener.terminate()
+                        listener.wait(timeout=5)
+
+    def test_reused_pid_is_not_signalled(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "status.json").write_text(json.dumps(dict(pid=os.getpid(), identity="old process")))
+            descriptor = bmh_history.pidfd_call("pidfd_open", os.getpid(), 0)
+            with mock.patch.object(bmh_history, "pidfd_call", return_value=descriptor) as call:
+                self.assertTrue(bmh_history.stop(directory))
+            call.assert_called_once_with("pidfd_open", os.getpid(), 0)
+
+    def test_symlink_history_and_staging_never_follow_external_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            outside = base / "outside"
+            outside.mkdir()
+            source = base / "source"
+            source.mkdir()
+            (outside / "events.log").write_text("synthetic private bytes")
+            (source / "events.log").symlink_to(outside / "events.log")
+            staging = base / "staging"
+            staging.mkdir()
+            bmh_history.stage(source, staging)
+            self.assertEqual(list(staging.iterdir()), [])
+            inventory = base / "inventory.json"
+            bmh_history.history_dir(inventory).symlink_to(outside, target_is_directory=True)
+            self.assertFalse(bmh_history.stop(bmh_history.history_dir(inventory)))
+            self.assertFalse((outside / "stop").exists())
+            destination = base / "destination"
+            destination.symlink_to(outside, target_is_directory=True)
+            bmh_history.collect(inventory, destination)
+            self.assertFalse(destination.exists())
+            self.assertEqual((outside / "events.log").read_text(), "synthetic private bytes")
+
+    def test_unavailable_pidfd_retains_stop_until_delayed_listener_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            inventory = base / "inventory.json"
+            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+            directory = bmh_history.history_dir(inventory)
+            directory.mkdir()
+            program = (
+                "import json,os,sys; from pathlib import Path; "
+                f"sys.path.insert(0, {str(ROOT / '.github/scripts')!r}); import bmh_history; "
+                "directory=Path(sys.argv[1]); "
+                "(directory/'status.json').write_text(json.dumps(dict(pid=os.getpid(),identity=bmh_history.process_identity(os.getpid())))); "
+                "print('waiting',flush=True); input(); "
+                "assert (directory/'stop').exists(); "
+                "(directory/'status.json').write_text(json.dumps(dict(stopped='test completed')))"
+            )
+            with subprocess.Popen([sys.executable, "-c", program, str(directory)], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
+                try:
+                    self.assertTrue(select.select([child.stdout], [], [], 5)[0])
+                    self.assertEqual(child.stdout.readline().strip(), "waiting")
+                    with mock.patch.object(bmh_history, "pidfd_call", side_effect=OSError("unavailable")), \
+                         mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "")):
+                        bmh_history.cleanup(inventory)
+                        self.assertTrue((directory / "stop").exists())
+                        bmh_history.collect(inventory, base / "artifacts/history")
+                        self.assertFalse((base / "artifacts/history").exists())
+                    child.stdin.write("continue\n")
+                    child.stdin.flush()
+                    self.assertEqual(child.wait(timeout=5), 0)
+                    with mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "")):
+                        bmh_history.cleanup(inventory)
+                    self.assertFalse(directory.exists())
+                finally:
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait(timeout=5)
+
+    def test_stale_history_destination_is_removed_when_gate_rejects(self) -> None:
+        for stale_type in ("directory", "file"):
+            with self.subTest(stale_type=stale_type), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                inventory = base / "inventory.json"
+                inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+                directory = bmh_history.history_dir(inventory)
+                directory.mkdir()
+                destination = base / "artifacts/history"
+                destination.parent.mkdir(parents=True)
+                if stale_type == "directory":
+                    destination.mkdir()
+                    (destination / "stale.log").write_text("synthetic stale raw data")
+                else:
+                    destination.write_text("synthetic stale raw data")
+                with mock.patch.object(bmh_history, "stop", return_value=True), \
+                     mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], 2)):
+                    bmh_history.collect(inventory, destination)
+                self.assertFalse(destination.exists())
+
     def test_cleanup_retains_live_or_unreachable_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -28,6 +148,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
             history = bmh_history.history_dir(inventory)
             history.mkdir(mode=0o700)
+            (history / "status.json").write_text(json.dumps({"stopped": "fixture completed"}))
             for status, listing in ((1, ""), (0, "virtual-bmh-aabbccdd-01\n")):
                 with mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], status, listing)):
                     bmh_history.cleanup(inventory)
@@ -51,6 +172,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
             history = bmh_history.history_dir(inventory)
             history.mkdir(mode=0o700)
+            (history / "status.json").write_text(json.dumps({"stopped": "fixture completed"}))
             (history / "events.log").write_text("private raw data")
             destination = base / "artifacts/history"
             with mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], 2)):
@@ -78,6 +200,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
                 inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
                 history = bmh_history.history_dir(inventory)
                 history.mkdir(mode=0o700)
+                (history / "status.json").write_text(json.dumps({"stopped": "fixture completed"}))
                 (history / "events.log").write_text('first boot\n{"password":"synthetic-password-012345"}\n')
                 env = os.environ | dict(RUNNER_TEMP=str(base), GITHUB_WORKSPACE=str(workspace), HOME=str(base),
                                         CLONE_NAME="test", KUBECONFIG=str(base / "kubeconfig"), PATH=f"{binaries}:{Path(sys.executable).parent}:{os.defpath}")
@@ -109,6 +232,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
             history = bmh_history.history_dir(inventory)
             history.mkdir(mode=0o700)
+            (history / "status.json").write_text(json.dumps({"stopped": "fixture completed"}))
             fixture_secret = "synthetic-history-token-0123456789"
             (base / "pull-secret.json").write_text(json.dumps({"auths": {"example.invalid": {"auth": fixture_secret}}}))
             (history / "events.log").write_text('first boot\n{"password":"' + fixture_secret + '"}\nsecond boot\n')
@@ -139,6 +263,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
                         inventory.write_text(content)
                     history = bmh_history.history_dir(inventory)
                     history.mkdir(exist_ok=True)
+                    (history / "status.json").write_text(json.dumps({"stopped": "fixture completed"}))
                     result = subprocess.run([sys.executable, str(ROOT / ".github/scripts/bmh_history.py"), "collect", str(inventory), str(artifact)],
                                             capture_output=True, text=True, timeout=5)
                     self.assertEqual(result.returncode, 0)
