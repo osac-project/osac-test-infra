@@ -370,6 +370,20 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("password: [REDACTED]", cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
 
+    def test_blank_line_does_not_publish_a_secret_continuation(self) -> None:
+        test_secret = "second-half"
+        raw = f"password: first-half\n\n  {test_secret}\nbridge sysctl is 0\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn("first-half", cleaned)
+        self.assertNotIn(test_secret, cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+
     def test_doubled_single_quotes_stay_inside_the_secret(self) -> None:
         test_suffix = "credential-suffix"
         raw = f"password: 'prefix''{test_suffix}'\nbridge sysctl is 0\n"
@@ -674,6 +688,8 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn('sh -s -- "$home" "$PUB_KEY"', setup)
         self.assertIn("--switch", setup)
         self.assertIn("br-host2", setup)
+        self.assertIn("detach-interface", setup)
+        self.assertLess(setup.index('"$nic_source" != "$FABRIC_BRIDGE"'), setup.index("Publishing the AgentlessNet inventory"))
         self.assertIn("<<'EOF'", setup)
         teardown = next(step for step in steps if "teardown.sh" in step.get("run", ""))
         self.assertEqual(teardown["if"], "always()")
@@ -770,6 +786,10 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("sysctl -n net.bridge.bridge-nf-call-iptables", bridges)
         self.assertIn("sysctl -n net.bridge.bridge-nf-call-ip6tables", bridges)
         self.assertIn("/var/lib/osac-host-bridges/sysctl.prior", bridges)
+        self.assertIn('sudo test -e "$STATE_FILE"', bridges)
+        self.assertIn('sudo test -L "$STATE_FILE"', bridges)
+        self.assertNotIn('[[ -e "$STATE_FILE" ]]', bridges)
+        self.assertNotIn('[[ -f "$STATE_FILE" ]]', bridges)
         self.assertLess(bridges.index("not a root-owned private"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
         self.assertLess(bridges.index("sysctl -n net.bridge.bridge-nf-call-iptables"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
         self.assertIn("restore_host_bridge_sysctls", bridges)

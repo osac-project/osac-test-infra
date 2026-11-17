@@ -76,10 +76,20 @@ echo "BMH_NAME=${BMH_NAME}" >>"${INFRA_DIR}/.mgmt-network.tmp"
 mv "${INFRA_DIR}/.mgmt-network.tmp" "${INFRA_DIR}/.mgmt-network"
 info "Virtual BMH ${BMH_NAME}"
 
-if ! sudo virsh domiflist "$BMH_NAME" | awk 'NR>2 {print $5}' | grep -qx "$FABRIC_MAC"; then
+# Reuse the NIC only when this MAC is already on the requested bridge.
+# A MAC on another bridge would make the published inventory name the wrong port.
+nic_source="$(sudo virsh domiflist "$BMH_NAME" | awk -v mac="$FABRIC_MAC" 'NR>2 && $5 == mac { print $3; exit }')"
+if [[ -z "$nic_source" ]]; then
     info "Attaching ${FABRIC_MAC} to ${FABRIC_BRIDGE}"
     sudo virsh attach-interface "$BMH_NAME" --source "$FABRIC_BRIDGE" --type bridge \
         --model virtio --mac "$FABRIC_MAC" --live --config
+elif [[ "$nic_source" != "$FABRIC_BRIDGE" ]]; then
+    info "Moving ${FABRIC_MAC} from ${nic_source} to ${FABRIC_BRIDGE}"
+    sudo virsh detach-interface "$BMH_NAME" bridge --mac "$FABRIC_MAC" --live --config
+    sudo virsh attach-interface "$BMH_NAME" --source "$FABRIC_BRIDGE" --type bridge \
+        --model virtio --mac "$FABRIC_MAC" --live --config
+else
+    info "${FABRIC_MAC} is already attached to ${FABRIC_BRIDGE}"
 fi
 
 info "Recording the fabric MAC and host type on ${BMH_NAME}"
