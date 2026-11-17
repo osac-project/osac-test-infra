@@ -109,9 +109,6 @@ VM_ARGS=(
   --cpu "${BMH_CPU}"
   --memory-mib "${BMH_MEMORY_MIB}"
 )
-if [[ -n "${GITHUB_ENV:-}" ]]; then
-  echo "INVENTORY_FILE=${INVENTORY_FILE}" >> "${GITHUB_ENV}"
-fi
 python3 "${SCRIPT_DIR}/manage-virtual-bmh-vms.py" create "${VM_ARGS[@]}"
 
 # --- Reconcile the BareMetalHosts with the raw inventory ---
