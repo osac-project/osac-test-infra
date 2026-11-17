@@ -683,14 +683,15 @@ class WorkflowContractTest(unittest.TestCase):
         cluster_exit = remote.split('if [ "$phase" = "cluster" ]', 1)[1].split("exit 0", 1)[0]
         self.assertLess(cluster_exit.index("gather-infra"), cluster_exit.index('exit "$install_status"'))
         self.assertNotRegex(remote, r"timeout\b[^\n]*\bssh_exec\b")
-        self.assertIn('timeout "${minutes}m" ssh', remote)
+        self.assertIn('timeout "$limit" ssh', remote)
         self.assertIn("copy-logs", remote)
         recovery = remote.split('if [ "$phase" = "copy-logs" ]', 1)[1].split("\n    exit\n", 1)[0]
         self.assertLess(recovery.index(".gather-infra-complete"), recovery.index("Running make"))
         self.assertLess(recovery.index(".gather-bmaas-complete"), recovery.index("Running make"))
-        self.assertLess(recovery.index("Keeping the"), recovery.index("copy_diagnostics 2"))
+        self.assertLess(recovery.index("--timeout 15s"), recovery.index("Running make"))
+        self.assertLess(recovery.index("Keeping the"), recovery.index("copy_diagnostics 90s"))
         self.assertLess(recovery.index("gather-infra"), recovery.index("gather-bmaas"))
-        self.assertLess(recovery.index("gather-bmaas"), recovery.index("copy_diagnostics 2"))
+        self.assertLess(recovery.index("gather-bmaas"), recovery.index("copy_diagnostics 90s"))
         copy_fn = remote.split("copy_diagnostics()", 1)[1].split('if [ "$phase" = "copy-logs" ]', 1)[0]
         self.assertLess(copy_fn.index("mktemp"), copy_fn.index('rm -rf "$LOG_DIR"'))
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
