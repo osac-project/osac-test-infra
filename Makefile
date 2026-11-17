@@ -188,8 +188,19 @@ prepare-suite: _validate-backend
 
 # Operates on an installed OSAC lab; the backend prepares and deploys the suite.
 # The target name is unrelated to the DEPLOY_SUITE variable.
-deploy-suite: _validate-backend _validate-suite-contract
-	$(MAKE) -C $(INFRA_DIR) deploy-suite DEPLOY_SUITE=$(DEPLOY_SUITE) SUITE_STAGE=$(SUITE_STAGE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+# agentless-net writes its BMaaS contract inputs during prepare-suite, so that
+# preparation runs before validation. The workload stage then consumes them.
+deploy-suite: _validate-backend
+	@if [ "$(INFRA)" = agentless-net ] && [ "$(SUITE_STAGE)" != workload ]; then \
+		$(MAKE) prepare-suite INFRA=$(INFRA) DEPLOY_SUITE=$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG); \
+	fi
+	@$(MAKE) _validate-suite-contract
+	@if [ "$(INFRA)" = agentless-net ] && [ "$(SUITE_STAGE)" = setup ]; then \
+		exit 0; \
+	fi
+	@stage="$(SUITE_STAGE)"; \
+	if [ "$(INFRA)" = agentless-net ] && [ "$$stage" = all ]; then stage=workload; fi; \
+	$(MAKE) -C $(INFRA_DIR) deploy-suite DEPLOY_SUITE=$(DEPLOY_SUITE) SUITE_STAGE="$$stage" EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 run-tests: _validate-backend _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \

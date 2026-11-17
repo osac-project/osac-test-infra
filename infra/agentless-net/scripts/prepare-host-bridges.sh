@@ -81,7 +81,7 @@ restore_host_bridge_sysctls() {
     ip6="$(sudo sed -n 's/^net.bridge.bridge-nf-call-ip6tables=//p' "$STATE_FILE")"
     if [[ ! "$ipt" =~ ^[01]$ || ! "$ip6" =~ ^[01]$ ]]; then
         echo "ERROR: ${STATE_FILE} has no saved bridge sysctl values; leaving the runtime settings unchanged." >&2
-        return 0
+        return 1
     fi
     # prepare_failed invokes this as `cmd || true`, which disables set -e for
     # the whole function. Check each write so a failure cannot fall through
@@ -99,7 +99,7 @@ restore_host_bridge_sysctls() {
 }
 
 if [[ "${1:-}" == "restore" ]]; then
-    restore_host_bridge_sysctls
+    restore_host_bridge_sysctls || exit $?
     exit 0
 fi
 

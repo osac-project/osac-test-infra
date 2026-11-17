@@ -118,7 +118,22 @@ prepare-suite:
 	$(MAKE) deploy-fabric
 	$(MAKE) setup-$(DEPLOY_SUITE)
 
-deploy-suite: prepare-suite
+# all prepares the suite and then creates its workload. setup stops after
+# preparation. workload assumes preparation already ran, which is how the
+# root target orders validation before prove-bmi.
+.PHONY: deploy-suite deploy-suite-workload
+SUITE_STAGE ?= all
+deploy-suite:
+	@case "$(DEPLOY_SUITE)" in caas|bmaas) ;; *) echo "Unsupported deployment suite: $(DEPLOY_SUITE)" >&2; exit 2;; esac
+	@case "$(SUITE_STAGE)" in \
+		all) $(MAKE) prepare-suite && $(MAKE) deploy-suite-workload ;; \
+		setup) $(MAKE) prepare-suite ;; \
+		workload) $(MAKE) deploy-suite-workload ;; \
+		*) echo "Unsupported deploy-suite stage: $(SUITE_STAGE)" >&2; exit 2 ;; \
+	esac
+
+deploy-suite-workload:
+	@if [ "$(DEPLOY_SUITE)" = bmaas ]; then $(MAKE) prove-bmi; else echo "=== CaaS workload is created during prepare-suite ==="; fi
 
 destroy-suite:
 	@case "$(DEPLOY_SUITE)" in caas|bmaas) ;; *) echo "Unsupported deployment suite: $(DEPLOY_SUITE)" >&2; exit 2;; esac

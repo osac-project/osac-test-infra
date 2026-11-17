@@ -144,6 +144,33 @@ def _multiline_secret(value: bytes) -> bool:
     return False
 
 
+_JSON_KEY = re.compile(rb'"((?:\\.|[^"\\])*)"(\s*:)')
+
+
+def _decode_json_keys(line: bytes) -> bytes:
+    """Decode JSON \\u escapes in object keys so secret names are recognized."""
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        key = match.group(1)
+        if b"\\u" not in key.lower():
+            return match.group(0)
+        if re.search(rb"\\(?!u[0-9a-fA-F]{4})", key, re.IGNORECASE):
+            raise RuntimeError("unsupported escaped secret key")
+
+        def character(escape: re.Match[bytes]) -> bytes:
+            try:
+                return chr(int(escape.group(1), 16)).encode("utf-8")
+            except (ValueError, UnicodeEncodeError) as exc:
+                raise RuntimeError("unsupported escaped secret key") from exc
+
+        decoded = re.sub(rb"\\u([0-9a-fA-F]{4})", character, key, flags=re.IGNORECASE)
+        if b'"' in decoded or b"\\" in decoded or b"\n" in decoded:
+            raise RuntimeError("unsupported escaped secret key")
+        return b'"' + decoded + b'"' + match.group(2)
+
+    return _JSON_KEY.sub(replace, line)
+
+
 def redact(data: bytes) -> bytes:
     data = _PRIVATE_KEY.sub(b"[REDACTED PRIVATE KEY]", data)
     data = _AUTHORIZATION.sub(lambda match: match.group(1) + _REDACTED, data)
@@ -152,7 +179,7 @@ def redact(data: bytes) -> bytes:
     output: list[bytes] = []
     index = 0
     while index < len(lines):
-        line = lines[index]
+        line = _decode_json_keys(lines[index])
         matches = list(_SECRET_ASSIGNMENT.finditer(line))
         for candidate in matches:
             candidate_value = candidate.group(3)
