@@ -40,17 +40,21 @@ REMOTE_LOG_DIR="${REMOTE_DIR}/infra/agentless-net/logs"
 REMOTE_INFRA="${REMOTE_DIR}/infra/agentless-net"
 
 # timeout(1) executes a program. It cannot call this function, so the limit
-# wraps the ssh binary itself. Callers pass --timeout MINUTES; other calls
-# have no limit.
+# wraps the ssh binary itself. --timeout takes minutes, or a duration that
+# already includes its unit, such as 15s. Other calls have no limit.
 ssh_exec() {
-    local minutes=""
+    local limit=""
     if [ "${1:-}" = "--timeout" ]; then
-        minutes="$2"
+        limit="$2"
         shift 2
     fi
     local -a ssh_cmd
-    if [ -n "$minutes" ]; then
-        ssh_cmd=(timeout "${minutes}m" ssh)
+    if [ -n "$limit" ]; then
+        case "$limit" in
+            *s|*m) ;;
+            *) limit="${limit}m" ;;
+        esac
+        ssh_cmd=(timeout "$limit" ssh)
     else
         ssh_cmd=(ssh)
     fi
@@ -71,7 +75,7 @@ run_remote() {
 }
 
 copy_diagnostics() {
-    local minutes="$1"
+    local limit="$1"
     local copy_status=0
     local copy_cmd
     local staging
@@ -79,7 +83,7 @@ copy_diagnostics() {
     staging="$(mktemp -d)"
     echo "Copying diagnostics back to ${LOG_DIR}"
     copy_cmd=$(printf 'mkdir -p %q && tar -C %q -czf - .' "$REMOTE_LOG_DIR" "$REMOTE_LOG_DIR")
-    ssh_exec --timeout "$minutes" "$copy_cmd" | tar -xzf - -C "$staging" || copy_status=$?
+    ssh_exec --timeout "$limit" "$copy_cmd" | tar -xzf - -C "$staging" || copy_status=$?
     if [ "$copy_status" -ne 0 ]; then
         rm -rf "$staging"
         echo "ERROR: failed to copy diagnostics (status ${copy_status})" >&2
@@ -103,14 +107,15 @@ if [ "$phase" = "copy-logs" ]; then
     # A finished gather already holds the snapshot from before destroy-bmaas.
     # Running it again would replace that snapshot with deleted objects.
     # An interrupted proof has no marker, so collect before the host is removed.
-    # One minute each leaves two minutes of the workflow step for the transfer.
+    # The workflow step allows four minutes: two 15-second probes, two
+    # one-minute gathers, and a 90-second transfer.
     for target in gather-infra gather-bmaas; do
         marker=""
         case "$target" in
             gather-infra) marker="${REMOTE_LOG_DIR}/.gather-infra-complete" ;;
             gather-bmaas) marker="${REMOTE_LOG_DIR}/bmaas/.gather-bmaas-complete" ;;
         esac
-        if ssh_exec "test -f $(printf '%q' "$marker")"; then
+        if ssh_exec --timeout 15s "test -f $(printf '%q' "$marker")"; then
             echo "Keeping the ${target} snapshot already collected"
             continue
         fi
@@ -121,7 +126,7 @@ if [ "$phase" = "copy-logs" ]; then
             echo "WARNING: make ${target} failed with status ${status}" >&2
         fi
     done
-    copy_diagnostics 2
+    copy_diagnostics 90s
     exit
 fi
 
