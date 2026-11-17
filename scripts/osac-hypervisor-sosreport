@@ -8,6 +8,7 @@ trap 'rm -rf -- "$scratch"; [[ -z "$handoff" ]] || rm -rf -- "$handoff"' EXIT
 trap 'exit 1' INT TERM HUP
 ulimit -f 65536
 touch "$scratch/sos.conf"
+printf '{}\n' >"$scratch/mapping"
 env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME="$scratch" LC_ALL=C \
   timeout --kill-after=5 300 sos report \
   --build --clean --batch --no-report --no-env-vars \
@@ -20,17 +21,20 @@ awk '/^Successfully obfuscated 1 report\(s\)[[:space:]]*$/ {clean++; next}
      END {if (clean != 1 || final != 1) exit 1}' "$scratch/command.log"
 tree=$(sed -n '/^Your sos report build tree has been generated in:/{n;s/^[[:space:]]*//;p;}' "$scratch/command.log")
 [[ $tree == "$scratch/"* && ${tree#"$scratch/"} != */* && -d $tree && ! -L $tree ]]
-if awk 'tolower($0) ~ /\[cleaner|unable to obfuscate report:|private map file:/ &&
+[[ -d $tree/sos_logs && ! -L $tree/sos_logs ]]
+for log in "$scratch/command.log" "$tree/sos_logs/sos.log" "$tree/sos_logs/ui.log"; do
+  [[ -f $log && ! -L $log ]]
+done
+awk 'tolower($0) ~ /\[cleaner|unable to obfuscate report:|private map file:/ &&
         tolower($0) ~ /error|exception|failed|could not|unable to/ {found=1}
-        END {exit !found}' "$scratch/command.log" "$tree/sos_logs/sos.log" "$tree/sos_logs/ui.log"; then
-  exit 1
-fi
-[[ -f $tree/sos_logs/sos.log && -f $tree/sos_logs/ui.log ]]
+        END {if (found) exit 1}' "$scratch/command.log" "$tree/sos_logs/sos.log" "$tree/sos_logs/ui.log"
 rm -rf -- "$tree/sos_logs"
+find "$tree" -type l -delete
 [[ -z $(find "$tree" ! -type d ! -type f -print -quit) ]]
 [[ $(du -sm "$scratch" | cut -f1) -le 256 ]]
 handoff=$(mktemp -d /var/tmp/osac-sosreport.XXXXXXXX)
 mv -- "$tree" "$handoff/report"
-chown -R "$SUDO_UID:$SUDO_GID" "$handoff"
+chown -R --no-dereference "$SUDO_UID:$SUDO_GID" "$handoff/report"
+chown --no-dereference "$SUDO_UID:$SUDO_GID" "$handoff"
 printf '%s\n' "$handoff"
 handoff=""

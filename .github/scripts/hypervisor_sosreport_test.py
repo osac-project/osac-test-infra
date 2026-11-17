@@ -5,6 +5,8 @@ import io
 import json
 import os
 import pathlib
+import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -164,9 +166,41 @@ class SosTest(unittest.TestCase):
         ]:
             self.assertIn(flags, helper)
         self.assertNotIn("systemd-run", helper)
+        self.assertIn("printf '{}\\n' >\"$scratch/mapping\"", helper)
+        self.assertLess(helper.index('"$handoff/report"\nchown'), helper.index('"$handoff"\nprintf'))
         action = yaml.safe_load((REPO / ".github/actions/collect-artifacts/action.yml").read_text())
         self.assertIn(" collect ", action["runs"]["steps"][0]["run"])
         self.assertEqual(action["runs"]["steps"][1]["name"], "Gather and redact")
+
+    def test_scanner_image_and_config_match_postrun_consumer(self) -> None:
+        action = yaml.safe_load((REPO / ".github/actions/upload-artifacts/action.yml").read_text())
+        scanner = next(step for step in action["runs"]["steps"] if step["name"] == "Scan artifacts with gitleaks")
+        postrun = (REPO / ".github/scripts/scan-run-logs.sh").read_text()
+        self.assertEqual(scanner["env"]["GITLEAKS_IMAGE"], re.search(r'GITLEAKS_IMAGE="([^"]+)"', postrun)[1])
+        self.assertEqual(scanner["env"]["GITLEAKS_CONFIG"], "${{ github.workspace }}/.github/scripts/.gitleaks.toml")
+        self.assertIn('GITLEAKS_CONFIG="${GITLEAKS_CONFIG:-${SCRIPT_DIR}/.gitleaks.toml}"', postrun)
+
+    def test_root_handoff_omits_sos_convenience_links_without_following(self) -> None:
+        tree = self.candidate_tree()
+        (tree / "installed-rpms").symlink_to("fixture_diagnostic.txt")
+        (tree / "fixture_external_link").symlink_to(self.artifacts)
+        helper = (REPO / "scripts/osac-hypervisor-sosreport").read_text()
+        filtering = helper[helper.index('find "$tree" -type l') : helper.index("[[ $(du")]
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", filtering], env=self.env | {"tree": str(tree)}, capture_output=True
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((tree / "fixture_diagnostic.txt").exists())
+        self.assertTrue((self.artifacts / "fixture_ordinary.txt").exists())
+        self.assertFalse((tree / "installed-rpms").is_symlink())
+
+    def test_empty_ordinary_source_and_sos_only_handoff(self) -> None:
+        shutil.rmtree(self.artifacts)
+        self.run_script("prepare")
+        self.assertIsNone(self.stage())
+        self.candidate_tree()
+        self.assertEqual(self.run_script("prepare").returncode, 0)
+        self.assertTrue((self.stage() / "hypervisor-sosreport").is_dir())
 
     def test_actual_launcher_completion_parser(self) -> None:
         helper = (REPO / "scripts/osac-hypervisor-sosreport").read_text()
@@ -198,6 +232,25 @@ class SosTest(unittest.TestCase):
             ["bash", "-euo", "pipefail", "-c", parser], env=self.env | {"scratch": str(self.temp)}, capture_output=True
         )
         self.assertNotEqual(result.returncode, 0)
+        (tree / "sos_logs/sos.log").write_text("")
+        for name in ("sos.log", "ui.log"):
+            log = tree / "sos_logs" / name
+            log.unlink()
+            log.symlink_to(self.temp / "command.log")
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", parser],
+                env=self.env | {"scratch": str(self.temp)},
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0, "symlinked internal logs must be rejected")
+            log.unlink()
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", parser],
+                env=self.env | {"scratch": str(self.temp)},
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0, "missing internal logs must be rejected")
+            log.touch()
 
     def stage(self) -> pathlib.Path | None:
         action = yaml.safe_load((REPO / ".github/actions/publish-private-artifacts/action.yml").read_text())
