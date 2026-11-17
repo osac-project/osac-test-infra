@@ -647,10 +647,13 @@ jobs:
           STAGE_USER="${USERPASS%%:*}"
           STAGE_PASS="${USERPASS#*:}"
           echo "::add-mask::${AUTH_B64}"
-          echo "::add-mask::${STAGE_PASS}"
+          MASK_PASS="${STAGE_PASS//'%'/'%25'}"
+          MASK_PASS="${MASK_PASS//$'\r'/'%0D'}"
+          MASK_PASS="${MASK_PASS//$'\n'/'%0A'}"
+          echo "::add-mask::${MASK_PASS}"
           printf '%s' "${STAGE_PASS}" | helm registry login "${REGISTRY_HOST}" \
             --username "${STAGE_USER}" --password-stdin
-          unset USERPASS STAGE_USER STAGE_PASS AUTH_B64
+          unset USERPASS STAGE_USER STAGE_PASS AUTH_B64 MASK_PASS
           echo "::endgroup::"
 
       # With chart-oci-tag unset (the real-release validation path): always

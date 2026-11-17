@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -21,13 +22,25 @@ FIXTURE_CREDENTIAL = "synthetic-credential-never-log"
 
 
 class ChartProbeTests(unittest.TestCase):
-    def run_step(self, failures: int, error: str) -> tuple[subprocess.CompletedProcess, list[str], str]:
+    def run_step(
+        self, failures: int, error: str, *, login_password: str | None = None
+    ) -> tuple[subprocess.CompletedProcess, list[str], str]:
         workflow = yaml.safe_load(WORKFLOW.read_text())
         step = next(step for step in workflow["jobs"]["e2e"]["steps"] if step.get("id") == "chart-version")
+        script = step["run"]
+        if login_password is not None:
+            login = next(
+                step
+                for step in workflow["jobs"]["e2e"]["steps"]
+                if step.get("name") == "Log in to the chart's OCI registry"
+            )
+            script = login["run"] + "\n" + script
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory)
+            fixture_password = login_password if login_password is not None else FIXTURE_CREDENTIAL
+            fixture_auth = base64.b64encode(f"fixture-user:{fixture_password}".encode()).decode()
             (temporary / "chart-registry-auth.json").write_text(
-                json.dumps({"auths": {"registry": {"auth": FIXTURE_CREDENTIAL}}})
+                json.dumps({"auths": {"quay.io": {"auth": fixture_auth}}})
             )
             stub = temporary / "stub.py"
             stub.write_text(
@@ -39,6 +52,12 @@ class ChartProbeTests(unittest.TestCase):
                 "    log.write(json.dumps([name, *sys.argv[1:]]) + '\\n')\n"
                 "if name == 'sleep':\n"
                 "    sys.exit(0)\n"
+                "if name == 'helm':\n"
+                "    expected = ['registry', 'login', 'quay.io', '--username', 'fixture-user', '--password-stdin']\n"
+                "    if sys.argv[1:] != expected or sys.stdin.read() != os.environ['FIXTURE_PASSWORD']:\n"
+                "        sys.exit(43)\n"
+                "    print('FIXTURE_HELM_LOGIN')\n"
+                "    sys.exit(0)\n"
                 "state = root / 'count'\n"
                 "count = int(state.read_text()) + 1 if state.exists() else 1\n"
                 "state.write_text(str(count))\n"
@@ -49,11 +68,11 @@ class ChartProbeTests(unittest.TestCase):
                 f"print({MANIFEST!r}, end='')\n"
             )
             stub.chmod(0o700)
-            for command in ("skopeo", "sleep"):
+            for command in ("skopeo", "sleep", "helm"):
                 (temporary / command).symlink_to(stub)
             output = temporary / "output"
             result = subprocess.run(
-                ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
+                ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
                 cwd=ROOT,
                 env={
                     **os.environ,
@@ -61,6 +80,7 @@ class ChartProbeTests(unittest.TestCase):
                     "STUB_DIR": directory,
                     "FAILURES": str(failures),
                     "PROBE_STDERR": error,
+                    "FIXTURE_PASSWORD": fixture_password,
                     "RUNNER_TEMP": directory,
                     "GITHUB_OUTPUT": str(output),
                     "CHART_OCI_REPO": "quay.io/example/chart",
@@ -72,6 +92,26 @@ class ChartProbeTests(unittest.TestCase):
             )
             calls = (temporary / "calls").read_text().splitlines()
             return result, calls, output.read_text() if output.exists() else ""
+
+    def test_login_registers_exact_masks_before_login_and_probe(self) -> None:
+        for fixture_password in (FIXTURE_CREDENTIAL, "fixture-%0A-password\r\n::warning::fixture\nend"):
+            with self.subTest(escaped=fixture_password != FIXTURE_CREDENTIAL):
+                result, calls, _ = self.run_step(0, "unused", login_password=fixture_password)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                fixture_auth = base64.b64encode(f"fixture-user:{fixture_password}".encode()).decode()
+                escaped_password = fixture_password.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                lines = result.stdout.splitlines()
+                masks = [line for line in lines if line.startswith("::add-mask::")]
+                self.assertEqual(masks, [f"::add-mask::{fixture_auth}", f"::add-mask::{escaped_password}"])
+                self.assertLess(lines.index(masks[-1]), lines.index("FIXTURE_HELM_LOGIN"))
+                self.assertLess(
+                    lines.index("FIXTURE_HELM_LOGIN"), lines.index("::group::Resolve chart version to install")
+                )
+                ordinary_output = "\n".join(line for line in lines if not line.startswith("::add-mask::"))
+                for forbidden in (fixture_auth, fixture_password, "FIXTURE_PASSWORD=", '"auths"'):
+                    self.assertNotIn(forbidden, ordinary_output + result.stderr)
+                self.assertEqual(json.loads(calls[0])[0], "helm")
+                self.assertEqual(sum('"skopeo"' in call for call in calls), 2)
 
     def test_success_and_retry_preserve_digest(self) -> None:
         for failures in (0, 2):
