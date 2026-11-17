@@ -183,6 +183,16 @@ class ProofPayloadTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(json.loads(state_path.read_text())["vnet_id"], "vnet-1")
 
+    def test_interrupted_checkpoint_keeps_the_previous_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"vnet_id": "kept"}')
+            with mock.patch("prove_bmi.os.replace", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    prove_bmi._save_state(path, {"vnet_id": "kept", "subnet_id": "new"})
+            self.assertEqual(json.loads(path.read_text()), {"vnet_id": "kept"})
+            self.assertEqual(list(Path(tmp).glob(".state.json.*.tmp")), [])
+
     def test_retry_reuses_a_recorded_network(self) -> None:
         class RecordingApi:
             def __init__(self) -> None:
@@ -309,6 +319,21 @@ class SanitizeTest(unittest.TestCase):
             cleaned = (destination / "job.log").read_text()
         self.assertNotIn(test_secret, cleaned)
         self.assertNotIn("still secret", cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+
+    def test_plain_secret_continuation_is_not_published(self) -> None:
+        secret = "second-half"
+        raw = f"password: first-half\n  {secret}\nbridge sysctl is 0\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn("first-half", cleaned)
+        self.assertNotIn(secret, cleaned)
+        self.assertIn("password: [REDACTED]", cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
 
     def test_explicit_block_indent_is_redacted_and_unknown_headers_fail(self) -> None:
@@ -457,6 +482,21 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("password: [REDACTED]", cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
 
+    def test_sequence_secret_entries_are_redacted(self) -> None:
+        secret = "hunter2"
+        raw = f"- password:\n    value: {secret}\nbridge sysctl is 0\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn(secret, cleaned)
+        self.assertNotIn("value:", cleaned)
+        self.assertIn("- password: [REDACTED]", cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+
     def test_secret_key_without_a_value_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "logs"
@@ -506,7 +546,7 @@ class WorkflowContractTest(unittest.TestCase):
         install = document["jobs"]["install"]
         self.assertEqual(install["needs"], "authorize")
         self.assertEqual(install["runs-on"], "${{ inputs.orchestrator-runner-label }}")
-        self.assertGreaterEqual(install["timeout-minutes"], 430)
+        self.assertGreaterEqual(install["timeout-minutes"], 600)
         self.assertEqual(install["permissions"]["id-token"], "write")
         self.assertEqual(install["permissions"]["pull-requests"], "read")
         self.assertEqual(install["permissions"]["attestations"], "write")
@@ -545,7 +585,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertNotRegex(remote, r"timeout\b[^\n]*\bssh_exec\b")
         self.assertIn('timeout "${minutes}m" ssh', remote)
         self.assertIn("copy-logs", remote)
-        copy_fn = remote.split("copy_diagnostics()", 1)[1].split('if [ "${1:-}" = "copy-logs" ]', 1)[0]
+        copy_fn = remote.split("copy_diagnostics()", 1)[1].split('if [ "$phase" = "copy-logs" ]', 1)[0]
         self.assertLess(copy_fn.index("mktemp"), copy_fn.index('rm -rf "$LOG_DIR"'))
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertIn('sh -s -- "$home" "$PUB_KEY"', setup)
@@ -554,16 +594,30 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertEqual(teardown["if"], "always()")
         names = [step.get("name") for step in steps]
         self.assertLess(names.index("Validate pull request revision"), names.index("Provision ephemeral EC2 instance"))
+        self.assertLess(names.index("Install the BMaaS cluster on the ephemeral host"), names.index("Prove one BMI on the ephemeral host"))
+        self.assertLess(names.index("Prove one BMI on the ephemeral host"), names.index("Copy diagnostics from the ephemeral host"))
         self.assertLess(names.index("Copy diagnostics from the ephemeral host"), names.index("Terminate the ephemeral instance"))
         self.assertLess(names.index("Terminate the ephemeral instance"), names.index("Sanitize diagnostics"))
         self.assertLess(names.index("Sanitize diagnostics"), names.index("Upload sanitized diagnostics"))
-        install_run = next(step for step in steps if step.get("name") == "Run the BMaaS install on the ephemeral host")
-        self.assertGreaterEqual(install_run["timeout-minutes"], 420)
+        phase_steps = [
+            step
+            for step in steps
+            if step.get("name") in {"Install the BMaaS cluster on the ephemeral host", "Prove one BMI on the ephemeral host"}
+        ]
+        self.assertEqual([step["run"].splitlines()[-1].strip() for step in phase_steps], [
+            "./scripts/ec2-runner/run-bmaas-agentless.sh cluster",
+            "./scripts/ec2-runner/run-bmaas-agentless.sh prove",
+        ])
+        for step in steps:
+            if "timeout-minutes" in step:
+                self.assertLessEqual(step["timeout-minutes"], 360)
+        phase_budget = sum(step["timeout-minutes"] for step in phase_steps)
+        self.assertGreaterEqual(phase_budget, 420)
         copy_step = next(step for step in steps if step.get("name") == "Copy diagnostics from the ephemeral host")
         self.assertIn("always()", copy_step["if"])
         self.assertIn("copy-logs", copy_step["run"])
         self.assertLessEqual(copy_step["timeout-minutes"], 4)
-        self.assertGreaterEqual(install["timeout-minutes"], install_run["timeout-minutes"] + 90)
+        self.assertGreaterEqual(install["timeout-minutes"], phase_budget + 90)
 
         upload = next(step for step in steps if step.get("name") == "Upload sanitized diagnostics")
         self.assertIn("steps.publish-attestation.outcome == 'success'", upload["if"])
@@ -655,6 +709,8 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("--ignore-not-found", fabric)
         self.assertLess(fabric.index("l2advertisements.metallb.io"), fabric.index("oc get l2advertisement"))
         self.assertIn("osac-bmaas-install-stamp", deploy)
+        self.assertLess(deploy.index('sha256sum "$overlay_dst"'), deploy.index("make install"))
+        self.assertLess(deploy.index("make install"), deploy.index('--from-literal=overlay="$installed_overlay"'))
         self.assertIn("{.data.profile}", deploy)
         self.assertIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()

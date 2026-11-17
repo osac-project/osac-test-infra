@@ -196,6 +196,22 @@ def _object_name(response: dict[str, Any]) -> str:
     return str(response["object"]["metadata"]["name"])
 
 
+def _save_state(state_path: Path, state: dict[str, str]) -> None:
+    """Replace the checkpoint without truncating the previous ids first."""
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{state_path.name}.", suffix=".tmp", dir=state_path.parent)
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(json.dumps(state))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, state_path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def _load_state(path: Path) -> dict[str, str]:
     if not path.is_file():
         return {}
@@ -217,8 +233,7 @@ def create_proof(
 
     def remember(key: str, value: str) -> None:
         state[key] = value
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(json.dumps(state))
+        _save_state(state_path, state)
 
     network_id = state.get("vnet_id", "")
     if not network_id:
@@ -397,7 +412,7 @@ def delete_proof(api: Api, state: dict[str, str], state_path: Path | None = None
         print(f"deleted {key} {resource_id}")
         state.pop(key, None)
         if state_path is not None:
-            state_path.write_text(json.dumps(state))
+            _save_state(state_path, state)
     return ok
 
 
@@ -512,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         interval_seconds=args.interval_seconds,
     )
     state["address"] = address
-    state_path.write_text(json.dumps(state))
+    _save_state(state_path, state)
     print(f"BMI {state['bmi_id']} is Ready at {address}")
     return 0
 
