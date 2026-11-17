@@ -10,7 +10,8 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    # 01:15 UTC avoids the 00:00 VMaaS and 00:30 BMaaS Netris orchestrator slots.
+    - cron: "15 1 * * *"
   workflow_dispatch:
     inputs:
       pr-number:
@@ -51,7 +52,7 @@ on:
       tooling-check-cmds:
         description: "Semicolon-separated commands to verify on the box before JIT registration."
         required: false
-        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+        default: "dnf install -y ansible-core python3-pip make; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make"
       osac-repo:
         description: "Override osac mono-repo git URI -- empty means upstream"
         required: false
@@ -71,10 +72,10 @@ jobs:
   e2e-bmaas-agentless:
     uses: ./.github/workflows/e2e-bmaas-agentless-net-full-install.yml
     with:
-      deploy-suite: bmaas-agentless
+      deploy-suite: bmaas
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
-      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make' }}
       osac-repo: ${{ inputs.osac-repo || '' }}
       osac-branch: ${{ inputs.osac-branch || '' }}
       test-infra-repository: ${{ inputs.pr-repository || github.repository }}

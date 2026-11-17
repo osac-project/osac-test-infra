@@ -66,6 +66,19 @@ if [[ -n "${BMH_NAME:-}" ]]; then
     fi
 fi
 
+env_file="${INFRA_DIR}/.env.infra"
+if [[ "$cleanup_failed" -eq 0 && -f "$env_file" ]]; then
+    env_tmp="$(mktemp)"
+    grep_status=0
+    grep -v -E '^(OSAC_BMI_NETWORK_INTERFACE|OSAC_BMI_INSTANCE_TYPE)=' "$env_file" >"$env_tmp" || grep_status=$?
+    if [[ "$grep_status" -gt 1 ]]; then
+        echo "ERROR: failed to update ${env_file}" >&2
+        rm -f "$env_tmp"
+        cleanup_failed=1
+    else
+        mv "$env_tmp" "$env_file"
+    fi
+fi
 if [[ "$cleanup_failed" -ne 0 ]]; then
     exit 1
 fi

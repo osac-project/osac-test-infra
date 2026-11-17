@@ -175,4 +175,21 @@ KEY_B64="$(base64 -w0 "$SSH_KEY")"
 oc -n "$OSAC_NAMESPACE" patch secret network-fulfillment-ig --type merge -p \
     "{\"data\":{\"AGENTLESS_NET_SSH_PRIVATE_KEY\":\"${KEY_B64}\"}}"
 
+info "Publishing BMaaS test inputs"
+env_file="${INFRA_DIR}/.env.infra"
+touch "$env_file"
+env_tmp="$(mktemp)"
+grep_status=0
+grep -v -E '^(OSAC_BMI_NETWORK_INTERFACE|OSAC_BMI_INSTANCE_TYPE)=' "$env_file" >"$env_tmp" || grep_status=$?
+if [[ "$grep_status" -gt 1 ]]; then
+    echo "ERROR: failed to update ${env_file}" >&2
+    rm -f "$env_tmp"
+    exit 1
+fi
+cat >>"$env_tmp" <<'EOF'
+OSAC_BMI_NETWORK_INTERFACE=eth9
+OSAC_BMI_INSTANCE_TYPE=bmaas-agentless-ci
+EOF
+mv "$env_tmp" "$env_file"
+
 info "setup-bmaas complete for ${BMH_NAME}"

@@ -55,7 +55,7 @@ fi
 MERGED_VALUES_DIR="${INSTALLER_DIR}/values/agentless-net-ci"
 MERGED_VALUES="${MERGED_VALUES_DIR}/values.yaml"
 
-if [[ -z "${OSAC_PROFILE:-}" ]]; then
+if [[ "${DEPLOY_SUITE:-}" != "bmaas" ]]; then
 mkdir -p "$MERGED_VALUES_DIR"
 
 info "Merging values overlay with ${OSAC_VALUES_FILE}..."
@@ -93,7 +93,7 @@ fi
 # ---------- step 8: install OSAC ----------
 
 installed_overlay=""
-if [[ -n "${OSAC_PROFILE:-}" ]]; then
+if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
     requested_revision="$(git -C "$OSAC_DIR" rev-parse HEAD)"
     overlay_src="${INFRA_DIR}/values-bmaas-overlay.yaml"
     overlay_dst="${INSTALLER_DIR}/values/bmaas-agentless-overlay.yaml"
@@ -161,7 +161,7 @@ KUBECONFIG="$KUBECONFIG" oc wait deploy/fulfillment-grpc-server -n "$OSAC_NAMESP
     --for=condition=Available --timeout=300s
 KUBECONFIG="$KUBECONFIG" oc wait deploy/osac-operator -n "$OSAC_NAMESPACE" \
     --for=condition=Available --timeout=300s
-if [[ -n "${OSAC_PROFILE:-}" ]]; then
+if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
     mapfile -t BMF_DEPLOYS < <(KUBECONFIG="$KUBECONFIG" oc get deploy -n "$OSAC_NAMESPACE" -o name | grep bmf)
     if [[ ${#BMF_DEPLOYS[@]} -eq 0 ]]; then
         echo "ERROR: no bare-metal fulfillment deployment in ${OSAC_NAMESPACE}" >&2
@@ -181,7 +181,7 @@ KUBECONFIG="$KUBECONFIG" oc get pods -n "$OSAC_NAMESPACE" --no-headers | \
 
 # ---------- step 10b: patch MetalLB to use fabric subnet ----------
 
-if [[ -z "${OSAC_PROFILE:-}" ]]; then
+if [[ "${DEPLOY_SUITE:-}" != "bmaas" ]]; then
     info "Patching MetalLB to use fabric subnet..."
     KUBECONFIG="$KUBECONFIG" oc patch ipaddresspool caas-address-pool -n metallb-system \
         --type=merge -p '{"spec":{"addresses":["10.0.0.240-10.0.0.250"]}}'
