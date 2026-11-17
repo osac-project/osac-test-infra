@@ -89,19 +89,13 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Retain private host inventory
-      if: always()
-      shell: bash
-      env:
-        K8S_SECRETS_FILE: ${{ inputs.k8s-secrets-file }}
-      run: python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" inventory
-
     - name: Verify redaction complete
       if: always()
       shell: bash
       env:
         ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
       run: |
+        rm -rf -- "${RUNNER_TEMP}/osac-private-upload"
         if [[ -f "${ARTIFACT_DIR}/.cluster-copy-in-progress" ]]; then
           echo "::warning::Cluster artifact copy did not complete; discarding partial cluster files."
           find "${ARTIFACT_DIR}" -mindepth 1 -maxdepth 1 \
@@ -124,6 +118,36 @@ runs:
         # after a cancel interrupted this one. A new collection removes it
         # first (collect-artifacts.sh), and the upload leaves it out.
 
+    - name: Mint private report verification token
+      id: sos-token
+      if: always() && inputs.private-repo == 'osac-project/osac-ci-artifacts' && inputs.private-repo-app-id != '' && inputs.private-repo-app-key != ''
+      uses: ./.github/actions/mint-github-app-token
+      with:
+        app-id: ${{ inputs.private-repo-app-id }}
+        private-key: ${{ inputs.private-repo-app-key }}
+        account-login: osac-project
+        repositories: osac-ci-artifacts
+        permissions: '{"actions":"write"}'
+
+    - name: Prepare private host report
+      if: always()
+      shell: bash
+      env:
+        PRIVATE_REPO: ${{ inputs.private-repo }}
+        GH_DISPATCH_TOKEN: ${{ steps.sos-token.outputs.token }}
+        KNOWN_SECRET_FILES: ${{ inputs.known-secret-files }}
+        KNOWN_SECRET_ENV: ${{ inputs.known-secret-env }}
+        K8S_SECRETS_FILE: ${{ inputs.k8s-secrets-file }}
+      run: |
+        status=0
+        bash "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.sh" prepare >/dev/null 2>&1 || status=$?
+        if [[ ${status} -eq 78 ]]; then
+          echo "::error::Could not prepare private artifacts"
+          exit 1
+        elif [[ ${status} -ne 0 ]]; then
+          echo "::notice::Hypervisor report withheld"
+        fi
+
     - name: Scan artifacts with gitleaks
       # Skipped only when the caller passes gitleaks: "false" (see the input)
       # and publishes to this run: the release gate and the upload below still
@@ -137,6 +161,11 @@ runs:
         # Same pinned image as scan-run-logs.sh
         GITLEAKS_IMAGE: "ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
       run: |
+        if [[ -d "${RUNNER_TEMP}/osac-private-upload" ]]; then
+          ARTIFACT_DIR="${RUNNER_TEMP}/osac-private-upload"
+          export GITHUB_STEP_SUMMARY=/dev/null
+          exec >"${ARTIFACT_DIR%/*}/sos-upload-check.log" 2>&1
+        fi
         if [[ ! -d "${ARTIFACT_DIR}" ]]; then
           echo "No artifact directory — skipping gitleaks scan"
           exit 0
@@ -291,6 +320,11 @@ runs:
         FAIL_ON_CENSOR: ${{ inputs.fail-on-censor }}
         MAX_FILE_MBYTES: ${{ inputs.max-file-mbytes }}
       run: |
+        if [[ -d "${RUNNER_TEMP}/osac-private-upload" ]]; then
+          ARTIFACT_DIR="${RUNNER_TEMP}/osac-private-upload"
+          export GITHUB_STEP_SUMMARY=/dev/null
+          exec >"${ARTIFACT_DIR%/*}/sos-upload-check.log" 2>&1
+        fi
         if [[ ! -d "${ARTIFACT_DIR}" ]]; then
           exit 0
         fi
@@ -331,11 +365,10 @@ runs:
       uses: ./.github/actions/publish-private-artifacts
       with:
         artifact-name: ${{ inputs.artifact-name }}
+        source-dir: ${{ runner.temp }}/osac-private-upload
         private-repo: ${{ inputs.private-repo }}
         app-id: ${{ inputs.private-repo-app-id }}
         app-key: ${{ inputs.private-repo-app-key }}
-        known-secret-files: ${{ inputs.known-secret-files }}
-        known-secret-env: ${{ inputs.known-secret-env }}
 
     - name: Upload artifacts
       if: always() && inputs.private-repo == ''
@@ -349,7 +382,9 @@ runs:
         retention-days: 30
         if-no-files-found: warn
 
-    - name: Remove private host candidate
+    - name: Remove private host report
       if: always()
       shell: bash
-      run: python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" discard
+      run: |
+        rm -rf -- "${RUNNER_TEMP}/osac-hypervisor-sosreport" "${RUNNER_TEMP}/osac-private-upload"
+        rm -f -- "${RUNNER_TEMP}/sos-upload-check.log"
