@@ -130,32 +130,43 @@ def pidfd_call(name: str, *arguments: int) -> int:
     return result
 
 
-def stop(directory: Path) -> None:
+def stop(directory: Path) -> bool:
+    if directory.is_symlink():
+        return False
     (directory / "stop").touch()
     try:
         state = json.loads((directory / "status.json").read_text())
+        if state.get("stopped"):
+            return True
+    except (OSError, ValueError):
+        return False
+    try:
         descriptor = pidfd_call("pidfd_open", state["pid"], 0)
         try:
             if process_identity(state["pid"]) != state["identity"]:
-                return
+                return True
             poller = select.poll()
             poller.register(descriptor, select.POLLIN)
-            if not poller.poll(2000):
+            if not poller.poll(1000):
                 pidfd_call("pidfd_send_signal", descriptor, signal.SIGTERM, 0, 0)
-                if not poller.poll(1000):
-                    pidfd_call("pidfd_send_signal", descriptor, signal.SIGKILL, 0, 0)
-                    poller.poll(1000)
+                return bool(poller.poll(3000))
+            return True
         finally:
             os.close(descriptor)
+    except (ProcessLookupError, FileNotFoundError):
+        return True
     except (OSError, ValueError, KeyError, AttributeError):
-        pass
+        return False
 
 
 def collect(inventory: Path, destination: Path) -> None:
+    if destination.is_symlink() or destination.is_file():
+        destination.unlink()
+    elif destination.exists():
+        shutil.rmtree(destination)
     directory = history_dir(inventory)
-    if not directory.is_dir():
+    if not directory.is_dir() or not stop(directory):
         return
-    stop(directory)
     prefix = RawInventory.load(inventory).name_prefix
     if not isinstance(prefix, str) or not re.fullmatch(r"virtual-bmh-[0-9a-f]{8}", prefix):
         return
@@ -191,8 +202,8 @@ def stage(directory: Path, destination: Path) -> None:
 
 def cleanup(inventory: Path) -> None:
     directory = history_dir(inventory)
-    if directory.is_dir():
-        stop(directory)
+    if directory.is_dir() and not stop(directory):
+        return
     prefix = RawInventory.load(inventory).name_prefix
     result = subprocess.run(["virsh", "-c", "qemu:///system", "list", "--all", "--name"],
                             capture_output=True, text=True, timeout=5, check=False)

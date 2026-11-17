@@ -202,6 +202,12 @@ to `bmh-history/` in the artifact tree and creating the completion marker.
 Failed gathering leaves no marker; failed event redaction releases no history.
 Teardown retains the inventory/history if libvirt is unreachable or any domain
 of the run remains, and removes history after confirmed domain removal.
+If recorder exit cannot be confirmed (for example, pidfd is unavailable),
+collection releases no event files and cleanup retains the cooperative stop
+marker/history for a later attempt. Shutdown allows the CLI termination and
+reap grace period; it never force-kills the recorder while its child may live.
+Each collection discards any previous event staging destination before gating
+fresh files, so a rejected collection cannot republish stale event files.
 
 Guest serial capture is supplied unchanged by the existing VM serial PTY/log
 XML and disk-adjacent log path, and collected by `gather-osac-logs.sh` into

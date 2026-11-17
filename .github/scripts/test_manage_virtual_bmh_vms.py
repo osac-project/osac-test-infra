@@ -19,7 +19,6 @@ import json
 import signal
 from unittest import mock
 import importlib.util
-import json
 import subprocess
 import sys
 import tempfile
@@ -232,6 +231,12 @@ class HistoryTests(unittest.TestCase):
         directory = self.run_stream(line * 50, MAX_BYTES=256)
         self.assertLessEqual((directory / "events.log").stat().st_size, 256)
         self.assertEqual(json.loads((directory / "status.json").read_text())["event_stop"], "byte limit")
+
+    def test_unterminated_event_at_eof_is_never_retained(self) -> None:
+        line = b"2026-11-13 00:00:00.000+0000: event 'reboot' for domain 'virtual-bmh-aabbccdd-01'"
+        directory = self.run_stream(line)
+        self.assertEqual((directory / "events.log").read_bytes(), b"")
+        self.assertEqual(json.loads((directory / "status.json").read_text())["event_stop"], "CLI exited")
 
     def test_cli_deadline_and_cancel_reap(self) -> None:
         for cancelled in (False, True):
