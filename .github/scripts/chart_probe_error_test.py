@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 import yaml
@@ -16,54 +17,18 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/e2e-vmaas-full-install.yml"
 MANIFEST = '{"schemaVersion":2}'
-SECRET = "synthetic-credential-never-log"
+FIXTURE_CREDENTIAL = "synthetic-credential-never-log"
 
 
 class ChartProbeTests(unittest.TestCase):
-    def test_sanitizer_preserves_recognized_errors_and_bounds_output(self) -> None:
-        for error, expected in (
-            ("manifest unknown", "manifest unknown"),
-            ("MANIFEST NOT FOUND", "manifest not found"),
-            ("unauthorized: authentication required", "unauthorized; authentication required"),
-            ("requested access to the resource is denied", "denied"),
-            ("Forbidden", "forbidden"),
-            ("too many requests", "too many requests"),
-            ("toomanyrequests: rate exceeded", "toomanyrequests"),
-            ("dial tcp: lookup registry: no such host", "no such host"),
-            ("read: i/o timeout", "i/o timeout"),
-            ("dial tcp: connection refused", "connection refused"),
-            ("read: connection reset by peer", "connection reset by peer"),
-            ("context deadline exceeded", "context deadline exceeded"),
-            ("net/http: TLS handshake timeout", "tls handshake timeout"),
-            ("x509: certificate signed by unknown authority", "certificate signed by unknown authority"),
-            ("x509: certificate has expired or is not yet valid", "certificate has expired or is not yet valid"),
-            ("StatusCode: 403", "HTTP 403"),
-            ("status code: 429", "HTTP 429"),
-            ("invalid status code from registry 500 (Internal Server Error)", "internal server error; HTTP 500"),
-            ("received unexpected HTTP status: 502 Bad Gateway", "bad gateway; HTTP 502"),
-            ("HTTP/2 503 Service Unavailable", "service unavailable; HTTP 503"),
-            ("HTTP 504 Gateway Timeout", "gateway timeout; HTTP 504"),
-        ):
-            with self.subTest(error=error):
-                result = subprocess.run(
-                    ["python3", str(ROOT / ".github/scripts/chart_probe_error.py")],
-                    input=f"{SECRET}\n\x1b[31m::warning::{error}\r::set-output name=leak::{SECRET}\n{SECRET}",
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                self.assertEqual(result.stdout, f"Last chart manifest probe error (allowlisted): {expected}\n")
-                self.assertEqual(result.stderr, "")
-        result, _, _ = self.run_step(99, " ".join(f"StatusCode: {status}" for status in range(400, 600)))
-        diagnostic = next(line for line in result.stdout.splitlines() if line.startswith("Last chart"))
-        self.assertLess(len(diagnostic), 512)
-
     def run_step(self, failures: int, error: str) -> tuple[subprocess.CompletedProcess, list[str], str]:
         workflow = yaml.safe_load(WORKFLOW.read_text())
         step = next(step for step in workflow["jobs"]["e2e"]["steps"] if step.get("id") == "chart-version")
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory)
-            (temporary / "chart-registry-auth.json").write_text(json.dumps({"auths": {"registry": {"auth": SECRET}}}))
+            (temporary / "chart-registry-auth.json").write_text(
+                json.dumps({"auths": {"registry": {"auth": FIXTURE_CREDENTIAL}}})
+            )
             stub = temporary / "stub.py"
             stub.write_text(
                 "#!/usr/bin/env python3\n"
@@ -111,12 +76,12 @@ class ChartProbeTests(unittest.TestCase):
     def test_success_and_retry_preserve_digest(self) -> None:
         for failures in (0, 2):
             with self.subTest(failures=failures):
-                result, calls, output = self.run_step(failures, SECRET)
+                result, calls, output = self.run_step(failures, FIXTURE_CREDENTIAL)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(sum('"skopeo"' in call for call in calls), failures + 2)
                 self.assertEqual(sum('"sleep", "15"' in call for call in calls), failures)
                 self.assertIn(f"digest={hashlib.sha256(MANIFEST.encode()).hexdigest()}", output)
-                self.assertNotIn(SECRET, result.stdout + result.stderr)
+                self.assertNotIn(FIXTURE_CREDENTIAL, result.stdout + result.stderr)
                 self.assertNotIn(MANIFEST, result.stdout + result.stderr)
                 self.assertNotIn("Last chart manifest probe error", result.stdout)
                 probes = [json.loads(call) for call in calls if '"skopeo"' in call]
@@ -125,12 +90,12 @@ class ChartProbeTests(unittest.TestCase):
                     self.assertEqual(Path(probe[4]).name, "chart-registry-auth.json")
                     self.assertEqual(probe[5:], ["docker://quay.io/example/chart:test-sha"])
 
-    def test_final_error_is_safe_and_only_from_last_probe(self) -> None:
+    def test_final_error_is_preserved_with_workflow_commands_disabled(self) -> None:
         error = (
-            f"Authorization: Bearer {SECRET}\nBasic {SECRET}\n"
-            f"https://user:{SECRET}@registry.invalid/?token={SECRET}\n"
-            f'{{"auth":"{SECRET}","password":"{SECRET}"}}\n'
-            f"\x1b[31m::error::injected {SECRET}\r::add-mask::{SECRET}\n" + "manifest unknown\n" * 1000
+            "unrecognized registry response: custom failure 27%\n"
+            "::error::injected\n::stop-commands::attacker\n::attacker::\n"
+            "\x1b[31m::warning::injected\r::add-mask::injected\n"
+            "last diagnostic line"
         )
         result, calls, output = self.run_step(99, error)
         self.assertEqual(result.returncode, 1)
@@ -146,20 +111,23 @@ class ChartProbeTests(unittest.TestCase):
         self.assertEqual(output, "")
         logs = result.stdout + result.stderr
         self.assertIn("not available after 300s", logs)
-        self.assertIn("Last chart manifest probe error", logs)
-        diagnostic = next(line for line in logs.splitlines() if line.startswith("Last chart manifest probe error"))
-        self.assertEqual(diagnostic, "Last chart manifest probe error (allowlisted): manifest unknown")
-        for forbidden in (SECRET, "injected", "::add-mask::", "\x1b", "connection refused", MANIFEST):
+        prefix, diagnostic = result.stdout.split("Last chart manifest probe error:\n", 1)
+        stop, diagnostic = diagnostic.split("\n", 1)
+        token = stop.removeprefix("::stop-commands::")
+        self.assertEqual(str(uuid.UUID(token)), token)
+        self.assertNotIn(token, error)
+        self.assertEqual(diagnostic, f"{error.replace(chr(13), chr(10))}\n::{token}::\n")
+        self.assertNotIn("injected", prefix)
+        self.assertEqual(result.stderr, "")
+        for forbidden in (FIXTURE_CREDENTIAL, "connection refused", MANIFEST):
             self.assertNotIn(forbidden, logs)
-        self.assertEqual(logs.count("manifest unknown"), 1)
 
-    def test_unknown_or_empty_error_fails_closed(self) -> None:
-        for error in (SECRET, ""):
-            with self.subTest(error=bool(error)):
-                result, _, _ = self.run_step(99, error)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("no recognized diagnostic (raw stderr withheld)", result.stdout)
-                self.assertNotIn(SECRET, result.stdout + result.stderr)
+    def test_empty_error_still_exits_one(self) -> None:
+        result, _, output = self.run_step(99, "")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Last chart manifest probe error:\n::stop-commands::", result.stdout)
+        self.assertEqual(output, "")
+        self.assertNotIn(FIXTURE_CREDENTIAL, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

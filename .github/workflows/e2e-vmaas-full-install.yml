@@ -646,6 +646,8 @@ jobs:
           USERPASS=$(printf '%s' "${AUTH_B64}" | base64 -d)
           STAGE_USER="${USERPASS%%:*}"
           STAGE_PASS="${USERPASS#*:}"
+          echo "::add-mask::${AUTH_B64}"
+          echo "::add-mask::${STAGE_PASS}"
           printf '%s' "${STAGE_PASS}" | helm registry login "${REGISTRY_HOST}" \
             --username "${STAGE_USER}" --password-stdin
           unset USERPASS STAGE_USER STAGE_PASS AUTH_B64
@@ -692,7 +694,11 @@ jobs:
               "docker://${CHART_OCI_REPO}:${VERSION}" 2>&1 >/dev/null); do
               if [[ "${elapsed}" -ge "${MAX_WAIT_SECONDS}" ]]; then
                 echo "::error::${CHART_OCI_REPO}:${VERSION} not available after ${MAX_WAIT_SECONDS}s"
-                printf '%s' "${PROBE_ERROR}" | python3 .github/scripts/chart_probe_error.py
+                echo "Last chart manifest probe error:"
+                STOP_TOKEN=$(cat /proc/sys/kernel/random/uuid)
+                echo "::stop-commands::${STOP_TOKEN}"
+                printf '%s\n' "${PROBE_ERROR}"
+                echo "::${STOP_TOKEN}::"
                 exit 1
               fi
               echo "${CHART_OCI_REPO}:${VERSION} not available yet (${elapsed}s elapsed), retrying in ${POLL_INTERVAL_SECONDS}s..."
