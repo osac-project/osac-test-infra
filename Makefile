@@ -195,10 +195,10 @@ deploy-suite: _validate-backend
 		$(MAKE) prepare-suite INFRA=$(INFRA) DEPLOY_SUITE=$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG); \
 	fi
 	@$(MAKE) _validate-suite-contract
-	@if [ "$(INFRA)" = agentless-net ] && [ "$(SUITE_STAGE)" = setup ]; then \
-		exit 0; \
-	fi
 	@stage="$(SUITE_STAGE)"; \
+	if [ "$(INFRA)" = agentless-net ] && [ "$$stage" = setup ]; then \
+		exit 0; \
+	fi; \
 	if [ "$(INFRA)" = agentless-net ] && [ "$$stage" = all ]; then stage=workload; fi; \
 	$(MAKE) -C $(INFRA_DIR) deploy-suite DEPLOY_SUITE=$(DEPLOY_SUITE) SUITE_STAGE="$$stage" EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 

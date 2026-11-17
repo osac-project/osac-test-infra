@@ -288,6 +288,12 @@ class SanitizeTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             sanitize_diagnostics.redact(b'{"pass\\u12":"hunter2"}\n')
         self.assertIn("unsupported escaped secret key", str(caught.exception))
+        structured = sanitize_diagnostics.redact(b'{"Authorization": "super-secret"}\n')
+        self.assertNotIn(b"super-secret", structured)
+        self.assertIn(b"[REDACTED]", structured)
+        split_value = sanitize_diagnostics.redact(b'{"password":\n  "hunter2"\n}\n')
+        self.assertNotIn(b"hunter2", split_value)
+        self.assertIn(b"[REDACTED]", split_value)
 
     def test_private_keys_passwords_and_bearers_are_removed(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
@@ -633,6 +639,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("github.event.pull_request.number", cleanup["concurrency"]["group"])
         self.assertTrue(suite["concurrency"]["cancel-in-progress"])
         self.assertTrue(cleanup["concurrency"]["cancel-in-progress"])
+        self.assertNotIn("e2e-bmaas-agentless", str(cleanup["jobs"]))
+        self.assertNotIn("remove-label", CLEANUP.read_text())
+        self.assertIn("cancel-stale-run", cleanup["jobs"])
 
         document = yaml.safe_load(WORKFLOW.read_text())
         self.assertIn("workflow_call", document[True])
@@ -704,6 +713,8 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(copy_fn.index("mktemp"), copy_fn.index('rm -rf "$LOG_DIR"'))
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertIn('sh -s -- "$home" "$PUB_KEY"', setup)
+        self.assertIn("--patch-file=/dev/stdin", setup)
+        self.assertNotIn("AGENTLESS_NET_SSH_PRIVATE_KEY\":\"${KEY_B64}\"}}\"", setup)
         self.assertIn("--switch", setup)
         self.assertIn("br-host2", setup)
         self.assertIn("detach-interface", setup)
@@ -744,6 +755,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("steps.publish-attestation.outcome == 'success'", upload["if"])
         self.assertIn("inputs.pr-number != ''", upload["if"])
         self.assertIn("steps.sanitize.outcome == 'success'", upload["if"])
+        self.assertIn("github.run_attempt", upload["with"]["name"])
         attest = next(step for step in steps if "attest-build-provenance" in step.get("uses", ""))
         self.assertIn("inputs.pr-number == ''", attest["if"])
         self.assertIn("e8998f949152b193b063cb0ec769d69d929409be", attest["uses"])
@@ -862,6 +874,9 @@ class WorkflowContractTest(unittest.TestCase):
         root_suite = root.split("deploy-suite: _validate-backend", 1)[1].split("\nrun-tests:", 1)[0]
         self.assertLess(root_suite.index("prepare-suite"), root_suite.index("_validate-suite-contract"))
         self.assertLess(root_suite.index("_validate-suite-contract"), root_suite.index("stage=workload"))
+        dispatch = root_suite.split("_validate-suite-contract", 1)[1]
+        self.assertIn("exit 0; \\\n", root_suite)
+        self.assertLess(dispatch.index("exit 0"), dispatch.index('SUITE_STAGE="$$stage"'))
         self.assertIn("{.data.profile}", deploy)
         self.assertIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()

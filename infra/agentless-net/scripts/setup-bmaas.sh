@@ -180,8 +180,9 @@ fi
 
 info "Storing the fulfillment private key"
 KEY_B64="$(base64 -w0 "$SSH_KEY")"
-oc -n "$OSAC_NAMESPACE" patch secret network-fulfillment-ig --type merge -p \
-    "{\"data\":{\"AGENTLESS_NET_SSH_PRIVATE_KEY\":\"${KEY_B64}\"}}"
+# printf is a shell builtin, so the key is not visible in another process's argv.
+printf '%s\n' "{\"data\":{\"AGENTLESS_NET_SSH_PRIVATE_KEY\":\"${KEY_B64}\"}}" \
+    | oc -n "$OSAC_NAMESPACE" patch secret network-fulfillment-ig --type merge --patch-file=/dev/stdin
 
 info "Publishing BMaaS test inputs"
 env_file="${INFRA_DIR}/.env.infra"
