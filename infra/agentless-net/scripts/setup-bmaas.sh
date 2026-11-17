@@ -79,15 +79,23 @@ info "Virtual BMH ${BMH_NAME}"
 # Reuse the NIC only when this MAC is already on the requested bridge.
 # A MAC on another bridge would make the published inventory name the wrong port.
 nic_source="$(sudo virsh domiflist "$BMH_NAME" | awk -v mac="$FABRIC_MAC" 'NR>2 && $5 == mac { print $3; exit }')"
+# Ironic powers the domain off after inspection. --live fails on a shut-off
+# domain and would abort before the inventory is published. --config persists
+# either way.
+domain_state="$(sudo virsh domstate "$BMH_NAME")"
+live_flags=()
+if [[ "$domain_state" == "running" ]]; then
+    live_flags=(--live)
+fi
 if [[ -z "$nic_source" ]]; then
     info "Attaching ${FABRIC_MAC} to ${FABRIC_BRIDGE}"
     sudo virsh attach-interface "$BMH_NAME" --source "$FABRIC_BRIDGE" --type bridge \
-        --model virtio --mac "$FABRIC_MAC" --live --config
+        --model virtio --mac "$FABRIC_MAC" "${live_flags[@]}" --config
 elif [[ "$nic_source" != "$FABRIC_BRIDGE" ]]; then
     info "Moving ${FABRIC_MAC} from ${nic_source} to ${FABRIC_BRIDGE}"
-    sudo virsh detach-interface "$BMH_NAME" bridge --mac "$FABRIC_MAC" --live --config
+    sudo virsh detach-interface "$BMH_NAME" bridge --mac "$FABRIC_MAC" "${live_flags[@]}" --config
     sudo virsh attach-interface "$BMH_NAME" --source "$FABRIC_BRIDGE" --type bridge \
-        --model virtio --mac "$FABRIC_MAC" --live --config
+        --model virtio --mac "$FABRIC_MAC" "${live_flags[@]}" --config
 else
     info "${FABRIC_MAC} is already attached to ${FABRIC_BRIDGE}"
 fi

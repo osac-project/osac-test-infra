@@ -23,6 +23,22 @@ INVENTORY_FILE="${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json"
 
 info() { echo "==> $*"; }
 
+# A delete with --wait=false leaves the object Terminating. Ironic cannot
+# drop its finalizer once the backing VM is gone, so clear it explicitly.
+# NotFound means the host is already gone.
+strip_bmh_finalizers() {
+    local name="$1"
+    local status=0
+    local output
+    output="$(oc -n "$BMH_NAMESPACE" patch baremetalhost "$name" --type merge -p '{"metadata":{"finalizers":null}}' 2>&1)" || status=$?
+    if [[ "$status" -eq 0 ]] || grep -q 'NotFound' <<<"$output"; then
+        return 0
+    fi
+    echo "ERROR: failed to strip finalizers from BareMetalHost ${name}" >&2
+    printf '%s\n' "$output" >&2
+    cleanup_failed=1
+}
+
 cleanup_failed=0
 if [[ -f "$STATE_FILE" ]]; then
     info "Deleting the proof BMI and its network"
@@ -57,6 +73,9 @@ if [[ "$inventory_unreadable" -eq 0 && ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
         echo "ERROR: virtual BMH VM deletion failed" >&2
         cleanup_failed=1
     fi
+    for name in "${INVENTORY_NAMES[@]}"; do
+        strip_bmh_finalizers "$name"
+    done
 fi
 if [[ -n "${BMH_NAME:-}" ]]; then
     info "Deleting BareMetalHost ${BMH_NAME}"
@@ -64,6 +83,7 @@ if [[ -n "${BMH_NAME:-}" ]]; then
         echo "ERROR: failed to delete BareMetalHost ${BMH_NAME}" >&2
         cleanup_failed=1
     fi
+    strip_bmh_finalizers "$BMH_NAME"
 fi
 
 env_file="${INFRA_DIR}/.env.infra"
