@@ -89,13 +89,57 @@ copy_diagnostics() {
     mv "$staging" "$LOG_DIR"
 }
 
-if [ "${1:-}" = "copy-logs" ]; then
+phase="${1:-all}"
+case "$phase" in
+    all|cluster|prove|copy-logs) ;;
+    *)
+        echo "usage: run-bmaas-agentless.sh [all|cluster|prove|copy-logs]" >&2
+        exit 2
+        ;;
+esac
+
+if [ "$phase" = "copy-logs" ]; then
     copy_diagnostics 3
     exit
 fi
 
+if [ "$phase" != "cluster" ]; then
+    : "${LOG_DIR:?LOG_DIR is required}"
+fi
+
+install_status=0
+run_required() {
+    local minutes="$1"
+    local target="$2"
+    local remote_cmd
+    if [ "$install_status" -ne 0 ]; then
+        return 0
+    fi
+    echo "Running make ${target}"
+    remote_cmd=$(printf 'cd %q && make %q' "$REMOTE_INFRA" "$target")
+    status=0
+    run_remote "$minutes" "$remote_cmd" || status=$?
+    if [ "$status" -ne 0 ]; then
+        install_status=$status
+        echo "ERROR: make ${target} failed with status ${install_status}" >&2
+    fi
+}
+
+run_optional() {
+    local minutes="$1"
+    local target="$2"
+    local remote_cmd
+    echo "Running make ${target}"
+    remote_cmd=$(printf 'cd %q && make %q' "$REMOTE_INFRA" "$target")
+    status=0
+    run_remote "$minutes" "$remote_cmd" || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "WARNING: make ${target} failed with status ${status}" >&2
+    fi
+}
+
+if [ "$phase" != "prove" ]; then
 : "${UNDER_TEST_DIR:?UNDER_TEST_DIR is required}"
-: "${LOG_DIR:?LOG_DIR is required}"
 : "${TOOLING_CHECK_CMDS:?TOOLING_CHECK_CMDS is required}"
 if [ ! -d "$UNDER_TEST_DIR" ]; then
     echo "ERROR: UNDER_TEST_DIR is not a directory: ${UNDER_TEST_DIR}" >&2
@@ -130,37 +174,6 @@ stage_cmd=$(printf 'set -euo pipefail; staging=%q; dest=%q; install -d -m 700 /r
     "$REMOTE_INFRA")
 ssh_exec "$stage_cmd"
 
-install_status=0
-run_required() {
-    local minutes="$1"
-    local target="$2"
-    local remote_cmd
-    if [ "$install_status" -ne 0 ]; then
-        return 0
-    fi
-    echo "Running make ${target}"
-    remote_cmd=$(printf 'cd %q && make %q' "$REMOTE_INFRA" "$target")
-    status=0
-    run_remote "$minutes" "$remote_cmd" || status=$?
-    if [ "$status" -ne 0 ]; then
-        install_status=$status
-        echo "ERROR: make ${target} failed with status ${install_status}" >&2
-    fi
-}
-
-run_optional() {
-    local minutes="$1"
-    local target="$2"
-    local remote_cmd
-    echo "Running make ${target}"
-    remote_cmd=$(printf 'cd %q && make %q' "$REMOTE_INFRA" "$target")
-    status=0
-    run_remote "$minutes" "$remote_cmd" || status=$?
-    if [ "$status" -ne 0 ]; then
-        echo "WARNING: make ${target} failed with status ${status}" >&2
-    fi
-}
-
 run_required 30 setup-infra
 run_required 60 deploy-ocp
 if [ "$install_status" -eq 0 ]; then
@@ -174,6 +187,14 @@ if [ "$install_status" -eq 0 ]; then
         echo "ERROR: make deploy-osac failed with status ${install_status}" >&2
     fi
 fi
+if [ "$phase" = "cluster" ]; then
+    if [ "$install_status" -ne 0 ]; then
+        exit "$install_status"
+    fi
+    exit 0
+fi
+fi
+
 run_required 30 deploy-fabric
 run_required 45 setup-bmaas
 run_required 60 prove-bmi

@@ -36,7 +36,7 @@ _JSON_AUTH = re.compile(
 _BLOCK_HEADER = re.compile(rb"^[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:[ \t]+#.*)?[ \t]*$")
 # A secret key whose line has no value. The value is the indented block that follows.
 _SECRET_KEY_ONLY = re.compile(
-    rb"(?i)^[ \t]*(" + _SECRET_NAME + rb")(\s*[:=])[ \t]*$"
+    rb"(?i)^[ \t]*((?:-[ \t]+)?)(" + _SECRET_NAME + rb")(\s*[:=])[ \t]*$"
 )
 
 
@@ -75,6 +75,16 @@ def _drop_indented_block(lines: list[bytes], index: int, key_indent: int) -> tup
             continue
         break
     return index, consumed_value
+
+
+def _drop_plain_continuation(lines: list[bytes], index: int, key_indent: int) -> int:
+    """Drop indented lines that continue a plain secret scalar. A blank line ends it."""
+    while index < len(lines):
+        follower = lines[index]
+        if follower.strip() == b"" or _line_indent(follower) <= key_indent:
+            break
+        index += 1
+    return index
 
 
 def _closed_quote(value: bytes, quote: bytes) -> bool:
@@ -155,13 +165,17 @@ def redact(data: bytes) -> bytes:
         key_only = None if match else _SECRET_KEY_ONLY.search(line.rstrip(b"\r\n"))
         if key_only:
             ending = line[len(line.rstrip(b"\r\n")) :]
-            output.append(key_only.group(1) + key_only.group(2) + b" " + _REDACTED + ending)
+            output.append(key_only.group(1) + key_only.group(2) + key_only.group(3) + b" " + _REDACTED + ending)
             index, consumed_value = _drop_indented_block(lines, index + 1, _line_indent(line))
             if not consumed_value:
                 raise RuntimeError("secret key has no value")
             continue
         output.append(_SECRET_ASSIGNMENT.sub(_redact_assignment, line))
-        index += 1
+        plain = match is not None and value[:1] not in (b'"', b"'", b"{", b"[", b"|", b">", b"&", b"*", b"!")
+        if plain:
+            index = _drop_plain_continuation(lines, index + 1, _line_indent(line))
+        else:
+            index += 1
     return b"".join(output)
 
 

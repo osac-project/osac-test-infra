@@ -92,9 +92,13 @@ fi
 
 # ---------- step 8: install OSAC ----------
 
+installed_overlay=""
 if [[ -n "${OSAC_PROFILE:-}" ]]; then
     requested_revision="$(git -C "$OSAC_DIR" rev-parse HEAD)"
-    overlay_sum="$(sha256sum "${INFRA_DIR}/values-bmaas-overlay.yaml" | awk '{print $1}')"
+    overlay_src="${INFRA_DIR}/values-bmaas-overlay.yaml"
+    overlay_dst="${INSTALLER_DIR}/values/bmaas-agentless-overlay.yaml"
+    overlay_sum="$(sha256sum "$overlay_src" | awk '{print $1}')"
+    installed_overlay="$overlay_sum"
     installed_stamp="$(KUBECONFIG="$KUBECONFIG" oc get configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" -o jsonpath='{.data.profile}{" "}{.data.revision}{" "}{.data.overlay}' 2>/dev/null || true)"
     if [[ "$installed_stamp" == "${OSAC_PROFILE} ${requested_revision} ${overlay_sum}" ]] \
         && KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | grep -q "1/1" \
@@ -102,7 +106,12 @@ if [[ -n "${OSAC_PROFILE:-}" ]]; then
         info "OSAC profile ${OSAC_PROFILE} at ${requested_revision} is already installed"
     else
         info "Installing OSAC profile ${OSAC_PROFILE}..."
-        cp "${INFRA_DIR}/values-bmaas-overlay.yaml" "${INSTALLER_DIR}/values/bmaas-agentless-overlay.yaml"
+        cp "$overlay_src" "$overlay_dst"
+        installed_overlay="$(sha256sum "$overlay_dst" | awk '{print $1}')"
+        if [[ "$installed_overlay" != "$overlay_sum" ]]; then
+            echo "ERROR: values overlay changed while it was copied" >&2
+            exit 1
+        fi
         (cd "$INSTALLER_DIR" && \
             KUBECONFIG="$KUBECONFIG" \
             make install \
@@ -163,7 +172,7 @@ if [[ -n "${OSAC_PROFILE:-}" ]]; then
     KUBECONFIG="$KUBECONFIG" oc create configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" \
         --from-literal=profile="$OSAC_PROFILE" \
         --from-literal=revision="$(git -C "$OSAC_DIR" rev-parse HEAD)" \
-        --from-literal=overlay="$(sha256sum "${INFRA_DIR}/values-bmaas-overlay.yaml" | awk '{print $1}')" \
+        --from-literal=overlay="$installed_overlay" \
         --dry-run=client -o yaml | KUBECONFIG="$KUBECONFIG" oc apply -f -
 fi
 info "OSAC is running:"
