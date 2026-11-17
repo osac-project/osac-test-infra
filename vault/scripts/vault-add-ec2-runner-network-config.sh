@@ -7,7 +7,7 @@
 # Actions run history/API to anyone, so subnet/security-group ids (which
 # reveal real VPC layout) and the AMI id must not be passed as dispatch
 # inputs. Vault-backed config, fetched at run time the same way the AWS
-# credentials and GitHub PAT already are, keeps them out of any public log.
+# credentials and GitHub App credentials already are, keeps them out of any public log.
 #
 # Written to secret/osac/e2e/ec2-runner-network-config, which already falls
 # under the existing osac-e2e AppRole policy's "secret/data/osac/e2e/*"

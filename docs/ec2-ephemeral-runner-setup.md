@@ -111,30 +111,89 @@ Use the dedicated, narrowly-scoped IAM credential from Prerequisites above,
 not a broad admin credential -- the orchestrator only ever calls
 `RunInstances`/`TerminateInstances`/`DescribeInstances`/`DescribeInstanceStatus`/`CreateTags`.
 
-## Step 4: Store a GitHub PAT for runner registration in Vault
+## Step 4: Store the GitHub App credentials for runner registration in Vault
 
 `GITHUB_TOKEN` (the automatic workflow token) cannot call the self-hosted
-runner registration endpoints (`generate-jitconfig`/delete) under any
-`permissions:` grant -- confirmed during implementation. GitHub only allows
-this via a PAT (classic `repo` scope, or fine-grained `Administration: write`)
-or a GitHub App installation token. A standing credential is unavoidable
-here, so this follows the same Vault-storage pattern as Step 3.
+runner endpoints (`generate-jitconfig`/list/delete) under any `permissions:`
+grant. `ec2-runner-provision`, `ec2-runner-teardown` and the orphan watchdog
+therefore all mint a short-lived **GitHub App installation token** (the
+`fetch-ec2-runner-github-app-token` action, valid one hour, scoped to the
+calling repository, `administration: write` only).
 
-Create a **fine-grained** PAT (github.com → Settings → Developer settings →
-Fine-grained tokens):
-- Repository access: **only** `osac-project/osac-test-infra`
-- Permissions: **Administration: Read and write** -- nothing else
-- Set an expiration date and track it; fine-grained PATs don't auto-renew
+A personal access token is deliberately **not** used: a fine-grained PAT can
+never exceed the rights of the account that owns it, and these endpoints need
+*admin* on the repository. A bot account that only has `write` gets a 403 that
+the teardown and reaper scripts treat as "already removed", so the failure is
+silent.
 
-Then store it, same pattern as Step 3:
+The App needs the repository permission **Administration: Read and write** and
+must be installed on the repositories that dispatch E2E runs. Store its
+credentials once, on the central Vault host (the private key is read from the
+file, so there are no newline or shell-quoting problems):
 
 ```bash
-./vault/scripts/vault-add-ec2-runner-github-pat.sh
-./vault/scripts/vault-sync.sh
+vault kv put secret/osac/e2e/ec2-runner-github-app \
+    app_id=<numeric app id> private_key=@<app>.private-key.pem
+./vault/scripts/vault-sync.sh <source-host> <target-host> [<target-host> ...]
 ```
 
-You'll be prompted for the token (not echoed back). Add `--dry-run` to
-preview without writing to Vault.
+`vault-sync.sh` takes the central Vault host as `<source-host>` and copies the
+secrets to every `<target-host>` that runs its own local Vault, for example
+`./vault/scripts/vault-sync.sh osac-ci-1 osac-8 osac-9`. Hosts set up as Vault
+*agents* tunnel to the central Vault (see `docs/new-ci-machine-setup.md`) and
+read the new value directly, so they need no sync.
+
+The path already falls under the `osac-e2e` AppRole policy's
+`secret/data/osac/e2e/*` wildcard.
+
+### Rotating the App key
+
+1. In the App settings, generate a new private key. Keep the old one for now.
+2. On the central Vault host, `vault kv patch secret/osac/e2e/ec2-runner-github-app private_key=@new.pem`,
+   then run `./vault/scripts/vault-sync.sh <source-host> <target-host> ...` for
+   any host that has its own Vault.
+3. Confirm that **every runner host** reads the new key. Save this as
+   `check-app-key.sh`. It compares the public-key hash of what Vault returns on
+   that host with the hash of the new key, prints nothing secret, and **exits
+   non-zero** if the Vault login or read fails, if either hash pipeline fails, or
+   if a hash is the hash of empty input:
+
+   ```bash
+   #!/usr/bin/env bash
+   # usage: check-app-key.sh <sha256 of the new key's public part>
+   set -euo pipefail
+   EMPTY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+   NEW=${1:?usage: check-app-key.sh <new-key-public-hash>}
+   [ "$NEW" != "$EMPTY" ] || { echo "$(hostname -s): the new-key hash is the empty-input hash"; exit 1; }
+   D=$HOME/.vault-server/.approle
+   T=$(jq -n --arg r "$(cat "$D/role-id")" --arg s "$(cat "$D/secret-id")" '{role_id:$r,secret_id:$s}' \
+       | curl -sf -d @- http://127.0.0.1:8200/v1/auth/approle/login | jq -er .auth.client_token)
+   H=$(curl -sf -H "X-Vault-Token: $T" http://127.0.0.1:8200/v1/secret/data/osac/e2e/ec2-runner-github-app \
+       | jq -er .data.data.private_key | openssl rsa -pubout 2>/dev/null | sha256sum | cut -d' ' -f1)
+   { [ -n "$H" ] && [ "$H" != "$EMPTY" ]; } || { echo "$(hostname -s): could not read the key from Vault"; exit 1; }
+   if [ "$H" = "$NEW" ]; then echo "$(hostname -s): MATCH"; else echo "$(hostname -s): MISMATCH"; exit 1; fi
+   ```
+
+   Compute the new key's hash once, where `new.pem` is. This stops if the
+   pipeline fails or yields the empty-input hash. Then run the script on every
+   runner host as `github-runner`:
+
+   ```bash
+   EMPTY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+   NEW=$(set -o pipefail; openssl rsa -in new.pem -pubout 2>/dev/null | sha256sum | cut -d' ' -f1) \
+       && [ "$NEW" != "$EMPTY" ] || { echo "STOP: cannot read new.pem"; unset NEW; }
+   for h in <host> <host> ...; do
+       ssh "github-runner@$h" bash -s -- "${NEW:?}" < check-app-key.sh || echo "STOP: $h failed"
+   done
+   ```
+
+   **Every** host must print `MATCH`. If any host prints anything else, or a
+   `STOP` line appears, fix that first. Do not go on to the next step, and do
+   not delete the old key.
+4. Run a Netris workflow and check that its "Fetch EC2 runner GitHub App token"
+   step passes.
+5. Only once every host printed `MATCH` and the workflow passed, delete the old
+   key in the App settings.
 
 ## Step 5: Store the AMI/subnet/security group config in Vault
 
@@ -142,7 +201,7 @@ This repo is public: `workflow_dispatch` inputs are visible forever in the
 Actions run history/API to anyone, and a subnet id or security group id
 reveals real VPC layout. So the AMI id, subnet id, and security group id are
 **not** dispatch inputs -- they're stored in Vault and fetched at run time
-the same way the AWS credentials and GitHub PAT are.
+the same way the AWS credentials and the GitHub App credentials are.
 
 Run once, on the central Vault host:
 
@@ -176,7 +235,7 @@ can optionally be overridden -- neither is sensitive. For a PR run, set
 `osac-repo` and `osac-branch` to the PR repository and immutable head SHA/ref
 so the workflow deploys and tests that source. Supply `components` JSON for
 the OSAC component images that should be built from that same ref. AWS
-credentials, GitHub PAT, AMI/subnet/security group, Netris license, pull
+credentials, GitHub App credentials, AMI/subnet/security group, Netris license, pull
 secret, and AAP license are fetched from Vault automatically.
 
 ## Orphan-instance watchdog

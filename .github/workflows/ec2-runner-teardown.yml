@@ -93,10 +93,13 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
-      - name: Fetch EC2 runner GitHub PAT
+      # A GitHub App installation token, not a PAT: a fine-grained PAT can never
+      # exceed its owner's rights, and the self-hosted-runner endpoints need admin
+      # on the repo, which the bot account that owned the PAT no longer has.
+      - name: Fetch EC2 runner GitHub App token
         if: always()
-        id: gh-pat
-        uses: ./.github/actions/fetch-ec2-runner-github-pat
+        id: gh-app-token
+        uses: ./.github/actions/fetch-ec2-runner-github-app-token
         with:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
@@ -107,7 +110,7 @@ jobs:
         env:
           INSTANCE_ID: ${{ inputs.instance-id }}
           RUNNER_ID: ${{ inputs.runner-id }}
-          GH_TOKEN: ${{ steps.gh-pat.outputs.GH_TOKEN }}
+          GH_TOKEN: ${{ steps.gh-app-token.outputs.GH_TOKEN }}
           AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
