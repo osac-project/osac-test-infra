@@ -421,9 +421,11 @@ jobs:
             infra/agentless-net/logs \
             infra/agentless-net/logs-sanitized
 
+      # A pull request run passes pr-number. Skip the OIDC attestation there.
+      # Nightly and other non-PR runs still sign the sanitized diagnostics.
       - name: Attest sanitized diagnostics
         id: attest
-        if: always() && steps.sanitize.outcome == 'success'
+        if: always() && steps.sanitize.outcome == 'success' && inputs.pr-number == ''
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: ${{ github.workspace }}/infra/agentless-net/logs-sanitized/**
@@ -441,7 +443,7 @@ jobs:
           cp "${BUNDLE_PATH}" infra/agentless-net/logs-sanitized/attestation.intoto.jsonl
 
       - name: Upload sanitized diagnostics
-        if: always() && steps.publish-attestation.outcome == 'success'
+        if: always() && (steps.publish-attestation.outcome == 'success' || (inputs.pr-number != '' && steps.sanitize.outcome == 'success'))
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ inputs.deploy-suite }}-diagnostics-${{ github.run_id }}

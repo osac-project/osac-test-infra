@@ -18,10 +18,18 @@ FABRIC_MAC = "52:54:00:bb:dd:01"
 PROVISIONING_VLAN_ID = 2
 
 
-def inventory_document(*, mgmt_prefix: str, host_name: str) -> dict[str, Any]:
-    """Return the inventory for host_name's eth9 on leaf-1 swp2."""
+def inventory_document(
+    *,
+    mgmt_prefix: str,
+    host_name: str,
+    switch: str = "leaf-1",
+    port: str = "swp2",
+) -> dict[str, Any]:
+    """Return the inventory for host_name's eth9 on the selected fabric port."""
     if not mgmt_prefix or not host_name:
         raise ValueError("mgmt_prefix and host_name are required")
+    if (switch, port) not in {("leaf-1", "swp2"), ("leaf-2", "swp2")}:
+        raise ValueError(f"unsupported fabric port {switch}/{port}")
     prefix = mgmt_prefix.rstrip(".")
     return {
         "all": {
@@ -33,8 +41,8 @@ def inventory_document(*, mgmt_prefix: str, host_name: str) -> dict[str, Any]:
                 "agentless_net_host_ports": {
                     host_name: {
                         FABRIC_INTERFACE: {
-                            "switch": "leaf-1",
-                            "port": "swp2",
+                            "switch": switch,
+                            "port": port,
                         }
                     }
                 },
@@ -70,16 +78,20 @@ def inventory_document(*, mgmt_prefix: str, host_name: str) -> dict[str, Any]:
     }
 
 
-def render_inventory(*, mgmt_prefix: str, host_name: str) -> str:
-    return json.dumps(inventory_document(mgmt_prefix=mgmt_prefix, host_name=host_name))
+def render_inventory(*, mgmt_prefix: str, host_name: str, switch: str = "leaf-1", port: str = "swp2") -> str:
+    return json.dumps(inventory_document(mgmt_prefix=mgmt_prefix, host_name=host_name, switch=switch, port=port))
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mgmt-prefix", required=True)
     parser.add_argument("--host-name", required=True)
+    parser.add_argument("--switch", default="leaf-1")
+    parser.add_argument("--port", default="swp2")
     args = parser.parse_args(argv)
-    sys.stdout.write(render_inventory(mgmt_prefix=args.mgmt_prefix, host_name=args.host_name))
+    sys.stdout.write(
+        render_inventory(mgmt_prefix=args.mgmt_prefix, host_name=args.host_name, switch=args.switch, port=args.port)
+    )
     return 0
 
 

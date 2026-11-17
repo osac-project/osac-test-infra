@@ -19,14 +19,61 @@ VETHS=(leaf1-swp2 leaf2-swp2)
 SYSCTL_FILE=/etc/sysctl.d/99-osac-host-bridges.conf
 # Previous runtime values. A second prepare keeps this file so teardown
 # restores the values from before the first change, not the zeros we set.
-STATE_FILE=/var/tmp/osac-host-bridge-sysctl.prior
+# /var/tmp is writable by every user, so a planted file could skip the real
+# save or be restored later. Keep the prior values in a root-owned directory.
+STATE_DIR=/var/lib/osac-host-bridges
+STATE_FILE=/var/lib/osac-host-bridges/sysctl.prior
 
 info() { echo "==> $*"; }
 
+ensure_private_state_dir() {
+    if [[ -L "$STATE_DIR" ]]; then
+        echo "ERROR: ${STATE_DIR} is a symlink; refusing to store rollback state there." >&2
+        return 1
+    fi
+    if [[ -e "$STATE_DIR" ]]; then
+        if [[ ! -d "$STATE_DIR" ]]; then
+            echo "ERROR: ${STATE_DIR} is not a directory." >&2
+            return 1
+        fi
+        local owner mode
+        owner="$(sudo stat -c '%u' "$STATE_DIR")"
+        mode="$(sudo stat -c '%a' "$STATE_DIR")"
+        if [[ "$owner" != "0" || "$mode" != "700" ]]; then
+            echo "ERROR: ${STATE_DIR} is not a root-owned private directory." >&2
+            return 1
+        fi
+        return 0
+    fi
+    sudo install -d -m 700 -o root -g root "$STATE_DIR"
+}
+
+state_file_is_trusted() {
+    if [[ -L "$STATE_FILE" ]]; then
+        echo "ERROR: ${STATE_FILE} is a symlink; refusing to use it." >&2
+        return 1
+    fi
+    if [[ ! -f "$STATE_FILE" ]]; then
+        echo "ERROR: ${STATE_FILE} is not a regular file; refusing to use it." >&2
+        return 1
+    fi
+    local owner mode
+    owner="$(sudo stat -c '%u' "$STATE_FILE")"
+    mode="$(sudo stat -c '%a' "$STATE_FILE")"
+    if [[ "$owner" != "0" || "$mode" != "600" ]]; then
+        echo "ERROR: ${STATE_FILE} is not a root-owned private file; refusing to use it." >&2
+        return 1
+    fi
+    return 0
+}
+
 restore_host_bridge_sysctls() {
     trap - ERR
-    if [[ ! -f "$STATE_FILE" ]]; then
+    if [[ ! -e "$STATE_FILE" && ! -L "$STATE_FILE" ]]; then
         return 0
+    fi
+    if ! state_file_is_trusted; then
+        return 1
     fi
     local ipt ip6
     ipt="$(sudo sed -n 's/^net.bridge.bridge-nf-call-iptables=//p' "$STATE_FILE")"
@@ -89,7 +136,10 @@ for i in "${!BRIDGES[@]}"; do
 done
 
 info "Disabling bridge netfilter so DHCP discovers are forwarded"
-if [[ ! -f "$STATE_FILE" ]]; then
+ensure_private_state_dir
+if [[ -e "$STATE_FILE" || -L "$STATE_FILE" ]]; then
+    state_file_is_trusted
+else
     ipt="$(sudo sysctl -n net.bridge.bridge-nf-call-iptables)"
     ip6="$(sudo sysctl -n net.bridge.bridge-nf-call-ip6tables)"
     if [[ ! "$ipt" =~ ^[01]$ || ! "$ip6" =~ ^[01]$ ]]; then
@@ -98,7 +148,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     fi
     state_tmp="$(mktemp)"
     printf 'net.bridge.bridge-nf-call-iptables=%s\nnet.bridge.bridge-nf-call-ip6tables=%s\n' "$ipt" "$ip6" >"$state_tmp"
-    sudo install -m 600 "$state_tmp" "$STATE_FILE"
+    sudo install -m 600 -o root -g root "$state_tmp" "$STATE_FILE"
     rm -f "$state_tmp"
 fi
 sudo tee "$SYSCTL_FILE" >/dev/null <<'EOF'
