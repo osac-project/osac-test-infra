@@ -89,6 +89,13 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Retain private host inventory
+      if: always()
+      shell: bash
+      env:
+        K8S_SECRETS_FILE: ${{ inputs.k8s-secrets-file }}
+      run: python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" inventory
+
     - name: Verify redaction complete
       if: always()
       shell: bash
@@ -327,6 +334,8 @@ runs:
         private-repo: ${{ inputs.private-repo }}
         app-id: ${{ inputs.private-repo-app-id }}
         app-key: ${{ inputs.private-repo-app-key }}
+        known-secret-files: ${{ inputs.known-secret-files }}
+        known-secret-env: ${{ inputs.known-secret-env }}
 
     - name: Upload artifacts
       if: always() && inputs.private-repo == ''
@@ -339,3 +348,8 @@ runs:
           !${{ runner.temp }}/osac-artifacts/.redaction-complete
         retention-days: 30
         if-no-files-found: warn
+
+    - name: Remove private host candidate
+      if: always()
+      shell: bash
+      run: python3 -I "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.py" discard

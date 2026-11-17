@@ -1,0 +1,217 @@
+#!/usr/bin/python3 -I
+"""Fixed root-owned SOS collector; stdout is a cleaned build-tree tar or empty."""
+
+import fcntl
+import io
+import os
+import pathlib
+import re
+import selectors
+import signal
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import uuid
+
+MAX_LOG = 512 * 1024
+MAX_MEMBER = 8 * 1024 * 1024
+MAX_TREE = 32 * 1024 * 1024
+MAX_FILES = 4096
+ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+ERROR = re.compile(rb"\b(error|exception|failed|could not|unable to)\b", re.IGNORECASE)
+
+
+def capture(command, timeout=100, limit=MAX_LOG, cwd=None):
+    result = bytearray()
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=ENVIRONMENT,
+        cwd=cwd,
+        start_new_session=True,
+    ) as process:
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while selector.get_map():
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("collection deadline")
+                    for key, _events in selector.select(0.1):
+                        chunk = os.read(key.fileobj.fileno(), 65536)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                        else:
+                            result.extend(chunk)
+                            if len(result) > limit:
+                                raise ValueError("collection output limit")
+            if process.wait(timeout=max(0.1, deadline - time.monotonic())):
+                raise ValueError("collection failed")
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+    return bytes(result)
+
+
+def report_command(scratch, binary):
+    return [
+        binary,
+        "report",
+        "--batch",
+        "--no-env-vars",
+        "--cleaner",
+        "--no-update",
+        "--build",
+        "--log-size=1",
+        "--plugin-timeout=15",
+        "--cmd-timeout=10",
+        "--threads=2",
+        f"--tmp-dir={scratch}",
+        f"--config-file={scratch}/sos.conf",
+        f"--map-file={scratch}/mapping.json",
+    ]
+
+
+def selected_tree(scratch, output):
+    completions = list(re.finditer(rb"(?m)^Successfully obfuscated 1 report\(s\)[ \t]*$", output))
+    if ERROR.search(output) or len(completions) != 1:
+        raise ValueError("masking was not confirmed")
+    matches = list(re.finditer(rb"Your sos report build tree has been generated in:\s*\n\s*([^\r\n]+)", output))
+    if len(matches) != 1 or matches[0].start() <= completions[0].end():
+        raise ValueError("final build tree was not confirmed")
+    selected = pathlib.Path(os.fsdecode(matches[0].group(1)).strip())
+    if selected.parent != scratch or selected.is_symlink() or not selected.is_dir():
+        raise ValueError("invalid build tree")
+    return selected
+
+
+def pack_tree(tree, stream):
+    total = 0
+    count = 0
+    with tarfile.open(fileobj=stream, mode="w|") as archive:
+        for parent, directories, filenames in os.walk(tree, followlinks=False):
+            directories[:] = sorted(name for name in directories if name != "sos_logs")
+            for name in sorted(filenames):
+                path = pathlib.Path(parent) / name
+                if name.endswith("private_map") or path.is_symlink() or not path.is_file():
+                    continue
+                with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as handle:
+                    info = os.fstat(handle.fileno())
+                    total += info.st_size
+                    count += 1
+                    if (
+                        not stat.S_ISREG(info.st_mode)
+                        or info.st_size > MAX_MEMBER
+                        or total > MAX_TREE
+                        or count > MAX_FILES
+                    ):
+                        raise ValueError("report inspection limit")
+                    member = tarfile.TarInfo(path.relative_to(tree).as_posix())
+                    member.size = info.st_size
+                    member.mode = 0o600
+                    archive.addfile(member, handle)
+    if not count:
+        raise ValueError("empty report")
+
+
+def worker():
+    import sos
+
+    if not re.fullmatch(r"4\.10\.\d+", sos.__version__):
+        raise ValueError("unsupported SOS version")
+    os.umask(0o077)
+    with tempfile.TemporaryDirectory(prefix="osac-sos-", dir="/var/tmp") as temporary:
+        scratch = pathlib.Path(temporary)
+        ENVIRONMENT.update({"HOME": temporary, "TMPDIR": temporary})
+        (scratch / "sos.conf").write_text("")
+        (scratch / "mapping.json").write_text("{}")
+        binary = next(path for path in ("/usr/sbin/sos", "/usr/bin/sos") if pathlib.Path(path).is_file())
+        help_output = capture([binary, "report", "--help"], timeout=10, cwd=scratch)
+        for option in ("--no-env-vars", "--cleaner", "--no-update", "--build", "--batch", "--map-file"):
+            if option.encode() not in help_output:
+                raise ValueError("required SOS option unavailable")
+        output = capture(report_command(scratch, binary), cwd=scratch)
+        tree = selected_tree(scratch, output)
+        for log in (tree / "sos_logs").glob("*.log"):
+            if log.is_symlink() or log.stat().st_size > MAX_MEMBER:
+                raise ValueError("SOS log inspection limit")
+            if any(b"[cleaner" in line and ERROR.search(line) for line in log.read_bytes().splitlines()):
+                raise ValueError("SOS logged a masking error")
+        transport = io.BytesIO()
+        pack_tree(tree, transport)
+        sys.stdout.buffer.write(transport.getvalue())
+
+
+def main():
+    if os.geteuid() != 0:
+        return 1
+    if sys.argv[1:] == ["--worker"]:
+        worker()
+        return 0
+    if sys.argv[1:]:
+        return 1
+    unit = f"osac-sos-{uuid.uuid4().hex}"
+
+    def stop(_signum, _frame):
+        subprocess.run(
+            ["/usr/bin/systemctl", "stop", unit],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=ENVIRONMENT,
+            timeout=10,
+            check=False,
+        )
+        raise InterruptedError("collection interrupted")
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, stop)
+    command = [
+        "/usr/bin/systemd-run",
+        "--quiet",
+        "--pipe",
+        "--wait",
+        "--collect",
+        "--service-type=exec",
+        f"--unit={unit}",
+        "--property=RuntimeMaxSec=140",
+        "--property=TimeoutStopSec=5",
+        "--property=KillMode=control-group",
+        "--property=MemoryMax=1G",
+        "--property=TasksMax=128",
+        "--property=IPAddressDeny=any",
+        "--property=PrivateTmp=yes",
+        "--property=TemporaryFileSystem=/var/tmp:rw,size=384M,mode=0700",
+        "--property=TemporaryFileSystem=/tmp:rw,size=32M,mode=0700",
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG=C",
+        "LC_ALL=C",
+        "/usr/bin/python3",
+        "-I",
+        "/usr/local/sbin/osac-hypervisor-sosreport",
+        "--worker",
+    ]
+    with os.fdopen(
+        os.open("/run/osac-hypervisor-sosreport.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), "w"
+    ) as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return subprocess.run(
+            command, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=ENVIRONMENT, cwd="/", check=False
+        ).returncode
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception:
+        sys.exit(1)
