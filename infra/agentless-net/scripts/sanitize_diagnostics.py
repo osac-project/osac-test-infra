@@ -23,10 +23,19 @@ _SECRET_NAME = (
     rb"|'[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data|auth[_-]?config|authorization)[A-Za-z0-9_.-]*'"
     rb"|(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data|auth[_-]?config|authorization)[A-Za-z0-9_.-]*"
 )
+# A comma ends a plain JSON member only when the next member's key follows it.
+# "password: one, two" stays one value. "token": 123, "host": "edge" keeps host.
+_PLAIN_SECRET_VALUE = (
+    rb"(?:[^\r\n,]|,(?!\s*(?:\"(?:\\.|[^\"\\])*\"|'(?:''|[^'])*'|[A-Za-z0-9_.-]+)\s*:))+"
+)
 _SECRET_ASSIGNMENT = re.compile(
     rb"(?i)(" + _SECRET_NAME + rb")"
     rb"(\s*[:=]\s*)"
-    rb"(\"(?:\\.|[^\"\\])*\"|'(?:''|[^'])*'|[^\r\n]+)"
+    rb"(\"(?:\\.|[^\"\\])*\"|'(?:''|[^'])*'|" + _PLAIN_SECRET_VALUE + rb")"
+)
+# A secret key at the end of a line that already contains an earlier assignment.
+_TRAILING_SECRET_KEY = re.compile(
+    rb"(?i)(?:^|[,{\[]\s*)(" + _SECRET_NAME + rb")(\s*[:=])[ \t]*$"
 )
 _REDACTED = b"[REDACTED]"
 _JSON_AUTH = re.compile(
@@ -77,17 +86,26 @@ def _drop_indented_block(lines: list[bytes], index: int, key_indent: int) -> tup
     return index, consumed_value
 
 
+def _close_container(stack: list[bytes], char: bytes) -> None:
+    if not stack or stack[-1] != char:
+        raise RuntimeError("unsupported json secret value")
+    stack.pop()
+
+
 def _consume_json_value(lines: list[bytes], index: int) -> tuple[int, int]:
     """Return the line and column just after a JSON object, array, or string.
 
-    Indentation does not end the value. Delimiters inside quotes do not end it
-    either. An unclosed value is rejected. The caller keeps whatever follows
-    the value on the closing line.
+    Indentation does not end the value. A quote starts only at a scalar
+    boundary, so an apostrophe inside a plain value does not hide the closer.
+    Delimiters inside real quotes do not end the value. An unclosed value is
+    rejected. The caller keeps whatever follows the value on the closing line.
     """
     stack: list[bytes] = []
     quote = b""
     escape = False
     started = False
+    in_plain = False
+    at_boundary = True
     while index < len(lines):
         line = lines[index]
         pos = 0
@@ -101,6 +119,7 @@ def _consume_json_value(lines: list[bytes], index: int) -> tuple[int, int]:
                     quote = b""
                     if not stack:
                         return index, pos + 1
+                    at_boundary = False
                 pos += 1
                 continue
             if quote == b'"':
@@ -112,54 +131,77 @@ def _consume_json_value(lines: list[bytes], index: int) -> tuple[int, int]:
                     quote = b""
                     if not stack:
                         return index, pos + 1
+                    at_boundary = False
                 pos += 1
                 continue
+            if in_plain:
+                if char == b":":
+                    nxt = line[pos + 1:pos + 2]
+                    if nxt in (b"", b" ", b"\t", b",", b"}", b"]"):
+                        in_plain = False
+                        at_boundary = True
+                        pos += 1
+                        continue
+                    pos += 1
+                    continue
+                if char not in (b",", b"}", b"]"):
+                    pos += 1
+                    continue
+                in_plain = False
+                if char == b",":
+                    at_boundary = True
+                    pos += 1
+                    continue
             if char in (b" ", b"\t", b"\r", b"\n"):
                 pos += 1
                 continue
             if not started:
-                if char == b'"':
+                if char in (b'"', b"'"):
                     started = True
-                    quote = b'"'
+                    quote = char
                     pos += 1
                     continue
                 if char == b"{":
                     started = True
                     stack.append(b"}")
+                    at_boundary = True
                     pos += 1
                     continue
                 if char == b"[":
                     started = True
                     stack.append(b"]")
+                    at_boundary = True
                     pos += 1
                     continue
                 raise RuntimeError("unsupported json secret value")
-            if char == b'"':
-                quote = b'"'
+            if char in (b"}", b"]"):
+                _close_container(stack, char)
+                pos += 1
+                if not stack:
+                    return index, pos
+                at_boundary = False
+                continue
+            if char in (b",", b":"):
+                at_boundary = True
                 pos += 1
                 continue
-            if char == b"'":
-                quote = b"'"
+            if not at_boundary:
+                raise RuntimeError("unsupported json secret value")
+            if char in (b'"', b"'"):
+                quote = char
                 pos += 1
                 continue
             if char == b"{":
                 stack.append(b"}")
+                at_boundary = True
                 pos += 1
                 continue
             if char == b"[":
                 stack.append(b"]")
+                at_boundary = True
                 pos += 1
                 continue
-            if char in (b"}", b"]"):
-                if not stack or stack[-1] != char:
-                    raise RuntimeError("unsupported json secret value")
-                stack.pop()
-                pos += 1
-                if not stack:
-                    return index, pos
-                continue
-            if not stack:
-                raise RuntimeError("unsupported json secret value")
+            in_plain = True
             pos += 1
         index += 1
     raise RuntimeError("unsupported json secret value")
@@ -216,6 +258,25 @@ def _is_yaml_quoted_key(line: bytes) -> bool:
     return text[pos:].lstrip(b" \t")[:1] == b":"
 
 
+def _take_secret_value(lines: list[bytes], index: int, key_line: bytes) -> int:
+    """Drop the value that follows a secret key, and keep later members."""
+    probe = index + 1
+    while probe < len(lines) and lines[probe].strip() == b"":
+        probe += 1
+    if probe < len(lines):
+        first = lines[probe].lstrip(b" \t")[:1]
+        json_value = first in (b"{", b"[") or (first == b'"' and not _is_yaml_quoted_key(lines[probe]))
+    else:
+        json_value = False
+    if json_value:
+        value_line, value_pos = _consume_json_value(lines, index + 1)
+        return _resume_after_json(lines, value_line, value_pos)
+    next_index, consumed_value = _drop_indented_block(lines, index + 1, _line_indent(key_line))
+    if not consumed_value:
+        raise RuntimeError("secret key has no value")
+    return next_index
+
+
 def _drop_plain_continuation(lines: list[bytes], index: int, key_indent: int) -> int:
     """Drop indented lines that continue a plain secret, including across blank lines."""
     while index < len(lines):
@@ -237,39 +298,11 @@ def _closed_quote(value: bytes, quote: bytes) -> bool:
 
 
 def _flow_closed(value: bytes) -> bool:
-    pairs = {b"{": b"}", b"[": b"]"}
-    stack: list[bytes] = []
-    quote = b""
-    index = 0
-    while index < len(value):
-        char = value[index:index + 1]
-        if quote:
-            if quote == b"'" and value[index:index + 2] == b"''":
-                index += 2
-                continue
-            if char == b"\\" and quote != b"'":
-                index += 2
-                continue
-            if char == quote:
-                quote = b""
-            index += 1
-            continue
-        if char in (b'"', b"'"):
-            quote = char
-            index += 1
-            continue
-        if char in pairs:
-            stack.append(pairs[char])
-            index += 1
-            continue
-        if char in (b"}", b"]"):
-            if not stack or stack[-1] != char:
-                return False
-            stack.pop()
-            index += 1
-            continue
-        index += 1
-    return not stack and quote == b""
+    try:
+        line_index, pos = _consume_json_value([value], 0)
+    except RuntimeError:
+        return False
+    return line_index == 0 and value[pos:].strip() == b""
 
 
 def _multiline_secret(value: bytes) -> bool:
@@ -338,25 +371,18 @@ def redact(data: bytes) -> bytes:
             continue
         if match and _multiline_secret(value):
             raise RuntimeError("unsupported multiline secret value")
-        key_only = None if match else _SECRET_KEY_ONLY.search(line.rstrip(b"\r\n"))
+        body = line.rstrip(b"\r\n")
+        ending = line[len(body):]
+        trailing = _TRAILING_SECRET_KEY.search(body) if match else None
+        if trailing and trailing.start(1) >= match.end():
+            prefix = _SECRET_ASSIGNMENT.sub(_redact_assignment, body[:trailing.start()])
+            output.append(prefix + trailing.group(1) + trailing.group(2) + b" " + _REDACTED + ending)
+            index = _take_secret_value(lines, index, line)
+            continue
+        key_only = None if match else _SECRET_KEY_ONLY.search(body)
         if key_only:
-            ending = line[len(line.rstrip(b"\r\n")) :]
             output.append(key_only.group(1) + key_only.group(2) + key_only.group(3) + b" " + _REDACTED + ending)
-            probe = index + 1
-            while probe < len(lines) and lines[probe].strip() == b"":
-                probe += 1
-            if probe < len(lines):
-                first = lines[probe].lstrip(b" \t")[:1]
-                json_value = first in (b"{", b"[") or (first == b'"' and not _is_yaml_quoted_key(lines[probe]))
-            else:
-                json_value = False
-            if json_value:
-                value_line, value_pos = _consume_json_value(lines, index + 1)
-                index = _resume_after_json(lines, value_line, value_pos)
-                continue
-            index, consumed_value = _drop_indented_block(lines, index + 1, _line_indent(line))
-            if not consumed_value:
-                raise RuntimeError("secret key has no value")
+            index = _take_secret_value(lines, index, line)
             continue
         output.append(_SECRET_ASSIGNMENT.sub(_redact_assignment, line))
         plain = match is not None and value[:1] not in (b'"', b"'", b"{", b"[", b"|", b">", b"&", b"*", b"!")

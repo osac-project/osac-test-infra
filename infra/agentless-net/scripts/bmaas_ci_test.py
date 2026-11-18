@@ -309,6 +309,19 @@ class SanitizeTest(unittest.TestCase):
         mapping = sanitize_diagnostics.redact(b'password:\n  "username": service\n  credential: sample\n')
         self.assertNotIn(b"service", mapping)
         self.assertNotIn(b"sample", mapping)
+        plain_flow = sanitize_diagnostics.redact(b"password:\n  [operator's note, backup]\n")
+        self.assertNotIn(b"operator's note", plain_flow)
+        self.assertNotIn(b"backup", plain_flow)
+        self.assertIn(b"[REDACTED]", plain_flow)
+        numbered = sanitize_diagnostics.redact(b'{"password":\n{"a": 1}, "token": 123, "host": "edge35"}\n')
+        self.assertNotIn(b"123", numbered)
+        self.assertIn(b"edge35", numbered)
+        split_after = sanitize_diagnostics.redact(
+            b'{"password":\n{"a": 1}, "token": "kept-out", "secret":\n"next-secret", "host": "edge35"}\n'
+        )
+        self.assertNotIn(b"kept-out", split_after)
+        self.assertNotIn(b"next-secret", split_after)
+        self.assertIn(b"edge35", split_after)
         with self.assertRaises(RuntimeError) as open_value:
             sanitize_diagnostics.redact(b'{"password":\n  {\n"credential": "hunter2"\n')
         self.assertIn("unsupported json secret value", str(open_value.exception))
