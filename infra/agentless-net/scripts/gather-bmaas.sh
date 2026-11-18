@@ -20,6 +20,10 @@ OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 BMH_NAMESPACE="${BMH_NAMESPACE:-host-inventory}"
 
 capture_failed=0
+# A fresh gather must not keep an older completion marker if this attempt fails.
+if [[ "${OSAC_GATHER_RETRY:-}" != "yes" ]]; then
+    rm -f "${LOG_DIR}/.gather-bmaas-complete"
+fi
 keep_capture() {
     local dest="$1"
     shift

@@ -29,7 +29,7 @@ INFRA = ROOT / "infra" / "agentless-net"
 WORKFLOW = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install.yml"
 CALLER = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install-caller.yml"
 PR_SUITE = ROOT / ".github" / "workflows" / "e2e-pr-bmaas-agentless.yml"
-CLEANUP = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-label-cleanup.yml"
+CLEANUP = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-cancel.yml"
 
 
 class InventoryTest(unittest.TestCase):
@@ -696,6 +696,11 @@ class SanitizeTest(unittest.TestCase):
         self.assertNotIn(b"first", paired)
         self.assertNotIn(b"second", paired)
         self.assertIn(b"make install", paired)
+        comma = sanitize_diagnostics.redact(b'command: "make install PASSWORD=alpha,beta TOKEN=sample"\n')
+        self.assertNotIn(b"alpha", comma)
+        self.assertNotIn(b"beta", comma)
+        self.assertNotIn(b"sample", comma)
+        self.assertIn(b"make install", comma)
 
     def test_a_comment_valued_secret_drops_a_same_indent_sequence(self) -> None:
         raw = b"password: # recovery codes\n- first-secret\n- second-secret\nbridge: ok\n"
@@ -794,6 +799,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertEqual(install["permissions"]["attestations"], "write")
         self.assertEqual(caller["permissions"]["id-token"], "write")
         self.assertEqual(caller["permissions"]["attestations"], "write")
+        self.assertEqual(suite["jobs"]["bmaas-agentless"]["with"]["deploy-suite"], "bmaas")
         self.assertEqual(suite["jobs"]["bmaas-agentless"]["permissions"]["id-token"], "write")
         self.assertEqual(suite["jobs"]["bmaas-agentless"]["permissions"]["attestations"], "write")
         self.assertNotIn("outputs.runner-label", WORKFLOW.read_text())
@@ -815,14 +821,14 @@ class WorkflowContractTest(unittest.TestCase):
             "setup-infra",
             "deploy-ocp",
             "deploy-osac",
-            "deploy-fabric",
-            "setup-bmaas",
-            "prove-bmi",
+            "deploy-suite",
             "gather-infra",
             "gather-bmaas",
-            "destroy-bmaas",
+            "gather-suite",
+            "destroy-suite",
         ):
             self.assertIn(target, remote)
+        self.assertIn("INFRA=agentless-net", remote)
         self.assertIn("DEPLOY_SUITE=bmaas", remote)
         self.assertNotIn("OSAC_PROFILE=bmaas-ci", remote)
         cluster_exit = remote.split('if [ "$phase" = "cluster" ]', 1)[1].split("exit 0", 1)[0]
@@ -834,9 +840,10 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(recovery.index(".gather-infra-complete"), recovery.index("Running make"))
         self.assertLess(recovery.index(".gather-bmaas-complete"), recovery.index("Running make"))
         self.assertLess(recovery.index("--timeout 15s"), recovery.index("Running make"))
-        self.assertLess(recovery.index("Keeping the"), recovery.index("copy_diagnostics 90s"))
+        self.assertLess(recovery.index("Keeping the"), recovery.index("copy_diagnostics 60s"))
         self.assertLess(recovery.index("gather-infra"), recovery.index("gather-bmaas"))
-        self.assertLess(recovery.index("gather-bmaas"), recovery.index("copy_diagnostics 90s"))
+        self.assertLess(recovery.index("gather-bmaas"), recovery.index("copy_diagnostics 60s"))
+        self.assertIn("leaving time for the diagnostics copy", recovery)
         copy_fn = remote.split("copy_diagnostics()", 1)[1].split('if [ "$phase" = "copy-logs" ]', 1)[0]
         self.assertLess(copy_fn.index("mktemp"), copy_fn.index('rm -rf "$LOG_DIR"'))
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
@@ -920,9 +927,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertEqual(destroy.count("exit 1"), 1)
         self.assertIn('{"metadata":{"finalizers":null}}', destroy)
         self.assertIn("NotFound", destroy)
-        self.assertLess(destroy.index("manage-virtual-bmh-vms.py"), destroy.index('strip_bmh_finalizers "$name"'))
+        delete_bmh = destroy.split("delete_bmh()", 1)[1].split("cleanup_failed=0", 1)[0]
+        self.assertLess(delete_bmh.index("wait --for=delete"), delete_bmh.index('strip_bmh_finalizers "$name"'))
+        self.assertLess(destroy.index('delete_bmh "$name"'), destroy.index("manage-virtual-bmh-vms.py"))
         bmh_fallback = destroy.split('if [[ -n "${BMH_NAME:-}" ]]', 1)[1]
-        self.assertLess(bmh_fallback.index("delete baremetalhost"), bmh_fallback.index('strip_bmh_finalizers "$BMH_NAME"'))
+        self.assertIn('delete_bmh "$BMH_NAME"', bmh_fallback)
         leak_script = (ROOT / ".github" / "scripts" / "comment-pr-leak-findings.sh").read_text()
         self.assertIn("display_title", leak_script)
         self.assertIn("workflow_dispatch", leak_script)
@@ -1015,8 +1024,12 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("KUBECONFIG=%q", ocp)
         self.assertIn("use_kubeconfig", ocp)
         self.assertLess(ocp.index("use_kubeconfig"), ocp.index('MGMT_VM_NAME="test-infra-cluster-'))
-        self.assertIn('-z "$REQUESTED_KUBECONFIG"', ocp)
+        self.assertIn("require_cluster_tool_kubeconfig", ocp)
+        self.assertIn("require_cluster_tool_kubeconfig", deploy)
         self.assertIn("require_recorded_cluster", (INFRA / "scripts" / "destroy-caas.sh").read_text())
+        self.assertIn("require_recorded_cluster", (INFRA / "scripts" / "destroy-fabric.sh").read_text())
+        self.assertIn('wait --for=delete', (INFRA / "scripts" / "destroy-bmaas.sh").read_text())
+        self.assertIn("The proof already copied diagnostics", WORKFLOW.read_text())
         backend = (INFRA / "Makefile").read_text()
         self.assertIn("prepare-suite && $(MAKE) deploy-suite-workload", backend)
         self.assertIn('if [ "$(DEPLOY_SUITE)" = bmaas ]; then $(MAKE) prove-bmi', backend)
@@ -1028,6 +1041,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("exit 0; \\\n", root_suite)
         self.assertLess(dispatch.index("exit 0"), dispatch.index('SUITE_STAGE="$$stage"'))
         self.assertLess(root_suite.index("all|setup"), root_suite.index("prepare-suite"))
+        self.assertNotIn('INFRA)" = agentless-net', root_suite)
+        run_tests = root.split("run-tests: _validate-backend", 1)[1].split("\ndestroy-ocp:", 1)[0]
+        self.assertLess(run_tests.index("does not run the Netris bmaas suite"), run_tests.index("_validate-suite-contract"))
         self.assertIn("{.data.profile}", deploy)
         self.assertIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
@@ -1041,6 +1057,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn(".gather-bmaas-complete", gather)
         self.assertLess(gather.index("capture_failed"), gather.index(".gather-bmaas-complete"))
         self.assertLess(gather.index("OSAC_GATHER_RETRY"), gather.index("get baremetalhosts"))
+        self.assertLess(gather.index('rm -f "${LOG_DIR}/.gather-bmaas-complete"'), gather.index("get baremetalhosts"))
         runner = (ROOT / "scripts" / "ec2-runner" / "run-bmaas-agentless.sh").read_text()
         self.assertIn("OSAC_GATHER_RETRY=yes", runner)
         self.assertIn(".gather-infra-complete", (INFRA / "scripts" / "gather-infra.sh").read_text())

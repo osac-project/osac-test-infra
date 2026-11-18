@@ -39,6 +39,22 @@ strip_bmh_finalizers() {
     cleanup_failed=1
 }
 
+# Give the baremetal-operator time to deprovision. Strip finalizers only
+# when the host is still present after that wait.
+delete_bmh() {
+    local name="$1"
+    if ! oc -n "$BMH_NAMESPACE" delete baremetalhost "$name" --ignore-not-found --wait=false; then
+        echo "ERROR: failed to delete BareMetalHost ${name}; keeping its finalizers" >&2
+        cleanup_failed=1
+        return
+    fi
+    if oc -n "$BMH_NAMESPACE" wait --for=delete "baremetalhost/${name}" --timeout=120s >/dev/null 2>&1; then
+        return
+    fi
+    echo "BareMetalHost ${name} was still present after 120s; stripping finalizers" >&2
+    strip_bmh_finalizers "$name"
+}
+
 cleanup_failed=0
 if [[ -f "$STATE_FILE" ]]; then
     info "Deleting the proof BMI and its network"
@@ -62,30 +78,18 @@ fi
 if [[ "$inventory_unreadable" -eq 0 && ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
     for name in "${INVENTORY_NAMES[@]}"; do
         info "Deleting BareMetalHost ${name}"
-        if ! oc -n "$BMH_NAMESPACE" delete baremetalhost "$name" --ignore-not-found --wait=false; then
-            echo "ERROR: failed to delete BareMetalHost ${name}" >&2
-            cleanup_failed=1
-        fi
+        delete_bmh "$name"
     done
     info "Deleting the virtual BMH VM recorded for ${CLONE_NAME}"
     if ! python3 "${REPO_ROOT}/.github/scripts/manage-virtual-bmh-vms.py" delete \
         --inventory-file "$INVENTORY_FILE" "${INVENTORY_NAMES[@]}"; then
-        echo "ERROR: virtual BMH VM deletion failed; keeping BareMetalHost finalizers" >&2
+        echo "ERROR: virtual BMH VM deletion failed" >&2
         cleanup_failed=1
-    else
-        for name in "${INVENTORY_NAMES[@]}"; do
-            strip_bmh_finalizers "$name"
-        done
     fi
 fi
 if [[ -n "${BMH_NAME:-}" ]]; then
     info "Deleting BareMetalHost ${BMH_NAME}"
-    if ! oc -n "$BMH_NAMESPACE" delete baremetalhost "$BMH_NAME" --ignore-not-found --wait=false; then
-        echo "ERROR: failed to delete BareMetalHost ${BMH_NAME}; keeping its finalizers" >&2
-        cleanup_failed=1
-    else
-        strip_bmh_finalizers "$BMH_NAME"
-    fi
+    delete_bmh "$BMH_NAME"
 fi
 
 env_file="${INFRA_DIR}/.env.infra"

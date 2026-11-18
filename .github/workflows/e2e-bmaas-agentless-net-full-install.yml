@@ -389,9 +389,18 @@ jobs:
           SSH_USER: ${{ steps.provision.outputs.ssh-user }}
           PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
           LOG_DIR: ${{ github.workspace }}/infra/agentless-net/logs
+          PROVE_OUTCOME: ${{ steps.install-prove.outcome }}
         run: |
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          set +e
           ./scripts/ec2-runner/run-bmaas-agentless.sh copy-logs
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$PROVE_OUTCOME" = "success" ] && [ -d "$LOG_DIR" ]; then
+            echo "The proof already copied diagnostics; the redundant copy did not change the result."
+            exit 0
+          fi
+          exit "$status"
 
       # Terminate before sanitize, attest, and upload. Those steps use the
       # local logs, and a cancelled job only gives the remaining always()
