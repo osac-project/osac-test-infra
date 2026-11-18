@@ -19,13 +19,17 @@ OSAC_NAMESPACE ?= osac-e2e-ci
 OSAC_VALUES_FILE ?= values/caas-ci/values.yaml
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 # command line and environment are explicit. The ?= default is not, or it
-# would hide the kubeconfig recorded in .mgmt-network.
+# would hide the kubeconfig recorded in .mgmt-network. A child make inherits
+# that default through the environment; keep the parent's decision instead of
+# treating the inherited value as a new override.
+ifeq ($(origin OSAC_KUBECONFIG_FROM_CALLER),undefined)
 ifeq ($(origin KUBECONFIG),command line)
 OSAC_KUBECONFIG_FROM_CALLER := yes
 else ifeq ($(origin KUBECONFIG),environment)
 OSAC_KUBECONFIG_FROM_CALLER := yes
 else
 OSAC_KUBECONFIG_FROM_CALLER :=
+endif
 endif
 KUBECONFIG ?= $(HOME)/.kube/$(MGMT_CLONE_NAME).kubeconfig
 

@@ -106,6 +106,10 @@ class ProofPayloadTest(unittest.TestCase):
         )
         self.assertNotIn("-insecure", command)
         self.assertIn("-cacert", command)
+        rendered = " ".join(command)
+        self.assertIn("-expand-headers", command)
+        self.assertIn("${OSAC_GRPC_TOKEN}", rendered)
+        self.assertNotIn("Bearer token", rendered)
         self.assertFalse(prove_bmi.is_ready({"status": {"state": "BARE_METAL_INSTANCE_STATE_NOT_READY"}}))
         self.assertFalse(prove_bmi.is_ready({"status": {"state": "BARE_METAL_INSTANCE_STATE_PROVISIONING"}}))
         self.assertFalse(prove_bmi.is_ready({"status": {"state": "BARE_METAL_INSTANCE_STATE_FAILED"}}))
@@ -657,6 +661,36 @@ class SanitizeTest(unittest.TestCase):
                 sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
         self.assertIn("secret key has no value", str(caught.exception))
 
+    def test_a_flow_secret_without_a_sibling_does_not_fail_the_upload(self) -> None:
+        cleaned = sanitize_diagnostics.redact(b'{"password":{"a":"closed-secret"}}\n')
+        self.assertNotIn(b"closed-secret", cleaned)
+        self.assertIn(b'"[REDACTED]"', cleaned)
+
+    def test_a_secret_word_inside_a_string_is_not_a_field(self) -> None:
+        raw = b'{"message":"unable to read password: [permission denied"}\n'
+        cleaned = sanitize_diagnostics.redact(raw)
+        self.assertIn(b"permission denied", cleaned)
+
+    def test_a_comment_valued_secret_drops_a_same_indent_sequence(self) -> None:
+        raw = b"password: # recovery codes\n- first-secret\n- second-secret\nbridge: ok\n"
+        cleaned = sanitize_diagnostics.redact(raw)
+        self.assertNotIn(b"first-secret", cleaned)
+        self.assertNotIn(b"second-secret", cleaned)
+        self.assertIn(b"bridge: ok", cleaned)
+
+    def test_a_truncated_key_after_an_assignment_is_rejected(self) -> None:
+        begin = "-----BEGIN " + "RSA PRIVATE KEY-----"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(f"PASSWORD=placeholder\n{begin}\nline-one-of-key\n")
+            with self.assertRaises(RuntimeError):
+                sanitize_diagnostics.sanitize_tree(source, destination)
+            published = destination / "job.log"
+            if published.exists():
+                self.assertNotIn("line-one-of-key", published.read_text())
+
 
 class WorkflowContractTest(unittest.TestCase):
     def test_manual_run_is_isolated_and_proves_one_bmi(self) -> None:
@@ -697,6 +731,12 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertEqual(
             caller["jobs"]["e2e-bmaas-agentless"]["with"]["notify-on-failure"],
             "${{ github.event_name == 'schedule' }}",
+        )
+        self.assertIn("suite-inputs.yml@", caller["jobs"]["verify"]["uses"])
+        self.assertEqual(caller["jobs"]["e2e-bmaas-agentless"]["needs"], "verify")
+        self.assertIn(
+            "needs.verify.outputs.fork-association",
+            caller["jobs"]["e2e-bmaas-agentless"]["with"]["fork-pr-author-association"],
         )
         install = document["jobs"]["install"]
         self.assertEqual(install["needs"], "authorize")
@@ -911,14 +951,21 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(deploy.index("installed_revision="), deploy.index("make install"))
         self.assertIn('revision="$installed_revision"', deploy)
         self.assertIn('fetch origin "$OSAC_BRANCH"', deploy)
+        self.assertIn("fetch --prune --tags origin", deploy)
         self.assertNotIn("git clone --branch", deploy)
+        self.assertNotIn('rev-parse --verify --quiet "${OSAC_BRANCH}', deploy)
+        self.assertIn(".effective-kubeconfig", deploy)
         self.assertIn("use_kubeconfig", deploy)
         helper = (INFRA / "scripts" / "use-kubeconfig.sh").read_text()
         self.assertLess(helper.index("OSAC_KUBECONFIG_FROM_CALLER"), helper.index('source "$recorded"'))
         self.assertIn('KUBECONFIG="${KUBECONFIG:-$HOME/.kube/${MGMT_CLONE_NAME:-agentless-lab-mgmt}.kubeconfig}"', helper)
+        self.assertNotIn(".effective-kubeconfig", helper)
+        self.assertIn("require_recorded_cluster", helper)
         ocp = (INFRA / "scripts" / "deploy-ocp.sh").read_text()
         self.assertIn("KUBECONFIG=%q", ocp)
         self.assertIn("use_kubeconfig", ocp)
+        self.assertLess(ocp.index("use_kubeconfig"), ocp.index('MGMT_VM_NAME="test-infra-cluster-'))
+        self.assertIn("require_recorded_cluster", (INFRA / "scripts" / "destroy-caas.sh").read_text())
         backend = (INFRA / "Makefile").read_text()
         self.assertIn("prepare-suite && $(MAKE) deploy-suite-workload", backend)
         self.assertIn('if [ "$(DEPLOY_SUITE)" = bmaas ]; then $(MAKE) prove-bmi', backend)
@@ -942,6 +989,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf status", gather)
         self.assertIn(".gather-bmaas-complete", gather)
         self.assertLess(gather.index("capture_failed"), gather.index(".gather-bmaas-complete"))
+        self.assertLess(gather.index('[[ -s "$dest" ]]'), gather.index("get baremetalhosts"))
         self.assertIn(".gather-infra-complete", (INFRA / "scripts" / "gather-infra.sh").read_text())
         self.assertIn("br-host1", gather)
         self.assertIn("br-host2", gather)
@@ -953,6 +1001,7 @@ class WorkflowContractTest(unittest.TestCase):
         capabilities = (INFRA / "capabilities").read_text()
         self.assertIn('SUPPORTED_DEPLOY_SUITES="caas bmaas"', capabilities)
         self.assertIn("OSAC_PROFILE is derived from DEPLOY_SUITE", makefile)
+        self.assertLess(makefile.index("origin OSAC_KUBECONFIG_FROM_CALLER"), makefile.index("origin KUBECONFIG"))
         self.assertIn("deploy-setup: setup-infra", makefile)
         self.assertIn("prepare-suite:", makefile)
         self.assertIn("setup-$(DEPLOY_SUITE)", makefile)

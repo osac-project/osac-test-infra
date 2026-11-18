@@ -49,6 +49,15 @@ _SECRET_KEY_ONLY = re.compile(
 )
 
 
+def _redact_visible_assignments(line: bytes, spans: list[tuple[int, int]]) -> bytes:
+    def replace(match: re.Match[bytes]) -> bytes:
+        if _inside_quote(spans, match.start()):
+            return match.group(0)
+        return _redact_assignment(match)
+
+    return _SECRET_ASSIGNMENT.sub(replace, line)
+
+
 def _redact_assignment(match: re.Match[bytes]) -> bytes:
     value = match.group(3)
     if value.startswith(b'"') and value.endswith(b'"'):
@@ -347,6 +356,76 @@ def _decode_json_keys(line: bytes) -> bytes:
     return _JSON_KEY.sub(replace, line)
 
 
+def _quoted_interiors(line: bytes) -> list[tuple[int, int]]:
+    """Byte ranges inside quotes, excluding the quote characters themselves."""
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while pos < len(line):
+        quote = line[pos:pos + 1]
+        if quote not in (b'"', b"'"):
+            pos += 1
+            continue
+        start = pos + 1
+        pos += 1
+        closed = False
+        if quote == b"'":
+            while pos < len(line):
+                if line[pos:pos + 2] == b"''":
+                    pos += 2
+                    continue
+                if line[pos:pos + 1] == b"'":
+                    spans.append((start, pos))
+                    pos += 1
+                    closed = True
+                    break
+                pos += 1
+        else:
+            escape = False
+            while pos < len(line):
+                char = line[pos:pos + 1]
+                if escape:
+                    escape = False
+                elif char == b"\\":
+                    escape = True
+                elif char == b'"':
+                    spans.append((start, pos))
+                    pos += 1
+                    closed = True
+                    break
+                pos += 1
+        if not closed:
+            spans.append((start, len(line)))
+    return spans
+
+
+def _inside_quote(spans: list[tuple[int, int]], index: int) -> bool:
+    return any(start <= index < end for start, end in spans)
+
+
+def _comment_only(value: bytes) -> bool:
+    text = value.strip()
+    return text == b"" or text.startswith(b"#")
+
+
+def _drop_same_indent_sequence(lines: list[bytes], index: int, key_indent: int) -> tuple[int, bool]:
+    """Drop a YAML sequence written at the secret key's indentation."""
+    consumed = False
+    while index < len(lines):
+        probe = index
+        while probe < len(lines) and lines[probe].strip() == b"":
+            probe += 1
+        if probe >= len(lines):
+            return probe, consumed
+        line = lines[probe]
+        if _line_indent(line) != key_indent or not line.lstrip(b" \t").startswith(b"-"):
+            return probe, consumed
+        consumed = True
+        index = probe + 1
+        while index < len(lines) and (lines[index].strip() == b"" or _line_indent(lines[index]) > key_indent):
+            index += 1
+    return index, consumed
+
+
 def _redact_flow_values(line: bytes) -> bytes:
     """Replace a complete {...} or [...] secret value without cutting at an inner comma.
 
@@ -354,6 +433,7 @@ def _redact_flow_values(line: bytes) -> bytes:
     container still fails the file, so the raw value is not published.
     """
     key = re.compile(rb"(?i)(" + _SECRET_NAME + rb")(\s*[:=]\s*)")
+    spans = _quoted_interiors(line)
     pieces: list[bytes] = []
     pos = 0
     while pos < len(line):
@@ -361,6 +441,10 @@ def _redact_flow_values(line: bytes) -> bytes:
         if not match:
             pieces.append(line[pos:])
             break
+        if _inside_quote(spans, match.start()):
+            pieces.append(line[pos:match.end()])
+            pos = match.end()
+            continue
         value_at = match.end()
         if line[value_at:value_at + 1] not in (b"{", b"["):
             pieces.append(line[pos:value_at])
@@ -372,13 +456,15 @@ def _redact_flow_values(line: bytes) -> bytes:
             raise RuntimeError("unsupported multiline secret value") from exc
         if line_index != 0 or end <= 0:
             raise RuntimeError("unsupported multiline secret value")
-        pieces.append(line[pos:value_at] + _REDACTED)
+        pieces.append(line[pos:value_at] + b'"' + _REDACTED + b'"')
         pos = value_at + end
     return b"".join(pieces)
 
 
 def redact(data: bytes) -> bytes:
     data = _PRIVATE_KEY.sub(b"[REDACTED PRIVATE KEY]", data)
+    if _PRIVATE_KEY_HEADER.search(data):
+        raise RuntimeError("private key material remains")
     data = _AUTHORIZATION.sub(lambda match: match.group(1) + _REDACTED, data)
     data = _JSON_AUTH.sub(_redact_json_auth, data)
     lines = data.splitlines(keepends=True)
@@ -386,7 +472,8 @@ def redact(data: bytes) -> bytes:
     index = 0
     while index < len(lines):
         line = _redact_flow_values(_decode_json_keys(lines[index]))
-        matches = list(_SECRET_ASSIGNMENT.finditer(line))
+        spans = _quoted_interiors(line)
+        matches = [item for item in _SECRET_ASSIGNMENT.finditer(line) if not _inside_quote(spans, item.start())]
         for candidate in matches:
             candidate_value = candidate.group(3)
             if candidate_value[:1] in (b"&", b"*", b"!"):
@@ -408,20 +495,26 @@ def redact(data: bytes) -> bytes:
         body = line.rstrip(b"\r\n")
         ending = line[len(body):]
         trailing = _TRAILING_SECRET_KEY.search(body) if match else None
+        if trailing and _inside_quote(spans, trailing.start()):
+            trailing = None
         if trailing and trailing.start(1) >= match.end():
-            prefix = _SECRET_ASSIGNMENT.sub(_redact_assignment, body[:trailing.start()])
+            prefix = _redact_visible_assignments(body[:trailing.start()], spans)
             output.append(prefix + trailing.group(1) + trailing.group(2) + b" " + _REDACTED + ending)
             index = _take_secret_value(lines, index, line)
             continue
         key_only = None if match else _SECRET_KEY_ONLY.search(body)
+        if key_only and _inside_quote(spans, key_only.start()):
+            key_only = None
         if key_only:
             output.append(key_only.group(1) + key_only.group(2) + key_only.group(3) + b" " + _REDACTED + ending)
             index = _take_secret_value(lines, index, line)
             continue
-        output.append(_SECRET_ASSIGNMENT.sub(_redact_assignment, line))
+        output.append(_redact_visible_assignments(line, spans))
         plain = match is not None and value[:1] not in (b'"', b"'", b"{", b"[", b"|", b">", b"&", b"*", b"!")
         if plain:
             index = _drop_plain_continuation(lines, index + 1, _line_indent(line))
+            if _comment_only(value):
+                index, _consumed = _drop_same_indent_sequence(lines, index, _line_indent(line))
         else:
             index += 1
     return b"".join(output)

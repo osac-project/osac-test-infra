@@ -69,7 +69,20 @@ concurrency:
   cancel-in-progress: ${{ inputs.pr-number != '' }}
 
 jobs:
+  verify:
+    if: inputs.pr-number != ''
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: osac-project/osac-ci/.github/workflows/suite-inputs.yml@728d1b064cdbfa429c68ce5bc5a35b47b6c127d7  # v1.3.10
+    with:
+      repo: ${{ inputs.pr-repository || github.repository }}
+      sha: ${{ inputs.pr-sha }}
+      pr-number: ${{ inputs.pr-number }}
+
   e2e-bmaas-agentless:
+    needs: verify
+    if: always() && (needs.verify.result == 'success' || needs.verify.result == 'skipped')
     uses: ./.github/workflows/e2e-bmaas-agentless-net-full-install.yml
     with:
       deploy-suite: bmaas
@@ -84,7 +97,7 @@ jobs:
       pr-repository: ${{ inputs.pr-repository || '' }}
       pr-ref: ${{ inputs.pr-ref || '' }}
       pr-sha: ${{ inputs.pr-sha || '' }}
-      fork-pr-author-association: ${{ inputs.fork-pr-author-association || '' }}
-      fork-pr-author: ${{ inputs.fork-pr-author || '' }}
+      fork-pr-author-association: ${{ needs.verify.result == 'success' && needs.verify.outputs.fork-association || '' }}
+      fork-pr-author: ${{ needs.verify.result == 'success' && needs.verify.outputs.fork-author || '' }}
       pr-number: ${{ inputs.pr-number || '' }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
