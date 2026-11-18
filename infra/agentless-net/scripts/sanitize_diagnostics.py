@@ -135,6 +135,8 @@ def _consume_json_value(lines: list[bytes], index: int) -> tuple[int, int]:
                 pos += 1
                 continue
             if in_plain:
+                if char == b"#" and pos > 0 and line[pos - 1:pos] in (b" ", b"\t"):
+                    break
                 if char == b":":
                     nxt = line[pos + 1:pos + 2]
                     if nxt in (b"", b" ", b"\t", b",", b"}", b"]"):
@@ -155,6 +157,8 @@ def _consume_json_value(lines: list[bytes], index: int) -> tuple[int, int]:
             if char in (b" ", b"\t", b"\r", b"\n"):
                 pos += 1
                 continue
+            if started and char == b"#":
+                break
             if not started:
                 if char in (b'"', b"'"):
                     started = True
@@ -343,6 +347,36 @@ def _decode_json_keys(line: bytes) -> bytes:
     return _JSON_KEY.sub(replace, line)
 
 
+def _redact_flow_values(line: bytes) -> bytes:
+    """Replace a complete {...} or [...] secret value without cutting at an inner comma.
+
+    A comma inside the value is not the next sibling field. An unclosed
+    container still fails the file, so the raw value is not published.
+    """
+    key = re.compile(rb"(?i)(" + _SECRET_NAME + rb")(\s*[:=]\s*)")
+    pieces: list[bytes] = []
+    pos = 0
+    while pos < len(line):
+        match = key.search(line, pos)
+        if not match:
+            pieces.append(line[pos:])
+            break
+        value_at = match.end()
+        if line[value_at:value_at + 1] not in (b"{", b"["):
+            pieces.append(line[pos:value_at])
+            pos = value_at
+            continue
+        try:
+            line_index, end = _consume_json_value([line[value_at:]], 0)
+        except RuntimeError as exc:
+            raise RuntimeError("unsupported multiline secret value") from exc
+        if line_index != 0 or end <= 0:
+            raise RuntimeError("unsupported multiline secret value")
+        pieces.append(line[pos:value_at] + _REDACTED)
+        pos = value_at + end
+    return b"".join(pieces)
+
+
 def redact(data: bytes) -> bytes:
     data = _PRIVATE_KEY.sub(b"[REDACTED PRIVATE KEY]", data)
     data = _AUTHORIZATION.sub(lambda match: match.group(1) + _REDACTED, data)
@@ -351,7 +385,7 @@ def redact(data: bytes) -> bytes:
     output: list[bytes] = []
     index = 0
     while index < len(lines):
-        line = _decode_json_keys(lines[index])
+        line = _redact_flow_values(_decode_json_keys(lines[index]))
         matches = list(_SECRET_ASSIGNMENT.finditer(line))
         for candidate in matches:
             candidate_value = candidate.group(3)

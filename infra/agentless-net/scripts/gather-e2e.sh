@@ -18,8 +18,9 @@ if [ ! -f "${INFRA_DIR}/.mgmt-network" ]; then
 fi
 
 # shellcheck source=/dev/null
-source "${INFRA_DIR}/.mgmt-network"
-export KUBECONFIG
+# shellcheck source=use-kubeconfig.sh
+source "${SCRIPT_DIR}/use-kubeconfig.sh"
+use_kubeconfig "${INFRA_DIR}/.mgmt-network"
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 

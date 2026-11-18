@@ -191,8 +191,12 @@ prepare-suite: _validate-backend
 # agentless-net writes its BMaaS contract inputs during prepare-suite, so that
 # preparation runs before validation. The workload stage then consumes them.
 deploy-suite: _validate-backend
-	@if [ "$(INFRA)" = agentless-net ] && [ "$(SUITE_STAGE)" != workload ]; then \
-		$(MAKE) prepare-suite INFRA=$(INFRA) DEPLOY_SUITE=$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG); \
+	@if [ "$(INFRA)" = agentless-net ]; then \
+		case "$(SUITE_STAGE)" in \
+			all|setup) $(MAKE) prepare-suite INFRA=$(INFRA) DEPLOY_SUITE=$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG) ;; \
+			workload) ;; \
+			*) echo "Unsupported deploy-suite stage: $(SUITE_STAGE)" >&2; exit 2 ;; \
+		esac; \
 	fi
 	@$(MAKE) _validate-suite-contract
 	@stage="$(SUITE_STAGE)"; \

@@ -40,9 +40,9 @@ def bmi_create_body(
         "object": {
             "metadata": {"name": name, "tenant": tenant},
             "spec": {
-                "catalog_item": {"name": catalog_name, "shared": True},
+                "catalog_item": {"name": catalog_name, "shared": False},
                 "instance_type": {"name": instance_type_name, "shared": True},
-                "disk_image": {"name": disk_image_name, "shared": True},
+                "disk_image": {"name": disk_image_name, "shared": False},
                 "run_strategy": "RUN_STRATEGY_ALWAYS",
                 "network_attachments": [
                     {
