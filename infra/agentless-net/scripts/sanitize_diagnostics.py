@@ -49,11 +49,38 @@ _SECRET_KEY_ONLY = re.compile(
 )
 
 
+def _quoted_secret_token(available: bytes) -> int:
+    """Length of one secret token inside a quote.
+
+    A bracket, brace, block marker, or comment is prose in this position.
+    Parsing it as a container is what made an error string fail the upload.
+    """
+    if not available or available[:1] in (b"{", b"[", b"|", b">", b"&", b"*", b"!", b"#", b" ", b"\t"):
+        return 0
+    token_end = 0
+    while token_end < len(available) and available[token_end:token_end + 1] not in (
+        b" ",
+        b"\t",
+        b'"',
+        b"'",
+        b",",
+        b"}",
+        b"]",
+    ):
+        token_end += 1
+    return token_end
+
+
 def _redact_visible_assignments(line: bytes, spans: list[tuple[int, int]]) -> bytes:
     def replace(match: re.Match[bytes]) -> bytes:
-        if _inside_quote(spans, match.start()):
+        if not _inside_quote(spans, match.start()):
+            return _redact_assignment(match)
+        value_at = match.start(3)
+        span_end = next(end for start, end in spans if start <= match.start() < end)
+        token_len = _quoted_secret_token(line[value_at:span_end])
+        if token_len == 0:
             return match.group(0)
-        return _redact_assignment(match)
+        return match.group(1) + match.group(2) + _REDACTED + line[value_at + token_len:match.end()]
 
     return _SECRET_ASSIGNMENT.sub(replace, line)
 

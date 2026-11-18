@@ -667,10 +667,22 @@ class SanitizeTest(unittest.TestCase):
         self.assertNotIn(b"closed-secret", cleaned)
         self.assertIn(b'"[REDACTED]"', cleaned)
 
-    def test_a_secret_word_inside_a_string_is_not_a_field(self) -> None:
+    def test_a_bracket_phrase_inside_a_string_is_prose(self) -> None:
         raw = b'{"message":"unable to read password: [permission denied"}\n'
         cleaned = sanitize_diagnostics.redact(raw)
         self.assertIn(b"permission denied", cleaned)
+
+    def test_a_secret_token_inside_a_quoted_string_is_redacted(self) -> None:
+        samples = (
+            b'msg: "login failed password: hunter2"\n',
+            b'command: "make install PASSWORD=hunter2"\n',
+            b'{"message":"login failed password: hunter2"}\n',
+        )
+        for raw in samples:
+            cleaned = sanitize_diagnostics.redact(raw)
+            self.assertNotIn(b"hunter2", cleaned, raw)
+            self.assertIn(b"[REDACTED]", cleaned, raw)
+            self.assertIn(b"login failed" if b"login failed" in raw else b"make install", cleaned)
 
     def test_a_comment_valued_secret_drops_a_same_indent_sequence(self) -> None:
         raw = b"password: # recovery codes\n- first-secret\n- second-secret\nbridge: ok\n"
