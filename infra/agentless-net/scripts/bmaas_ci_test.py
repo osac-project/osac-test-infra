@@ -294,6 +294,12 @@ class SanitizeTest(unittest.TestCase):
         split_value = sanitize_diagnostics.redact(b'{"password":\n  "hunter2"\n}\n')
         self.assertNotIn(b"hunter2", split_value)
         self.assertIn(b"[REDACTED]", split_value)
+        nested = sanitize_diagnostics.redact(b'{"password":\n  {\n"credential": "hunter2"\n  }\n}\n')
+        self.assertNotIn(b"hunter2", nested)
+        self.assertIn(b"[REDACTED]", nested)
+        with self.assertRaises(RuntimeError) as open_value:
+            sanitize_diagnostics.redact(b'{"password":\n  {\n"credential": "hunter2"\n')
+        self.assertIn("unsupported json secret value", str(open_value.exception))
 
     def test_private_keys_passwords_and_bearers_are_removed(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
