@@ -77,13 +77,15 @@ def _drop_indented_block(lines: list[bytes], index: int, key_indent: int) -> tup
     return index, consumed_value
 
 
-def _consume_json_value(lines: list[bytes], index: int) -> int:
-    """Drop a JSON object, array, or string that starts at index.
+def _consume_json_value(lines: list[bytes], index: int) -> tuple[int, int]:
+    """Return the line and column just after a JSON object, array, or string.
 
-    Indentation does not end the value. An unclosed value is rejected.
+    Indentation does not end the value. Delimiters inside quotes do not end it
+    either. An unclosed value is rejected. The caller keeps whatever follows
+    the value on the closing line.
     """
     stack: list[bytes] = []
-    quote = False
+    quote = b""
     escape = False
     started = False
     while index < len(lines):
@@ -91,15 +93,25 @@ def _consume_json_value(lines: list[bytes], index: int) -> int:
         pos = 0
         while pos < len(line):
             char = line[pos:pos + 1]
-            if quote:
+            if quote == b"'":
+                if line[pos:pos + 2] == b"''":
+                    pos += 2
+                    continue
+                if char == b"'":
+                    quote = b""
+                    if not stack:
+                        return index, pos + 1
+                pos += 1
+                continue
+            if quote == b'"':
                 if escape:
                     escape = False
                 elif char == b"\\":
                     escape = True
                 elif char == b'"':
-                    quote = False
+                    quote = b""
                     if not stack:
-                        return index + 1
+                        return index, pos + 1
                 pos += 1
                 continue
             if char in (b" ", b"\t", b"\r", b"\n"):
@@ -108,7 +120,7 @@ def _consume_json_value(lines: list[bytes], index: int) -> int:
             if not started:
                 if char == b'"':
                     started = True
-                    quote = True
+                    quote = b'"'
                     pos += 1
                     continue
                 if char == b"{":
@@ -123,7 +135,11 @@ def _consume_json_value(lines: list[bytes], index: int) -> int:
                     continue
                 raise RuntimeError("unsupported json secret value")
             if char == b'"':
-                quote = True
+                quote = b'"'
+                pos += 1
+                continue
+            if char == b"'":
+                quote = b"'"
                 pos += 1
                 continue
             if char == b"{":
@@ -140,13 +156,64 @@ def _consume_json_value(lines: list[bytes], index: int) -> int:
                 stack.pop()
                 pos += 1
                 if not stack:
-                    return index + 1
+                    return index, pos
                 continue
             if not stack:
                 raise RuntimeError("unsupported json secret value")
             pos += 1
         index += 1
     raise RuntimeError("unsupported json secret value")
+
+
+def _resume_after_json(lines: list[bytes], line_index: int, pos: int) -> int:
+    """Keep members that share the line where a JSON secret value closed."""
+    if line_index >= len(lines):
+        return line_index
+    remainder = lines[line_index][pos:]
+    body = remainder.rstrip(b"\r\n")
+    ending = remainder[len(body):]
+    body = body.lstrip(b" \t")
+    while body.startswith(b","):
+        body = body[1:].lstrip(b" \t")
+    if body == b"":
+        return line_index + 1
+    lines[line_index] = body + ending
+    return line_index
+
+
+def _is_yaml_quoted_key(line: bytes) -> bool:
+    """A quoted YAML mapping key, such as \"username\": service, is not a JSON string."""
+    text = line.lstrip(b" \t")
+    if not text or text[:1] not in (b'"', b"'"):
+        return False
+    quote = text[:1]
+    pos = 1
+    if quote == b"'":
+        while pos < len(text):
+            if text[pos:pos + 2] == b"''":
+                pos += 2
+                continue
+            if text[pos:pos + 1] == b"'":
+                pos += 1
+                break
+            pos += 1
+        else:
+            return False
+    else:
+        escape = False
+        while pos < len(text):
+            char = text[pos:pos + 1]
+            if escape:
+                escape = False
+            elif char == b"\\":
+                escape = True
+            elif char == b'"':
+                pos += 1
+                break
+            pos += 1
+        else:
+            return False
+    return text[pos:].lstrip(b" \t")[:1] == b":"
 
 
 def _drop_plain_continuation(lines: list[bytes], index: int, key_indent: int) -> int:
@@ -278,8 +345,14 @@ def redact(data: bytes) -> bytes:
             probe = index + 1
             while probe < len(lines) and lines[probe].strip() == b"":
                 probe += 1
-            if probe < len(lines) and lines[probe].lstrip(b" \t")[:1] in (b"{", b"[", b'"'):
-                index = _consume_json_value(lines, index + 1)
+            if probe < len(lines):
+                first = lines[probe].lstrip(b" \t")[:1]
+                json_value = first in (b"{", b"[") or (first == b'"' and not _is_yaml_quoted_key(lines[probe]))
+            else:
+                json_value = False
+            if json_value:
+                value_line, value_pos = _consume_json_value(lines, index + 1)
+                index = _resume_after_json(lines, value_line, value_pos)
                 continue
             index, consumed_value = _drop_indented_block(lines, index + 1, _line_indent(line))
             if not consumed_value:
