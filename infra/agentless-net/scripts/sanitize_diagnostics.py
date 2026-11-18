@@ -77,6 +77,78 @@ def _drop_indented_block(lines: list[bytes], index: int, key_indent: int) -> tup
     return index, consumed_value
 
 
+def _consume_json_value(lines: list[bytes], index: int) -> int:
+    """Drop a JSON object, array, or string that starts at index.
+
+    Indentation does not end the value. An unclosed value is rejected.
+    """
+    stack: list[bytes] = []
+    quote = False
+    escape = False
+    started = False
+    while index < len(lines):
+        line = lines[index]
+        pos = 0
+        while pos < len(line):
+            char = line[pos:pos + 1]
+            if quote:
+                if escape:
+                    escape = False
+                elif char == b"\\":
+                    escape = True
+                elif char == b'"':
+                    quote = False
+                    if not stack:
+                        return index + 1
+                pos += 1
+                continue
+            if char in (b" ", b"\t", b"\r", b"\n"):
+                pos += 1
+                continue
+            if not started:
+                if char == b'"':
+                    started = True
+                    quote = True
+                    pos += 1
+                    continue
+                if char == b"{":
+                    started = True
+                    stack.append(b"}")
+                    pos += 1
+                    continue
+                if char == b"[":
+                    started = True
+                    stack.append(b"]")
+                    pos += 1
+                    continue
+                raise RuntimeError("unsupported json secret value")
+            if char == b'"':
+                quote = True
+                pos += 1
+                continue
+            if char == b"{":
+                stack.append(b"}")
+                pos += 1
+                continue
+            if char == b"[":
+                stack.append(b"]")
+                pos += 1
+                continue
+            if char in (b"}", b"]"):
+                if not stack or stack[-1] != char:
+                    raise RuntimeError("unsupported json secret value")
+                stack.pop()
+                pos += 1
+                if not stack:
+                    return index + 1
+                continue
+            if not stack:
+                raise RuntimeError("unsupported json secret value")
+            pos += 1
+        index += 1
+    raise RuntimeError("unsupported json secret value")
+
+
 def _drop_plain_continuation(lines: list[bytes], index: int, key_indent: int) -> int:
     """Drop indented lines that continue a plain secret, including across blank lines."""
     while index < len(lines):
@@ -203,6 +275,12 @@ def redact(data: bytes) -> bytes:
         if key_only:
             ending = line[len(line.rstrip(b"\r\n")) :]
             output.append(key_only.group(1) + key_only.group(2) + key_only.group(3) + b" " + _REDACTED + ending)
+            probe = index + 1
+            while probe < len(lines) and lines[probe].strip() == b"":
+                probe += 1
+            if probe < len(lines) and lines[probe].lstrip(b" \t")[:1] in (b"{", b"[", b'"'):
+                index = _consume_json_value(lines, index + 1)
+                continue
             index, consumed_value = _drop_indented_block(lines, index + 1, _line_indent(line))
             if not consumed_value:
                 raise RuntimeError("secret key has no value")
