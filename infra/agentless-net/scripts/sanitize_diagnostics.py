@@ -49,14 +49,47 @@ _SECRET_KEY_ONLY = re.compile(
 )
 
 
-def _quoted_secret_token(available: bytes) -> int:
-    """Length of one secret token inside a quote.
-
-    A bracket, brace, block marker, or comment is prose in this position.
-    Parsing it as a container is what made an error string fail the upload.
-    """
-    if not available or available[:1] in (b"{", b"[", b"|", b">", b"&", b"*", b"!", b"#", b" ", b"\t"):
+def _closing_quote(available: bytes, quote: bytes) -> int:
+    """Index just past the closing quote, or 0 when the scalar does not close."""
+    pos = 1
+    if quote == b"'":
+        while pos < len(available):
+            if available[pos:pos + 2] == b"''":
+                pos += 2
+                continue
+            if available[pos:pos + 1] == b"'":
+                return pos + 1
+            pos += 1
         return 0
+    escape = False
+    while pos < len(available):
+        char = available[pos:pos + 1]
+        if escape:
+            escape = False
+        elif char == b"\\":
+            escape = True
+        elif char == b'"':
+            return pos + 1
+        pos += 1
+    return 0
+
+
+def _consume_quoted_secret(available: bytes) -> tuple[int, bytes]:
+    """Consume one secret value inside an already quoted command.
+
+    A leading ``[`` is the error-text prose ``password: [permission denied``.
+    A leading quote can hold spaces. Anything else, including ``#hunter2``,
+    is one credential token. The caller scans the text after this value so a
+    later assignment on the same command is not left behind.
+    """
+    if not available or available[:1] == b"[":
+        return 0, b""
+    first = available[:1]
+    if first in (b'"', b"'"):
+        end = _closing_quote(available, first)
+        if end == 0:
+            return len(available), _REDACTED
+        return end, first + _REDACTED + first
     token_end = 0
     while token_end < len(available) and available[token_end:token_end + 1] not in (
         b" ",
@@ -68,21 +101,35 @@ def _quoted_secret_token(available: bytes) -> int:
         b"]",
     ):
         token_end += 1
-    return token_end
+    if token_end == 0:
+        return 0, b""
+    return token_end, _REDACTED
 
 
 def _redact_visible_assignments(line: bytes, spans: list[tuple[int, int]]) -> bytes:
-    def replace(match: re.Match[bytes]) -> bytes:
+    pieces: list[bytes] = []
+    pos = 0
+    while pos < len(line):
+        match = _SECRET_ASSIGNMENT.search(line, pos)
+        if not match:
+            pieces.append(line[pos:])
+            break
         if not _inside_quote(spans, match.start()):
-            return _redact_assignment(match)
+            pieces.append(line[pos:match.start()])
+            pieces.append(_redact_assignment(match))
+            pos = match.end()
+            continue
         value_at = match.start(3)
         span_end = next(end for start, end in spans if start <= match.start() < end)
-        token_len = _quoted_secret_token(line[value_at:span_end])
-        if token_len == 0:
-            return match.group(0)
-        return match.group(1) + match.group(2) + _REDACTED + line[value_at + token_len:match.end()]
-
-    return _SECRET_ASSIGNMENT.sub(replace, line)
+        consumed, replacement = _consume_quoted_secret(line[value_at:span_end])
+        if consumed == 0:
+            pieces.append(line[pos:match.end()])
+            pos = match.end()
+            continue
+        pieces.append(line[pos:value_at])
+        pieces.append(replacement)
+        pos = value_at + consumed
+    return b"".join(pieces)
 
 
 def _redact_assignment(match: re.Match[bytes]) -> bytes:

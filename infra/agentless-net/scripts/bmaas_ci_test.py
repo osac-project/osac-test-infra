@@ -684,6 +684,19 @@ class SanitizeTest(unittest.TestCase):
             self.assertIn(b"[REDACTED]", cleaned, raw)
             self.assertIn(b"login failed" if b"login failed" in raw else b"make install", cleaned)
 
+    def test_a_quoted_command_redacts_each_assignment_value(self) -> None:
+        hash_value = sanitize_diagnostics.redact(b'command: "make install PASSWORD=#hunter2"\n')
+        self.assertNotIn(b"hunter2", hash_value)
+        self.assertNotIn(b"#hunter2", hash_value)
+        self.assertIn(b"make install", hash_value)
+        quoted = sanitize_diagnostics.redact(b"command: 'make install PASSWORD=\"my secret\"'\n")
+        self.assertNotIn(b"my secret", quoted)
+        self.assertIn(b"make install", quoted)
+        paired = sanitize_diagnostics.redact(b'command: "make install PASSWORD=first TOKEN=second"\n')
+        self.assertNotIn(b"first", paired)
+        self.assertNotIn(b"second", paired)
+        self.assertIn(b"make install", paired)
+
     def test_a_comment_valued_secret_drops_a_same_indent_sequence(self) -> None:
         raw = b"password: # recovery codes\n- first-secret\n- second-secret\nbridge: ok\n"
         cleaned = sanitize_diagnostics.redact(raw)
