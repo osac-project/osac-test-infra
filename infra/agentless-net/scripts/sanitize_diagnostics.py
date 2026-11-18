@@ -356,13 +356,23 @@ def _decode_json_keys(line: bytes) -> bytes:
     return _JSON_KEY.sub(replace, line)
 
 
+def _quote_opens(line: bytes, pos: int) -> bool:
+    """A quote starts a string only at a value boundary, not inside a plain scalar."""
+    previous = pos - 1
+    while previous >= 0 and line[previous:previous + 1] in (b" ", b"\t"):
+        previous -= 1
+    if previous < 0:
+        return True
+    return line[previous:previous + 1] in (b":", b"=", b",", b"[", b"{", b"-")
+
+
 def _quoted_interiors(line: bytes) -> list[tuple[int, int]]:
     """Byte ranges inside quotes, excluding the quote characters themselves."""
     spans: list[tuple[int, int]] = []
     pos = 0
     while pos < len(line):
         quote = line[pos:pos + 1]
-        if quote not in (b'"', b"'"):
+        if quote not in (b'"', b"'") or not _quote_opens(line, pos):
             pos += 1
             continue
         start = pos + 1
@@ -402,6 +412,11 @@ def _inside_quote(spans: list[tuple[int, int]], index: int) -> bool:
     return any(start <= index < end for start, end in spans)
 
 
+def _blank_or_comment(line: bytes) -> bool:
+    text = line.strip()
+    return text == b"" or text.startswith(b"#")
+
+
 def _comment_only(value: bytes) -> bool:
     text = value.strip()
     return text == b"" or text.startswith(b"#")
@@ -412,7 +427,7 @@ def _drop_same_indent_sequence(lines: list[bytes], index: int, key_indent: int) 
     consumed = False
     while index < len(lines):
         probe = index
-        while probe < len(lines) and lines[probe].strip() == b"":
+        while probe < len(lines) and _blank_or_comment(lines[probe]):
             probe += 1
         if probe >= len(lines):
             return probe, consumed

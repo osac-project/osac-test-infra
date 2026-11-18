@@ -24,7 +24,9 @@ keep_capture() {
     local dest="$1"
     shift
     local tmp
-    if [[ -s "$dest" ]]; then
+    # A copy-logs retry keeps a snapshot taken before teardown. A fresh gather
+    # replaces it with the objects that exist now.
+    if [[ "${OSAC_GATHER_RETRY:-}" == "yes" && -s "$dest" ]]; then
         return 0
     fi
     tmp="$(mktemp)"

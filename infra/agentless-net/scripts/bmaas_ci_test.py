@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -678,6 +679,20 @@ class SanitizeTest(unittest.TestCase):
         self.assertNotIn(b"second-secret", cleaned)
         self.assertIn(b"bridge: ok", cleaned)
 
+    def test_a_comment_between_secret_sequence_entries_is_not_a_sibling(self) -> None:
+        raw = b"password: # recovery codes\n- first-secret\n# still a code\n- second-secret\nbridge: ok\n"
+        cleaned = sanitize_diagnostics.redact(raw)
+        self.assertNotIn(b"first-secret", cleaned)
+        self.assertNotIn(b"second-secret", cleaned)
+        self.assertIn(b"bridge: ok", cleaned)
+
+    def test_an_apostrophe_inside_a_plain_value_does_not_hide_a_secret(self) -> None:
+        raw = b'message: operator\'s note, "password": "closed-secret"\nbridge: ok\n'
+        cleaned = sanitize_diagnostics.redact(raw)
+        self.assertNotIn(b"closed-secret", cleaned)
+        self.assertIn(b"operator's note", cleaned)
+        self.assertIn(b"bridge: ok", cleaned)
+
     def test_a_truncated_key_after_an_assignment_is_rejected(self) -> None:
         begin = "-----BEGIN " + "RSA PRIVATE KEY-----"
         with tempfile.TemporaryDirectory() as tmp:
@@ -738,6 +753,13 @@ class WorkflowContractTest(unittest.TestCase):
             "needs.verify.outputs.fork-association",
             caller["jobs"]["e2e-bmaas-agentless"]["with"]["fork-pr-author-association"],
         )
+        self.assertNotIn("fork-pr-author", caller_trigger["workflow_dispatch"]["inputs"])
+        workflow_text = WORKFLOW.read_text()
+        self.assertIn(
+            "inputs.pr-repository != '' && (inputs.pr-number == '' || inputs.pr-sha == '')",
+            workflow_text,
+        )
+        self.assertIn("pr-repository requires both", workflow_text)
         install = document["jobs"]["install"]
         self.assertEqual(install["needs"], "authorize")
         self.assertEqual(install["runs-on"], "${{ inputs.orchestrator-runner-label }}")
@@ -950,14 +972,17 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(deploy.index("make install"), deploy.index('--from-literal=overlay="$installed_overlay"'))
         self.assertLess(deploy.index("installed_revision="), deploy.index("make install"))
         self.assertIn('revision="$installed_revision"', deploy)
-        self.assertIn('fetch origin "$OSAC_BRANCH"', deploy)
-        self.assertIn("fetch --prune --tags origin", deploy)
+        self.assertIn('fetch origin "$branch"', deploy)
+        self.assertIn("fetch --prune --no-tags origin", deploy)
+        self.assertNotIn("fetch --prune --tags origin", deploy)
         self.assertNotIn("git clone --branch", deploy)
         self.assertNotIn('rev-parse --verify --quiet "${OSAC_BRANCH}', deploy)
         self.assertIn(".effective-kubeconfig", deploy)
         self.assertIn("use_kubeconfig", deploy)
         helper = (INFRA / "scripts" / "use-kubeconfig.sh").read_text()
-        self.assertLess(helper.index("OSAC_KUBECONFIG_FROM_CALLER"), helper.index('source "$recorded"'))
+        self.assertLess(helper.index("OSAC_KUBECONFIG_FROM_CALLER"), helper.index("unset KUBECONFIG"))
+        self.assertLess(helper.index("unset KUBECONFIG"), helper.index('source "$recorded"'))
+        self.assertIn("IFS=':'", helper)
         self.assertIn('KUBECONFIG="${KUBECONFIG:-$HOME/.kube/${MGMT_CLONE_NAME:-agentless-lab-mgmt}.kubeconfig}"', helper)
         self.assertNotIn(".effective-kubeconfig", helper)
         self.assertIn("require_recorded_cluster", helper)
@@ -965,6 +990,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("KUBECONFIG=%q", ocp)
         self.assertIn("use_kubeconfig", ocp)
         self.assertLess(ocp.index("use_kubeconfig"), ocp.index('MGMT_VM_NAME="test-infra-cluster-'))
+        self.assertIn('-z "$REQUESTED_KUBECONFIG"', ocp)
         self.assertIn("require_recorded_cluster", (INFRA / "scripts" / "destroy-caas.sh").read_text())
         backend = (INFRA / "Makefile").read_text()
         self.assertIn("prepare-suite && $(MAKE) deploy-suite-workload", backend)
@@ -989,7 +1015,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf status", gather)
         self.assertIn(".gather-bmaas-complete", gather)
         self.assertLess(gather.index("capture_failed"), gather.index(".gather-bmaas-complete"))
-        self.assertLess(gather.index('[[ -s "$dest" ]]'), gather.index("get baremetalhosts"))
+        self.assertLess(gather.index("OSAC_GATHER_RETRY"), gather.index("get baremetalhosts"))
+        runner = (ROOT / "scripts" / "ec2-runner" / "run-bmaas-agentless.sh").read_text()
+        self.assertIn("OSAC_GATHER_RETRY=yes", runner)
         self.assertIn(".gather-infra-complete", (INFRA / "scripts" / "gather-infra.sh").read_text())
         self.assertIn("br-host1", gather)
         self.assertIn("br-host2", gather)
@@ -1008,6 +1036,57 @@ class WorkflowContractTest(unittest.TestCase):
         contract = (INFRA / "contracts" / "bmaas").read_text()
         self.assertIn("OSAC_BMI_INSTANCE_TYPE", contract)
         self.assertIn("OSAC_BMI_NETWORK_INTERFACE", contract)
+
+
+class CheckoutRefTest(unittest.TestCase):
+    def test_a_conflicting_local_tag_does_not_block_the_branch(self) -> None:
+        script = INFRA / "scripts" / "deploy-osac.sh"
+        git = ["git", "-c", "user.email=ci@example.com", "-c", "user.name=ci"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            remote = root / "remote.git"
+            work = root / "work"
+            clone = root / "clone"
+            subprocess.check_call(["git", "init", "--bare", "-b", "main", str(remote)])
+            subprocess.check_call(["git", "-C", str(remote), "config", "uploadpack.allowReachableSHA1InWant", "true"])
+            subprocess.check_call(["git", "init", "-b", "main", str(work)])
+            (work / "f").write_text("a\n")
+            subprocess.check_call(git + ["-C", str(work), "add", "f"])
+            subprocess.check_call(git + ["-C", str(work), "commit", "-m", "a"])
+            old = subprocess.check_output(["git", "-C", str(work), "rev-parse", "HEAD"], text=True).strip()
+            subprocess.check_call(["git", "-C", str(work), "tag", "v1"])
+            (work / "f").write_text("b\n")
+            subprocess.check_call(git + ["-C", str(work), "commit", "-am", "b"])
+            main = subprocess.check_output(["git", "-C", str(work), "rev-parse", "HEAD"], text=True).strip()
+            subprocess.check_call(["git", "-C", str(work), "remote", "add", "origin", str(remote)])
+            subprocess.check_call(["git", "-C", str(work), "push", "origin", "HEAD:refs/heads/main", "refs/tags/v1"])
+            subprocess.check_call(["git", "clone", str(remote), str(clone)])
+            subprocess.check_call(["git", "-C", str(work), "tag", "-f", "v1"])
+            subprocess.check_call(["git", "-C", str(work), "push", "--force", "origin", "refs/tags/v1"])
+            conflict = subprocess.run(
+                ["git", "-C", str(clone), "fetch", "--tags", "origin"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(conflict.returncode, 0, conflict.stderr)
+
+            def checkout(branch: str) -> str:
+                env = dict(os.environ)
+                env.update(OSAC_REPO=str(remote), OSAC_BRANCH=branch, OSAC_DIR=str(clone))
+                completed = subprocess.run(
+                    ["bash", str(script), "--checkout-only"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                return completed.stdout.strip().splitlines()[-1]
+
+            self.assertEqual(checkout("main"), main)
+            self.assertEqual(checkout("v1"), main)
+            self.assertEqual(checkout(old), old)
 
 
 if __name__ == "__main__":
