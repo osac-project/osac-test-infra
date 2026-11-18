@@ -9,9 +9,16 @@
 # trust-on-first-use host-key checking (no pre-shared host key exists for a
 # box that didn't exist a minute ago).
 #
-# On InsufficientInstanceCapacity this hard-fails rather than retrying across
-# AZs/regions -- a v1 decision, acceptable given low run frequency. Revisit
-# if it proves flaky in practice.
+# EC2 tracks capacity per instance type per Availability Zone. On
+# InsufficientInstanceCapacity (or a type the subnet's AZ doesn't offer) this
+# tries INSTANCE_TYPE and then each FALLBACK_INSTANCE_TYPES entry in order, in
+# the same subnet; if every type is out of capacity it waits
+# CAPACITY_RETRY_WAIT_SECONDS and tries the whole list again, up to
+# CAPACITY_RETRY_ROUNDS rounds -- AWS's own first advice for this error is to
+# wait a few minutes and retry. Any other RunInstances error fails at once.
+# This needs no IAM permission beyond RunInstances and no subnet in another
+# AZ. Launching across AZs (EC2 Fleet over one subnet per AZ) is the next step
+# if capacity errors persist, at the cost of AWS-side setup.
 #
 # Required env vars:
 #   AMI_ID              AMI to launch (stock, no pre-baked tooling for now --
@@ -55,6 +62,16 @@
 #                         reach instance-status=ok/system-status=ok; adjust
 #                         once more real-world data exists)
 #   SSH_TIMEOUT_SECONDS  timeout waiting for SSH to accept connections (default 600)
+#   FALLBACK_INSTANCE_TYPES  space-separated metal types tried, in order, after
+#                        INSTANCE_TYPE runs out of capacity (default
+#                        "c5.metal c6i.metal m5.metal": each has at least
+#                        c5n.metal's 72 vCPU and 192 GiB, which the labs are
+#                        sized for). Set it to "" to try INSTANCE_TYPE only.
+#                        A type equal to INSTANCE_TYPE is skipped.
+#   CAPACITY_RETRY_ROUNDS  rounds over the whole type list (default 3)
+#   CAPACITY_RETRY_WAIT_SECONDS  wait between rounds (default 300; the
+#                        provision job's 45-minute timeout leaves room for
+#                        the default 10 minutes of waiting plus a normal boot)
 #   ROOT_VOLUME_SIZE_GB  root EBS volume size in GB (default 500). The CaaS/
 #                        Netris flow alone needs a one-time ~60GB OCP
 #                        snapshot download (infra/netris/README.md) plus a
@@ -94,6 +111,19 @@ YELLOW="\e[33m"
 SSH_USER="${SSH_USER:-root}"
 BOOT_TIMEOUT_SECONDS="${BOOT_TIMEOUT_SECONDS:-1800}"
 SSH_TIMEOUT_SECONDS="${SSH_TIMEOUT_SECONDS:-600}"
+FALLBACK_INSTANCE_TYPES="${FALLBACK_INSTANCE_TYPES-c5.metal c6i.metal m5.metal}"
+CAPACITY_RETRY_ROUNDS="${CAPACITY_RETRY_ROUNDS:-3}"
+CAPACITY_RETRY_WAIT_SECONDS="${CAPACITY_RETRY_WAIT_SECONDS:-300}"
+for var in CAPACITY_RETRY_ROUNDS CAPACITY_RETRY_WAIT_SECONDS; do
+    if [[ ! "${!var}" =~ ^[0-9]+$ ]] || { [ "$var" = CAPACITY_RETRY_ROUNDS ] && [ "${!var}" -lt 1 ]; }; then
+        echo -e "${RED}${BOLD}ERROR: ${var} '${!var}' is not a valid count.${RESET}" >&2
+        exit 1
+    fi
+done
+INSTANCE_TYPES=("$INSTANCE_TYPE")
+for fallback_type in $FALLBACK_INSTANCE_TYPES; do
+    [ "$fallback_type" = "$INSTANCE_TYPE" ] || INSTANCE_TYPES+=("$fallback_type")
+done
 ROOT_VOLUME_SIZE_GB="${ROOT_VOLUME_SIZE_GB:-500}"
 if [[ ! "$ROOT_VOLUME_SIZE_GB" =~ ^[1-9][0-9]*$ ]]; then
     echo -e "${RED}${BOLD}ERROR: ROOT_VOLUME_SIZE_GB '${ROOT_VOLUME_SIZE_GB}' is not a positive integer.${RESET}" >&2
@@ -126,7 +156,7 @@ ORCHESTRATOR_PUBKEY=$(cat "$ORCHESTRATOR_PUBKEY_PATH")
 
 echo -e "${BOLD}Provisioning ephemeral EC2 runner${RESET}"
 echo -e "${GREEN}Instance name: ${INSTANCE_NAME}${RESET}"
-echo -e "${GREEN}AMI: ${AMI_ID}  Type: ${INSTANCE_TYPE}${RESET}"
+echo -e "${GREEN}AMI: ${AMI_ID}  Types, in order: ${INSTANCE_TYPES[*]}${RESET}"
 
 USER_DATA_FILE=$(mktemp)
 RUN_INSTANCES_OUTPUT=$(mktemp)
@@ -168,11 +198,14 @@ if [ -z "$ROOT_DEVICE_NAME" ] || [ "$ROOT_DEVICE_NAME" = "None" ]; then
     exit 1
 fi
 
-echo -e "${GREEN}Launching instance (root volume: ${ROOT_VOLUME_SIZE_GB}GB on ${ROOT_DEVICE_NAME})...${RESET}"
-
-if ! aws ec2 run-instances \
+# Returns 0 on launch, 2 when the type has no capacity in (or isn't offered
+# by) the subnet's AZ, and 1 on any other error.
+launch_instance() {
+    local instance_type="$1"
+    echo -e "${GREEN}Launching ${instance_type} (root volume: ${ROOT_VOLUME_SIZE_GB}GB on ${ROOT_DEVICE_NAME})...${RESET}"
+    if aws ec2 run-instances \
         --image-id "$AMI_ID" \
-        --instance-type "$INSTANCE_TYPE" \
+        --instance-type "$instance_type" \
         --subnet-id "$SUBNET_ID" \
         --security-group-ids "$SECURITY_GROUP_ID" \
         --user-data "file://${USER_DATA_FILE}" \
@@ -182,15 +215,39 @@ if ! aws ec2 run-instances \
         --count 1 \
         --output json \
         > "$RUN_INSTANCES_OUTPUT" 2>&1; then
-    if grep -q "InsufficientInstanceCapacity" "$RUN_INSTANCES_OUTPUT"; then
-        echo -e "${RED}${BOLD}ERROR: InsufficientInstanceCapacity for ${INSTANCE_TYPE} in this AZ.${RESET}" >&2
-        echo "v1 does not retry across AZs/regions -- revisit if this proves flaky." >&2
-    else
-        echo -e "${RED}${BOLD}ERROR: RunInstances failed:${RESET}" >&2
+        return 0
     fi
+    if grep -q -E "InsufficientInstanceCapacity|Unsupported" "$RUN_INSTANCES_OUTPUT"; then
+        echo -e "${YELLOW}No ${instance_type} capacity in this AZ:${RESET}" >&2
+        cat "$RUN_INSTANCES_OUTPUT" >&2
+        return 2
+    fi
+    echo -e "${RED}${BOLD}ERROR: RunInstances failed:${RESET}" >&2
     cat "$RUN_INSTANCES_OUTPUT" >&2
+    return 1
+}
+
+LAUNCHED_TYPE=""
+for ((round = 1; round <= CAPACITY_RETRY_ROUNDS; round++)); do
+    for instance_type in "${INSTANCE_TYPES[@]}"; do
+        status=0
+        launch_instance "$instance_type" || status=$?
+        if [ "$status" -eq 0 ]; then
+            LAUNCHED_TYPE="$instance_type"
+            break 2
+        fi
+        [ "$status" -eq 2 ] || exit 1
+    done
+    if [ "$round" -lt "$CAPACITY_RETRY_ROUNDS" ]; then
+        echo -e "${YELLOW}No capacity for any of ${INSTANCE_TYPES[*]} (round ${round}/${CAPACITY_RETRY_ROUNDS}); retrying in ${CAPACITY_RETRY_WAIT_SECONDS}s...${RESET}" >&2
+        sleep "$CAPACITY_RETRY_WAIT_SECONDS"
+    fi
+done
+if [ -z "$LAUNCHED_TYPE" ]; then
+    echo -e "${RED}${BOLD}ERROR: InsufficientInstanceCapacity for every type (${INSTANCE_TYPES[*]}) after ${CAPACITY_RETRY_ROUNDS} rounds in this AZ.${RESET}" >&2
     exit 1
 fi
+echo -e "${GREEN}Launched instance type: ${LAUNCHED_TYPE}${RESET}"
 
 INSTANCE_ID=$(jq -r '.Instances[0].InstanceId' "$RUN_INSTANCES_OUTPUT")
 if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "null" ]; then
