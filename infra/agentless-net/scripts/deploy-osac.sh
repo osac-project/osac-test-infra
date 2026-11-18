@@ -8,6 +8,45 @@
 #
 set -euo pipefail
 
+info() { echo "==> $*"; }
+
+# A branch flag cannot select a raw commit. Fetch the requested ref and
+# detach at that commit so a SHA, branch, and tag all work. Tags are fetched
+# only for the requested tag, so a conflicting local tag cannot reject a branch.
+checkout_osac_ref() {
+    local dir="$1"
+    local repo="$2"
+    local branch="$3"
+    if [[ ! -d "${dir}/.git" ]]; then
+        info "Cloning osac mono-repo (${repo})..."
+        git clone "$repo" "$dir"
+    fi
+    info "Checking out osac ${branch}"
+    git -C "$dir" remote set-url origin "$repo"
+    git -C "$dir" fetch --prune --no-tags origin
+    if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+        git -C "$dir" checkout --detach "refs/remotes/origin/${branch}"
+    elif git -C "$dir" ls-remote --exit-code --tags origin "refs/tags/${branch}" >/dev/null; then
+        git -C "$dir" fetch --force origin "refs/tags/${branch}:refs/tags/${branch}"
+        git -C "$dir" checkout --detach "refs/tags/${branch}^{}"
+    elif git -C "$dir" fetch origin "$branch"; then
+        git -C "$dir" checkout --detach FETCH_HEAD
+    else
+        echo "ERROR: ${repo} has no branch, tag, or commit ${branch}" >&2
+        return 1
+    fi
+    installed_revision="$(git -C "$dir" rev-parse HEAD)"
+}
+
+if [[ "${1:-}" == "--checkout-only" ]]; then
+    : "${OSAC_REPO:?}"
+    : "${OSAC_BRANCH:?}"
+    : "${OSAC_DIR:?}"
+    checkout_osac_ref "$OSAC_DIR" "$OSAC_REPO" "$OSAC_BRANCH"
+    printf '%s\n' "$installed_revision"
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${SCRIPT_DIR}/.."
 
@@ -35,32 +74,9 @@ SSH_PRIVATE_KEY="${SSH_PRIVATE_KEY_PATH:-${HOME}/.ssh/id_rsa}"
 
 export KUBECONFIG
 
-info() { echo "==> $*"; }
-
 # ---------- clone osac mono-repo ----------
-# A branch flag cannot select a raw commit. Fetch the requested ref and
-# detach at that commit so a SHA, branch, and tag all work.
-
-if [[ ! -d "${OSAC_DIR}/.git" ]]; then
-    info "Cloning osac mono-repo (${OSAC_REPO})..."
-    git clone "$OSAC_REPO" "$OSAC_DIR"
-fi
-info "Checking out osac ${OSAC_BRANCH}"
-git -C "$OSAC_DIR" remote set-url origin "$OSAC_REPO"
-git -C "$OSAC_DIR" fetch --prune --tags origin
-if git -C "$OSAC_DIR" show-ref --verify --quiet "refs/remotes/origin/${OSAC_BRANCH}"; then
-    git -C "$OSAC_DIR" checkout --detach "refs/remotes/origin/${OSAC_BRANCH}"
-elif git -C "$OSAC_DIR" ls-remote --exit-code --tags origin "refs/tags/${OSAC_BRANCH}" >/dev/null; then
-    git -C "$OSAC_DIR" fetch --force origin "refs/tags/${OSAC_BRANCH}:refs/tags/${OSAC_BRANCH}"
-    git -C "$OSAC_DIR" checkout --detach "refs/tags/${OSAC_BRANCH}^{}"
-elif git -C "$OSAC_DIR" fetch origin "$OSAC_BRANCH"; then
-    git -C "$OSAC_DIR" checkout --detach FETCH_HEAD
-else
-    echo "ERROR: ${OSAC_REPO} has no branch, tag, or commit ${OSAC_BRANCH}" >&2
-    exit 1
-fi
-# Stamp this checkout. A later rev-parse could observe a different HEAD.
-installed_revision="$(git -C "$OSAC_DIR" rev-parse HEAD)"
+# Stamp this checkout inside checkout_osac_ref. A later rev-parse could observe a different HEAD.
+checkout_osac_ref "$OSAC_DIR" "$OSAC_REPO" "$OSAC_BRANCH"
 
 # ---------- merge values overlay ----------
 # Profile installs read values/<profile>/instance.yaml. The legacy CaaS file

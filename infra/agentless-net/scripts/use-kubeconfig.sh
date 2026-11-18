@@ -14,6 +14,9 @@ use_kubeconfig() {
         caller="$KUBECONFIG"
     fi
     if [[ -n "$recorded" && -f "$recorded" ]]; then
+        # The inherited value must not become the recorded path when the file
+        # has no KUBECONFIG line of its own.
+        unset KUBECONFIG
         # shellcheck disable=SC1090
         source "$recorded"
         recorded_value="${KUBECONFIG:-}"
@@ -30,11 +33,29 @@ use_kubeconfig() {
     export KUBECONFIG
 }
 
+recorded_kubeconfig_exists() {
+    local list="$1"
+    local entry
+    local -a entries=()
+    if [[ -z "$list" ]]; then
+        return 1
+    fi
+    IFS=':' read -r -a entries <<< "$list"
+    if [[ "${#entries[@]}" -eq 0 ]]; then
+        return 1
+    fi
+    for entry in "${entries[@]}"; do
+        if [[ -z "$entry" || ! -f "$entry" ]]; then
+            return 1
+        fi
+    done
+}
+
 require_recorded_cluster() {
     local recorded="${OSAC_RECORDED_KUBECONFIG:-}"
     local recorded_server=""
     local current_server=""
-    if [[ -z "$recorded" || ! -f "$recorded" ]]; then
+    if ! recorded_kubeconfig_exists "$recorded"; then
         echo "ERROR: refusing to change the cluster; the lab kubeconfig was not recorded" >&2
         return 1
     fi

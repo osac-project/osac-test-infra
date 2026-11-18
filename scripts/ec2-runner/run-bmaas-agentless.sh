@@ -121,7 +121,7 @@ if [ "$phase" = "copy-logs" ]; then
         fi
         echo "Running make ${target}"
         status=0
-        run_remote 1 "$(printf 'cd %q && DEPLOY_SUITE=bmaas make %q' "$REMOTE_INFRA" "$target")" || status=$?
+        run_remote 1 "$(printf 'cd %q && DEPLOY_SUITE=bmaas OSAC_GATHER_RETRY=yes make %q' "$REMOTE_INFRA" "$target")" || status=$?
         if [ "$status" -ne 0 ]; then
             echo "WARNING: make ${target} failed with status ${status}" >&2
         fi

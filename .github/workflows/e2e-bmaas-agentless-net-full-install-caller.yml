@@ -30,14 +30,6 @@ on:
         description: "Expected immutable PR head SHA"
         required: false
         default: ""
-      fork-pr-author-association:
-        description: "PR author association used by fork authorization"
-        required: false
-        default: ""
-      fork-pr-author:
-        description: "PR author login used by fork authorization"
-        required: false
-        default: ""
       instance-type:
         description: "EC2 instance type -- curated allow-list, not free text, so a dispatch can't accidentally launch an unexpectedly expensive type."
         required: false

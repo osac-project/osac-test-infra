@@ -9,12 +9,17 @@ set -euo pipefail
 MGMT_CLONE_NAME="${MGMT_CLONE_NAME:-agentless-lab-mgmt}"
 PULL_SECRET="${OSAC_PULL_SECRET_PATH:-/root/pull-secret}"
 REQUESTED_CLONE="$MGMT_CLONE_NAME"
+REQUESTED_KUBECONFIG=""
+if [[ "${OSAC_KUBECONFIG_FROM_CALLER:-}" == "yes" && -n "${KUBECONFIG:-}" ]]; then
+    REQUESTED_KUBECONFIG="$KUBECONFIG"
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=use-kubeconfig.sh
 source "${SCRIPT_DIR}/use-kubeconfig.sh"
 use_kubeconfig "${SCRIPT_DIR}/../.mgmt-network" optional
 # A recorded file from another clone must not supply this boot's VM or bridge.
-if [[ "${MGMT_VM_NAME:-}" != "test-infra-cluster-${REQUESTED_CLONE}-master-0" && "${OSAC_KUBECONFIG_FROM_CALLER:-}" != "yes" ]]; then
+# An explicit empty KUBECONFIG is not an override.
+if [[ "${MGMT_VM_NAME:-}" != "test-infra-cluster-${REQUESTED_CLONE}-master-0" && -z "$REQUESTED_KUBECONFIG" ]]; then
     KUBECONFIG="${HOME}/.kube/${REQUESTED_CLONE}.kubeconfig"
     export KUBECONFIG
 fi
