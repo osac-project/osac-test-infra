@@ -12,8 +12,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${INFRA_DIR}/../.." && pwd)"
-# shellcheck source=/dev/null
-source "${INFRA_DIR}/.mgmt-network"
+# shellcheck source=use-kubeconfig.sh
+source "${SCRIPT_DIR}/use-kubeconfig.sh"
+use_kubeconfig "${INFRA_DIR}/.mgmt-network"
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 BMH_NAMESPACE="${BMH_NAMESPACE:-host-inventory}"
@@ -29,11 +30,9 @@ case "$FABRIC_BRIDGE" in
         exit 1
         ;;
 esac
-SSH_KEY="${HOME}/.ssh/id_rsa"
+SSH_KEY="${OSAC_FULFILLMENT_SSH_KEY:-${HOME}/.ssh/osac-bmaas-fulfillment}"
 SSH_PUB="${SSH_KEY}.pub"
 INVENTORY_FILE="${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json"
-export KUBECONFIG
-
 info() { echo "==> $*"; }
 
 if [[ ! -f "$SSH_KEY" ]]; then

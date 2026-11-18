@@ -70,6 +70,10 @@ state_file_is_trusted() {
 
 restore_host_bridge_sysctls() {
     trap - ERR
+    if ! sudo -n true; then
+        echo "ERROR: cannot inspect ${STATE_FILE}; sudo is required." >&2
+        return 1
+    fi
     if ! sudo test -e "$STATE_FILE" && ! sudo test -L "$STATE_FILE"; then
         return 0
     fi
@@ -83,9 +87,7 @@ restore_host_bridge_sysctls() {
         echo "ERROR: ${STATE_FILE} has no saved bridge sysctl values; leaving the runtime settings unchanged." >&2
         return 1
     fi
-    # prepare_failed invokes this as `cmd || true`, which disables set -e for
-    # the whole function. Check each write so a failure cannot fall through
-    # to deleting the saved values.
+    # Check each write so a failure cannot fall through to deleting the saved values.
     if ! sudo sysctl -w "net.bridge.bridge-nf-call-iptables=${ipt}"; then
         echo "ERROR: failed to restore net.bridge.bridge-nf-call-iptables; keeping ${STATE_FILE}." >&2
         return 1
@@ -103,11 +105,21 @@ if [[ "${1:-}" == "restore" ]]; then
     exit 0
 fi
 
-# A failed setup puts the runtime values and the persistent file back.
-# The saved values stay in place until that restore runs.
+# Roll back only sysctls this attempt changed. A retry that fails before
+# those writes must not restore the original checkpoint over a running lab.
+changed_sysctls=0
+checkpoint_existed=0
+attempt_ipt=0
+attempt_ip6=0
 prepare_failed() {
     local status=$?
-    restore_host_bridge_sysctls || true
+    if [[ "$changed_sysctls" -eq 1 ]]; then
+        sudo sysctl -w "net.bridge.bridge-nf-call-iptables=${attempt_ipt}" || true
+        sudo sysctl -w "net.bridge.bridge-nf-call-ip6tables=${attempt_ip6}" || true
+        if [[ "$checkpoint_existed" -ne 1 ]]; then
+            sudo rm -f "$SYSCTL_FILE" "$STATE_FILE" || true
+        fi
+    fi
     exit "$status"
 }
 trap prepare_failed ERR
@@ -139,6 +151,7 @@ done
 info "Disabling bridge netfilter so DHCP discovers are forwarded"
 ensure_private_state_dir
 if sudo test -e "$STATE_FILE" || sudo test -L "$STATE_FILE"; then
+    checkpoint_existed=1
     state_file_is_trusted
 else
     ipt="$(sudo sysctl -n net.bridge.bridge-nf-call-iptables)"
@@ -158,5 +171,12 @@ sudo tee "$SYSCTL_FILE" >/dev/null <<'EOF'
 net.bridge.bridge-nf-call-iptables = 0
 net.bridge.bridge-nf-call-ip6tables = 0
 EOF
+attempt_ipt="$(sudo sysctl -n net.bridge.bridge-nf-call-iptables)"
+attempt_ip6="$(sudo sysctl -n net.bridge.bridge-nf-call-ip6tables)"
+if [[ ! "$attempt_ipt" =~ ^[01]$ || ! "$attempt_ip6" =~ ^[01]$ ]]; then
+    echo "ERROR: refusing to change bridge sysctls; current values are not 0 or 1." >&2
+    exit 1
+fi
+changed_sysctls=1
 sudo sysctl -w net.bridge.bridge-nf-call-iptables=0
 sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=0

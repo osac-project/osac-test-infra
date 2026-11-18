@@ -44,9 +44,9 @@ ip route del 192.168.100.0/24 2>/dev/null || true
 # ---------- clean up inventory ConfigMap ----------
 
 if [ -f "${INFRA_DIR}/.mgmt-network" ]; then
-    # shellcheck source=/dev/null
-    source "${INFRA_DIR}/.mgmt-network"
-    export KUBECONFIG
+    # shellcheck source=use-kubeconfig.sh
+    source "${SCRIPT_DIR}/use-kubeconfig.sh"
+    use_kubeconfig "${INFRA_DIR}/.mgmt-network"
     oc delete configmap agentless-net-inventory -n "$OSAC_NAMESPACE" --ignore-not-found 2>/dev/null || true
     info "Cleaned up inventory ConfigMap"
 fi

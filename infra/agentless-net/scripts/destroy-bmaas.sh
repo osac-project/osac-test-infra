@@ -11,9 +11,9 @@ REPO_ROOT="$(cd "${INFRA_DIR}/../.." && pwd)"
 STATE_FILE="${INFRA_DIR}/.bmaas-proof.json"
 
 if [[ -f "${INFRA_DIR}/.mgmt-network" ]]; then
-    # shellcheck source=/dev/null
-    source "${INFRA_DIR}/.mgmt-network"
-    export KUBECONFIG
+    # shellcheck source=use-kubeconfig.sh
+    source "${SCRIPT_DIR}/use-kubeconfig.sh"
+    use_kubeconfig "${INFRA_DIR}/.mgmt-network"
 fi
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
@@ -70,20 +70,22 @@ if [[ "$inventory_unreadable" -eq 0 && ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
     info "Deleting the virtual BMH VM recorded for ${CLONE_NAME}"
     if ! python3 "${REPO_ROOT}/.github/scripts/manage-virtual-bmh-vms.py" delete \
         --inventory-file "$INVENTORY_FILE" "${INVENTORY_NAMES[@]}"; then
-        echo "ERROR: virtual BMH VM deletion failed" >&2
+        echo "ERROR: virtual BMH VM deletion failed; keeping BareMetalHost finalizers" >&2
         cleanup_failed=1
+    else
+        for name in "${INVENTORY_NAMES[@]}"; do
+            strip_bmh_finalizers "$name"
+        done
     fi
-    for name in "${INVENTORY_NAMES[@]}"; do
-        strip_bmh_finalizers "$name"
-    done
 fi
 if [[ -n "${BMH_NAME:-}" ]]; then
     info "Deleting BareMetalHost ${BMH_NAME}"
     if ! oc -n "$BMH_NAMESPACE" delete baremetalhost "$BMH_NAME" --ignore-not-found --wait=false; then
-        echo "ERROR: failed to delete BareMetalHost ${BMH_NAME}" >&2
+        echo "ERROR: failed to delete BareMetalHost ${BMH_NAME}; keeping its finalizers" >&2
         cleanup_failed=1
+    else
+        strip_bmh_finalizers "$BMH_NAME"
     fi
-    strip_bmh_finalizers "$BMH_NAME"
 fi
 
 env_file="${INFRA_DIR}/.env.infra"

@@ -11,15 +11,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${SCRIPT_DIR}/.."
 
-# A kubeconfig passed by make is the one .env.infra records. .mgmt-network
-# supplies it only when the caller did not.
-forwarded_kubeconfig="${KUBECONFIG:-}"
-# shellcheck source=/dev/null
-source "${INFRA_DIR}/.mgmt-network"
-if [[ -n "$forwarded_kubeconfig" ]]; then
-    KUBECONFIG="$forwarded_kubeconfig"
-    export KUBECONFIG
-fi
+# shellcheck source=use-kubeconfig.sh
+source "${SCRIPT_DIR}/use-kubeconfig.sh"
+use_kubeconfig "${INFRA_DIR}/.mgmt-network"
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 OSAC_VALUES_FILE="${OSAC_VALUES_FILE:-values/caas-ci/values.yaml}"
@@ -44,16 +38,28 @@ export KUBECONFIG
 info() { echo "==> $*"; }
 
 # ---------- clone osac mono-repo ----------
+# A branch flag cannot select a raw commit. Fetch the requested ref and
+# detach at that commit so a SHA, branch, and tag all work.
 
-if [ -d "$OSAC_DIR" ]; then
-    info "osac mono-repo already cloned at ${OSAC_DIR}"
-    git -C "$OSAC_DIR" fetch origin
-    git -C "$OSAC_DIR" checkout "$OSAC_BRANCH"
-    git -C "$OSAC_DIR" pull --ff-only || true
-else
-    info "Cloning osac mono-repo (${OSAC_REPO} @ ${OSAC_BRANCH})..."
-    git clone --branch "$OSAC_BRANCH" "$OSAC_REPO" "$OSAC_DIR"
+if [[ ! -d "${OSAC_DIR}/.git" ]]; then
+    info "Cloning osac mono-repo (${OSAC_REPO})..."
+    git clone "$OSAC_REPO" "$OSAC_DIR"
 fi
+info "Checking out osac ${OSAC_BRANCH}"
+git -C "$OSAC_DIR" remote set-url origin "$OSAC_REPO"
+git -C "$OSAC_DIR" fetch --tags origin
+if git -C "$OSAC_DIR" show-ref --verify --quiet "refs/remotes/origin/${OSAC_BRANCH}"; then
+    git -C "$OSAC_DIR" checkout --detach "refs/remotes/origin/${OSAC_BRANCH}"
+elif git -C "$OSAC_DIR" show-ref --verify --quiet "refs/tags/${OSAC_BRANCH}"; then
+    git -C "$OSAC_DIR" checkout --detach "refs/tags/${OSAC_BRANCH}^{}"
+elif git -C "$OSAC_DIR" rev-parse --verify --quiet "${OSAC_BRANCH}^{commit}" >/dev/null; then
+    git -C "$OSAC_DIR" checkout --detach "${OSAC_BRANCH}^{commit}"
+else
+    git -C "$OSAC_DIR" fetch origin "$OSAC_BRANCH"
+    git -C "$OSAC_DIR" checkout --detach FETCH_HEAD
+fi
+# Stamp this checkout. A later rev-parse could observe a different HEAD.
+installed_revision="$(git -C "$OSAC_DIR" rev-parse HEAD)"
 
 # ---------- merge values overlay ----------
 # Profile installs read values/<profile>/instance.yaml. The legacy CaaS file
@@ -101,7 +107,7 @@ fi
 
 installed_overlay=""
 if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
-    requested_revision="$(git -C "$OSAC_DIR" rev-parse HEAD)"
+    requested_revision="$installed_revision"
     overlay_src="${INFRA_DIR}/values-bmaas-overlay.yaml"
     overlay_dst="${INSTALLER_DIR}/values/bmaas-agentless-overlay.yaml"
     overlay_sum="$(sha256sum "$overlay_src" | awk '{print $1}')"
@@ -181,7 +187,7 @@ if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
         --for=condition=Available --timeout=300s
     KUBECONFIG="$KUBECONFIG" oc create configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" \
         --from-literal=profile="$OSAC_PROFILE" \
-        --from-literal=revision="$(git -C "$OSAC_DIR" rev-parse HEAD)" \
+        --from-literal=revision="$installed_revision" \
         --from-literal=overlay="$installed_overlay" \
         --dry-run=client -o yaml | KUBECONFIG="$KUBECONFIG" oc apply -f -
 fi

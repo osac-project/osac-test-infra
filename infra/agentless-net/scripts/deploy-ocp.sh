@@ -12,9 +12,10 @@ PULL_SECRET="${OSAC_PULL_SECRET_PATH:-/root/pull-secret}"
 MGMT_VM_NAME="test-infra-cluster-${MGMT_CLONE_NAME}-master-0"
 MGMT_LIBVIRT_NET="test-infra-net-${MGMT_CLONE_NAME}"
 CLUSTER_DOMAIN="test-infra-cluster-${MGMT_CLONE_NAME}.redhat.com"
-# Keep a caller-supplied kubeconfig. The default matches the Makefile.
-KUBECONFIG="${KUBECONFIG:-$HOME/.kube/${MGMT_CLONE_NAME}.kubeconfig}"
-export KUBECONFIG
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=use-kubeconfig.sh
+source "${SCRIPT_DIR}/use-kubeconfig.sh"
+use_kubeconfig "${SCRIPT_DIR}/../.mgmt-network" optional
 
 info() { echo "==> $*"; }
 
@@ -36,18 +37,18 @@ MGMT_BRIDGE=$(virsh net-info "$MGMT_LIBVIRT_NET" | awk '/^Bridge:/{print $2}')
 
 info "Management network: ${MGMT_CIDR} on bridge ${MGMT_BRIDGE}"
 
-# Export for later scripts (deploy-fabric needs these)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cat > "${SCRIPT_DIR}/../.mgmt-network" <<EOF
-MGMT_CIDR=${MGMT_CIDR}
-MGMT_PREFIX=${MGMT_PREFIX}
-MGMT_GW=${MGMT_GW}
-MGMT_BRIDGE=${MGMT_BRIDGE}
-MGMT_VM_NAME=${MGMT_VM_NAME}
-MGMT_LIBVIRT_NET=${MGMT_LIBVIRT_NET}
-CLUSTER_DOMAIN=${CLUSTER_DOMAIN}
-KUBECONFIG=${KUBECONFIG}
-EOF
+# Export for later scripts (deploy-fabric needs these). KUBECONFIG was
+# resolved before this boot so a recorded path is not replaced by the default.
+{
+    printf 'MGMT_CIDR=%s\n' "$MGMT_CIDR"
+    printf 'MGMT_PREFIX=%s\n' "$MGMT_PREFIX"
+    printf 'MGMT_GW=%s\n' "$MGMT_GW"
+    printf 'MGMT_BRIDGE=%s\n' "$MGMT_BRIDGE"
+    printf 'MGMT_VM_NAME=%s\n' "$MGMT_VM_NAME"
+    printf 'MGMT_LIBVIRT_NET=%s\n' "$MGMT_LIBVIRT_NET"
+    printf 'CLUSTER_DOMAIN=%s\n' "$CLUSTER_DOMAIN"
+    printf 'KUBECONFIG=%q\n' "$KUBECONFIG"
+} > "${SCRIPT_DIR}/../.mgmt-network"
 
 # ---------- step 5a: fix DNS forwarding (layer 1) ----------
 #

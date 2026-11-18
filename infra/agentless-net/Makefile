@@ -18,9 +18,18 @@ MGMT_CLONE_NAME ?= agentless-lab-mgmt
 OSAC_NAMESPACE ?= osac-e2e-ci
 OSAC_VALUES_FILE ?= values/caas-ci/values.yaml
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
+# command line and environment are explicit. The ?= default is not, or it
+# would hide the kubeconfig recorded in .mgmt-network.
+ifeq ($(origin KUBECONFIG),command line)
+OSAC_KUBECONFIG_FROM_CALLER := yes
+else ifeq ($(origin KUBECONFIG),environment)
+OSAC_KUBECONFIG_FROM_CALLER := yes
+else
+OSAC_KUBECONFIG_FROM_CALLER :=
+endif
 KUBECONFIG ?= $(HOME)/.kube/$(MGMT_CLONE_NAME).kubeconfig
 
-export DEPLOY_SUITE OSAC_PROFILE MGMT_CLONE_NAME OSAC_NAMESPACE OSAC_VALUES_FILE OSAC_PULL_SECRET_PATH KUBECONFIG
+export DEPLOY_SUITE OSAC_PROFILE MGMT_CLONE_NAME OSAC_NAMESPACE OSAC_VALUES_FILE OSAC_PULL_SECRET_PATH KUBECONFIG OSAC_KUBECONFIG_FROM_CALLER
 
 # ─── Contract targets ──────────────────────────────────────────────
 #
@@ -41,11 +50,9 @@ deploy-ocp:
 deploy-osac:
 	@echo "=== Installing OSAC via Helm ==="
 	$(SCRIPTS)/deploy-osac.sh
-	@printf '%s\n' \
-		'KUBECONFIG=$(abspath $(KUBECONFIG))' \
-		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=$(abspath $(KUBECONFIG))' \
-		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
+	@kc="$$(cat .effective-kubeconfig)"; \
+	printf 'KUBECONFIG=%q\nOSAC_NAMESPACE=%s\nOSAC_VM_KUBECONFIG=%q\nOSAC_PULL_SECRET_PATH=%q\n' \
+		"$$kc" "$(OSAC_NAMESPACE)" "$$kc" "$(OSAC_PULL_SECRET_PATH)" \
 		> $(ENV_INFRA)
 
 deploy-fabric:
