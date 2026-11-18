@@ -107,8 +107,8 @@ if [ "$phase" = "copy-logs" ]; then
     # A finished gather already holds the snapshot from before destroy-bmaas.
     # Running it again would replace that snapshot with deleted objects.
     # An interrupted proof has no marker, so collect before the host is removed.
-    # The workflow step allows four minutes: two 15-second probes, two
-    # one-minute gathers, and a 90-second transfer.
+    # The workflow step allows four minutes. A gather needs its minute plus
+    # 90 seconds for the transfer and the local promotion.
     for target in gather-infra gather-bmaas; do
         marker=""
         case "$target" in
@@ -119,14 +119,22 @@ if [ "$phase" = "copy-logs" ]; then
             echo "Keeping the ${target} snapshot already collected"
             continue
         fi
+        if [ "$SECONDS" -ge 90 ]; then
+            echo "Skipping ${target}; leaving time for the diagnostics copy"
+            continue
+        fi
         echo "Running make ${target}"
         status=0
-        run_remote 1 "$(printf 'cd %q && DEPLOY_SUITE=bmaas OSAC_GATHER_RETRY=yes make %q' "$REMOTE_INFRA" "$target")" || status=$?
+        make_target="$target"
+        if [ "$target" = "gather-bmaas" ]; then
+            make_target="gather-suite"
+        fi
+        run_remote 1 "$(printf 'cd %q && OSAC_GATHER_RETRY=yes make %q INFRA=agentless-net DEPLOY_SUITE=bmaas' "$REMOTE_DIR" "$make_target")" || status=$?
         if [ "$status" -ne 0 ]; then
             echo "WARNING: make ${target} failed with status ${status}" >&2
         fi
     done
-    copy_diagnostics 90s
+    copy_diagnostics 60s
     exit
 fi
 
@@ -143,7 +151,7 @@ run_required() {
         return 0
     fi
     echo "Running make ${target}"
-    remote_cmd=$(printf 'cd %q && DEPLOY_SUITE=bmaas make %q' "$REMOTE_INFRA" "$target")
+    remote_cmd=$(printf 'cd %q && make %q INFRA=agentless-net DEPLOY_SUITE=bmaas' "$REMOTE_DIR" "$target")
     status=0
     run_remote "$minutes" "$remote_cmd" || status=$?
     if [ "$status" -ne 0 ]; then
@@ -157,7 +165,7 @@ run_optional() {
     local target="$2"
     local remote_cmd
     echo "Running make ${target}"
-    remote_cmd=$(printf 'cd %q && DEPLOY_SUITE=bmaas make %q' "$REMOTE_INFRA" "$target")
+    remote_cmd=$(printf 'cd %q && make %q INFRA=agentless-net DEPLOY_SUITE=bmaas' "$REMOTE_DIR" "$target")
     status=0
     run_remote "$minutes" "$remote_cmd" || status=$?
     if [ "$status" -ne 0 ]; then
@@ -205,8 +213,8 @@ run_required 30 setup-infra
 run_required 60 deploy-ocp
 if [ "$install_status" -eq 0 ]; then
     echo "Running make deploy-osac"
-    deploy_cmd=$(printf 'cd %q && DEPLOY_SUITE=bmaas OSAC_REPO=%q OSAC_BRANCH=%q make deploy-osac' \
-        "$REMOTE_INFRA" "$OSAC_REPO" "$OSAC_BRANCH")
+    deploy_cmd=$(printf 'cd %q && make deploy-osac INFRA=agentless-net DEPLOY_SUITE=bmaas OSAC_REPO=%q OSAC_BRANCH=%q' \
+        "$REMOTE_DIR" "$OSAC_REPO" "$OSAC_BRANCH")
     status=0
     run_remote 90 "$deploy_cmd" || status=$?
     if [ "$status" -ne 0 ]; then
@@ -225,12 +233,10 @@ if [ "$phase" = "cluster" ]; then
 fi
 fi
 
-run_required 30 deploy-fabric
-run_required 45 setup-bmaas
-run_required 60 prove-bmi
+run_required 150 deploy-suite
 run_optional 10 gather-infra
-run_optional 10 gather-bmaas
-run_optional 15 destroy-bmaas
+run_optional 10 gather-suite
+run_optional 15 destroy-suite
 
 copy_status=0
 copy_diagnostics 10 || copy_status=$?

@@ -52,7 +52,10 @@ INFRA_DIR="${SCRIPT_DIR}/.."
 
 # shellcheck source=use-kubeconfig.sh
 source "${SCRIPT_DIR}/use-kubeconfig.sh"
+require_cluster_tool_kubeconfig
 use_kubeconfig "${INFRA_DIR}/.mgmt-network"
+KUBECONFIG="${HOME}/.kube/${MGMT_CLONE_NAME:-agentless-lab-mgmt}.kubeconfig"
+export KUBECONFIG
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 OSAC_VALUES_FILE="${OSAC_VALUES_FILE:-values/caas-ci/values.yaml}"

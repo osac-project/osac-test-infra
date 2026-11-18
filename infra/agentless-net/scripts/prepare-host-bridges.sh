@@ -111,14 +111,27 @@ changed_sysctls=0
 checkpoint_existed=0
 attempt_ipt=0
 attempt_ip6=0
+sysctl_file_written=0
+sysctl_file_existed=0
+sysctl_backup=""
 prepare_failed() {
     local status=$?
     if [[ "$changed_sysctls" -eq 1 ]]; then
         sudo sysctl -w "net.bridge.bridge-nf-call-iptables=${attempt_ipt}" || true
         sudo sysctl -w "net.bridge.bridge-nf-call-ip6tables=${attempt_ip6}" || true
         if [[ "$checkpoint_existed" -ne 1 ]]; then
-            sudo rm -f "$SYSCTL_FILE" "$STATE_FILE" || true
+            sudo rm -f "$STATE_FILE" || true
         fi
+    fi
+    if [[ "$sysctl_file_written" -eq 1 ]]; then
+        if [[ "$sysctl_file_existed" -eq 1 && -n "$sysctl_backup" ]]; then
+            sudo tee "$SYSCTL_FILE" <"$sysctl_backup" >/dev/null || true
+        else
+            sudo rm -f "$SYSCTL_FILE" || true
+        fi
+    fi
+    if [[ -n "$sysctl_backup" ]]; then
+        rm -f "$sysctl_backup" || true
     fi
     exit "$status"
 }
@@ -165,6 +178,12 @@ else
     sudo install -m 600 -o root -g root "$state_tmp" "$STATE_FILE"
     rm -f "$state_tmp"
 fi
+if sudo test -e "$SYSCTL_FILE" || sudo test -L "$SYSCTL_FILE"; then
+    sysctl_file_existed=1
+    sysctl_backup="$(mktemp)"
+    sudo cat "$SYSCTL_FILE" | tee "$sysctl_backup" >/dev/null
+fi
+sysctl_file_written=1
 sudo tee "$SYSCTL_FILE" >/dev/null <<'EOF'
 # Host bridges br-host1 and br-host2 carry tenant DHCP. Bridged frames
 # must not enter iptables; the FORWARD policy drops 0.0.0.0 -> 255.255.255.255.
@@ -180,3 +199,7 @@ fi
 changed_sysctls=1
 sudo sysctl -w net.bridge.bridge-nf-call-iptables=0
 sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=0
+if [[ -n "$sysctl_backup" ]]; then
+    rm -f "$sysctl_backup"
+fi
+sysctl_file_written=0

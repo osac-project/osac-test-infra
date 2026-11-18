@@ -91,12 +91,12 @@ def _consume_quoted_secret(available: bytes) -> tuple[int, bytes]:
             return len(available), _REDACTED
         return end, first + _REDACTED + first
     token_end = 0
+    # A comma is part of the value. It does not start the next shell word.
     while token_end < len(available) and available[token_end:token_end + 1] not in (
         b" ",
         b"\t",
         b'"',
         b"'",
-        b",",
         b"}",
         b"]",
     ):

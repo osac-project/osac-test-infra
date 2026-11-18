@@ -33,6 +33,19 @@ use_kubeconfig() {
     export KUBECONFIG
 }
 
+# cluster-tool writes ~/.kube/<clone>.kubeconfig. This backend creates that
+# cluster, so a different forwarded path is refused instead of being followed.
+require_cluster_tool_kubeconfig() {
+    local clone="${1:-${MGMT_CLONE_NAME:-agentless-lab-mgmt}}"
+    local expected="${HOME}/.kube/${clone}.kubeconfig"
+    if [[ -n "${KUBECONFIG:-}" && "$KUBECONFIG" != "$expected" ]]; then
+        echo "ERROR: KUBECONFIG=${KUBECONFIG} is not the cluster-tool kubeconfig ${expected}." >&2
+        return 1
+    fi
+    KUBECONFIG="$expected"
+    export KUBECONFIG
+}
+
 recorded_kubeconfig_exists() {
     local list="$1"
     local entry
