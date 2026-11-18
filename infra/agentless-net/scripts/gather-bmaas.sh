@@ -20,9 +20,24 @@ OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 BMH_NAMESPACE="${BMH_NAMESPACE:-host-inventory}"
 
 capture_failed=0
-oc -n "$BMH_NAMESPACE" get baremetalhosts -o yaml >"${LOG_DIR}/baremetalhosts.yaml" 2>&1 || capture_failed=1
-oc -n "$OSAC_NAMESPACE" get baremetalinstances -o yaml >"${LOG_DIR}/baremetalinstances.yaml" 2>&1 || capture_failed=1
-oc -n "$OSAC_NAMESPACE" get virtualnetworks,subnets -o yaml >"${LOG_DIR}/networks.yaml" 2>&1 || capture_failed=1
+keep_capture() {
+    local dest="$1"
+    shift
+    local tmp
+    if [[ -s "$dest" ]]; then
+        return 0
+    fi
+    tmp="$(mktemp)"
+    if "$@" >"$tmp" 2>&1; then
+        mv "$tmp" "$dest"
+        return 0
+    fi
+    rm -f "$tmp"
+    capture_failed=1
+}
+keep_capture "${LOG_DIR}/baremetalhosts.yaml" oc -n "$BMH_NAMESPACE" get baremetalhosts -o yaml
+keep_capture "${LOG_DIR}/baremetalinstances.yaml" oc -n "$OSAC_NAMESPACE" get baremetalinstances -o yaml
+keep_capture "${LOG_DIR}/networks.yaml" oc -n "$OSAC_NAMESPACE" get virtualnetworks,subnets -o yaml
 sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables >"${LOG_DIR}/bridge-sysctl.txt" 2>&1 || true
 for bridge in br-host1 br-host2; do
     ip -d link show "$bridge" >"${LOG_DIR}/${bridge}.txt" 2>&1 || true

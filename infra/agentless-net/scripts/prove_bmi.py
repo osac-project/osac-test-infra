@@ -134,12 +134,14 @@ def grpcurl_command(
     service: str,
     data: dict[str, Any] | None = None,
 ) -> list[str]:
+    del token  # passed through OSAC_GRPC_TOKEN so it is not a process argument
     return [
         "grpcurl",
         "-cacert",
         ca_file,
+        "-expand-headers",
         "-H",
-        f"Authorization: Bearer {token}",
+        "Authorization: Bearer ${OSAC_GRPC_TOKEN}",
         "-d",
         json.dumps(data or {}),
         address,
@@ -165,7 +167,12 @@ class Api:
         timed_out = False
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, timeout=self.call_timeout
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.call_timeout,
+                env={**os.environ, "OSAC_GRPC_TOKEN": self.token},
             )
         except subprocess.TimeoutExpired:
             timed_out = True

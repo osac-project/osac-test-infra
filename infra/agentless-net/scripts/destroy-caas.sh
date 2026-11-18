@@ -49,6 +49,7 @@ if [ -f "${INFRA_DIR}/.mgmt-network" ]; then
     # shellcheck source=use-kubeconfig.sh
     source "${SCRIPT_DIR}/use-kubeconfig.sh"
     use_kubeconfig "${INFRA_DIR}/.mgmt-network"
+    require_recorded_cluster
     oc delete infraenv --all -n "$AGENT_NAMESPACE" --ignore-not-found 2>/dev/null || true
     oc delete agents --all -n "$AGENT_NAMESPACE" --ignore-not-found 2>/dev/null || true
     info "Cleaned up agent resources"

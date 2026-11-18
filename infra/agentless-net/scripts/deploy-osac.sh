@@ -47,16 +47,17 @@ if [[ ! -d "${OSAC_DIR}/.git" ]]; then
 fi
 info "Checking out osac ${OSAC_BRANCH}"
 git -C "$OSAC_DIR" remote set-url origin "$OSAC_REPO"
-git -C "$OSAC_DIR" fetch --tags origin
+git -C "$OSAC_DIR" fetch --prune --tags origin
 if git -C "$OSAC_DIR" show-ref --verify --quiet "refs/remotes/origin/${OSAC_BRANCH}"; then
     git -C "$OSAC_DIR" checkout --detach "refs/remotes/origin/${OSAC_BRANCH}"
-elif git -C "$OSAC_DIR" show-ref --verify --quiet "refs/tags/${OSAC_BRANCH}"; then
+elif git -C "$OSAC_DIR" ls-remote --exit-code --tags origin "refs/tags/${OSAC_BRANCH}" >/dev/null; then
+    git -C "$OSAC_DIR" fetch --force origin "refs/tags/${OSAC_BRANCH}:refs/tags/${OSAC_BRANCH}"
     git -C "$OSAC_DIR" checkout --detach "refs/tags/${OSAC_BRANCH}^{}"
-elif git -C "$OSAC_DIR" rev-parse --verify --quiet "${OSAC_BRANCH}^{commit}" >/dev/null; then
-    git -C "$OSAC_DIR" checkout --detach "${OSAC_BRANCH}^{commit}"
-else
-    git -C "$OSAC_DIR" fetch origin "$OSAC_BRANCH"
+elif git -C "$OSAC_DIR" fetch origin "$OSAC_BRANCH"; then
     git -C "$OSAC_DIR" checkout --detach FETCH_HEAD
+else
+    echo "ERROR: ${OSAC_REPO} has no branch, tag, or commit ${OSAC_BRANCH}" >&2
+    exit 1
 fi
 # Stamp this checkout. A later rev-parse could observe a different HEAD.
 installed_revision="$(git -C "$OSAC_DIR" rev-parse HEAD)"
@@ -204,4 +205,5 @@ if [[ "${DEPLOY_SUITE:-}" != "bmaas" ]]; then
     echo "  Pool: 10.0.0.240-10.0.0.250"
 fi
 
+printf '%s\n' "$KUBECONFIG" > "${INFRA_DIR}/.effective-kubeconfig"
 info "deploy-osac complete."
