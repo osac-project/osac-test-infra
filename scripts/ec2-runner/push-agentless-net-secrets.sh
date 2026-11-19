@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# push-caas-agentless-net-secrets.sh -- Fetch secrets on the orchestrator
+# push-agentless-net-secrets.sh -- Fetch secrets on the orchestrator
 # (which has working Vault access) and push them to the freshly-provisioned
 # ephemeral EC2 box via SCP, before the JIT runner even starts.
 #
@@ -14,9 +14,8 @@
 # embedded in argv -- scp streams file bytes over SSH's data channel, so
 # secret content never appears as a process argument on either machine.
 #
-# Secrets land in a fixed staging directory rather than directly under
-# infra/agentless-net/: the revision under test is copied onto the box
-# afterwards. run-bmaas-agentless.sh copies them into their final places:
+# Secrets land in a fixed staging directory. The JIT runner copies them
+# into their final places after it checks out the revision under test:
 #   pull-secret -> /root/pull-secret
 #   license.zip -> /root/aap-license.zip
 #   config      -> infra/agentless-net/config

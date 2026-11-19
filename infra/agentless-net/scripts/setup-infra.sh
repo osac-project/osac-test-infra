@@ -65,6 +65,25 @@ else
     info "cluster-tool already configured"
 fi
 
+# ---------- grpcurl ----------
+
+if ! command -v grpcurl >/dev/null 2>&1; then
+    info "Installing grpcurl"
+    version=1.9.1
+    work="$(mktemp -d)"
+    tarball="grpcurl_${version}_linux_x86_64.tar.gz"
+    curl --retry 5 --retry-delay 2 -fsSL -o "${work}/${tarball}" \
+        "https://github.com/fullstorydev/grpcurl/releases/download/v${version}/${tarball}"
+    curl --retry 5 --retry-delay 2 -fsSL \
+        "https://github.com/fullstorydev/grpcurl/releases/download/v${version}/grpcurl_${version}_checksums.txt" \
+        | grep " ${tarball}\$" \
+        | sed "s|${tarball}|${work}/${tarball}|" \
+        | sha256sum -c -
+    tar -C "$work" -xzf "${work}/${tarball}" grpcurl
+    install -m 0755 "${work}/grpcurl" /usr/local/bin/grpcurl
+    rm -rf "$work"
+fi
+
 # ---------- Other tools ----------
 
 for tool in sshpass envsubst jq; do

@@ -1,0 +1,80 @@
+---
+name: Cancel in-progress PR suites on a new push
+
+on:
+  pull_request_target:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  cancel-stale-run:
+    name: Cancel the in-progress Agentless-Net suite
+    runs-on: ubuntu-latest
+    concurrency:
+      group: e2e-bmaas-agentless-net-full-install-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Join the suite concurrency group
+        run: echo "A new commit cancels the in-progress Agentless-Net suite."
+
+  cancel-bmaas:
+    name: Cancel the in-progress BMaaS suite
+    runs-on: ubuntu-latest
+    concurrency:
+      group: e2e-pr-bmaas-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Join the suite concurrency group
+        run: echo "A new commit cancels the in-progress BMaaS suite."
+
+  cancel-bmaas-netris:
+    name: Cancel the in-progress BMaaS Netris suite
+    runs-on: ubuntu-latest
+    concurrency:
+      group: e2e-pr-bmaas-netris-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Join the suite concurrency group
+        run: echo "A new commit cancels the in-progress BMaaS Netris suite."
+
+  cancel-caas:
+    name: Cancel the in-progress CaaS suite
+    runs-on: ubuntu-latest
+    concurrency:
+      group: e2e-pr-caas-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Join the suite concurrency group
+        run: echo "A new commit cancels the in-progress CaaS suite."
+
+  cancel-vmaas:
+    name: Cancel the in-progress VMaaS suite
+    runs-on: ubuntu-latest
+    concurrency:
+      group: e2e-pr-vmaas-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Join the suite concurrency group
+        run: echo "A new commit cancels the in-progress VMaaS suite."
+
+  cancel-vmaas-netris:
+    name: Cancel the in-progress VMaaS Netris suite
+    runs-on: ubuntu-latest
+    concurrency:
+      group: e2e-pr-vmaas-netris-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Join the suite concurrency group
+        run: echo "A new commit cancels the in-progress VMaaS Netris suite."
+
+  cancel-stretched-netris:
+    name: Cancel the in-progress Stretched Netris suite
+    runs-on: ubuntu-latest
+    concurrency:
+      group: e2e-pr-stretched-netris-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Join the suite concurrency group
+        run: echo "A new commit cancels the in-progress Stretched Netris suite."

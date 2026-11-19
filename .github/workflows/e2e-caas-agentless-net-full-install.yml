@@ -75,7 +75,7 @@ jobs:
 
   # Fetches the CaaS/agentless-net secrets and pushes them to the box, on the
   # orchestrator -- not the box itself, which was never bootstrapped with Vault
-  # trust. See push-caas-agentless-net-secrets.sh's header for the rationale.
+  # trust. See push-agentless-net-secrets.sh's header for the rationale.
   push-secrets:
     needs: provision
     runs-on: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
@@ -154,7 +154,7 @@ jobs:
           AWS_REGION: ${{ inputs.aws-region || 'us-east-1' }}
         run: |
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
-          ./scripts/ec2-runner/push-caas-agentless-net-secrets.sh
+          ./scripts/ec2-runner/push-agentless-net-secrets.sh
 
   e2e:
     needs: [provision, push-secrets]

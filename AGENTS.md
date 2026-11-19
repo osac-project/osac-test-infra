@@ -40,9 +40,11 @@ and [README.md](README.md) for the human-facing overview):
   `deploy-osac` writes `.env.infra` with the
   cluster config tests need. `infra/netris/` implements the root orchestration
   contract; its `SUPPORTED_DEPLOY_SUITES` are deployment scenarios (`caas`, `maas`,
-  `bmaas`, `vmaas`, and `full`). `infra/agentless-net/` implements a standalone CaaS flow
-  with its own workflow and is not yet connected to the root orchestration
-  targets. For contract-integrated backends, `DEPLOY_SUITE` selects the deployment
+  `bmaas`, `vmaas`, and `full`). `infra/agentless-net/` implements the same contract
+  for `caas` and `bmaas`. Its nightly workflow is `e2e-bmaas-agentless-net-full-install-caller.yml`
+  (`15 1 * * *`). A pull request run is `/test bmaas-agentless-net`, which starts
+  `e2e-pr-bmaas-agentless-net.yml`; it is not started by a label. See
+  `infra/agentless-net/targets.md`. For contract-integrated backends, `DEPLOY_SUITE` selects the deployment
   scenario and `TEST_SUITE` selects the OSAC test target, defaulting to `DEPLOY_SUITE`.
   VMaaS/BMaaS networking tests live under the OSAC mono-repo's `tests/e2e/networking/`.
 - **OSAC mono-repo `tests/e2e/`** — pytest suites documented throughout this file. They are
