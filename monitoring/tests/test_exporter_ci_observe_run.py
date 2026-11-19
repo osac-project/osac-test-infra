@@ -418,7 +418,8 @@ class TestFailedTests:
         assert doc["artifact"]["place"] == f"run {RUN_ID} of osac-project/osac"
         downloads = [call for call in github.calls if call.endswith("/zip")]
         assert downloads == ["/repos/osac-project/osac/actions/artifacts/61/zip"]
-        assert not [call for call in github.calls if "osac-ci-artifacts" in call]
+        assert github.count(PRIVATE_LIST_PATH.replace(ARTIFACT_NAME, f"osac-logs-caas-full-install-{RUN_ID}")) == 1, (
+            "the private repository, which holds nothing for this run, is asked first")
 
     def test_a_pull_request_run_is_read_on_the_run(self, evidence, github, wfe):
         evidence._upsert_job(run_row(workflow="E2E suite · vmaas · #42 · 0123abc", event="workflow_dispatch",
@@ -430,6 +431,27 @@ class TestFailedTests:
 
         assert (doc["trigger"], doc["artifact"]["url"]) == ("pr", ARTIFACT_URL)
         assert len(doc["failed_tests"]) == 2
+
+    def test_a_pull_request_run_that_published_privately_is_read_from_the_private_repository(
+            self, evidence, github, wfe):
+        evidence._upsert_job(run_row(workflow="E2E suite · vmaas · #42 · 0123abc", event="workflow_dispatch",
+                                     failed_step="e2e → Run E2E tests"))
+        publish_privately(github, wfe.API_URL)
+
+        doc = failed_tests(evidence, f"vmaas-pr42-{RUN_ID}-a1")
+
+        assert doc["trigger"] == "pr"
+        assert doc["artifact"]["place"] == "osac-project/osac-ci-artifacts"
+        assert github.count(LIST_PATH) == 0, "the run is not asked when the private repository holds the artifact"
+
+    def test_a_refusal_for_a_pull_request_run_is_not_followed_by_the_run(self, evidence, github):
+        evidence._upsert_job(run_row(workflow="E2E suite · vmaas · #42 · 0123abc", event="workflow_dispatch",
+                                     failed_step="e2e → Run E2E tests"))
+        github.add(PRIVATE_LIST_PATH, FakeResponse(403, text="Forbidden"))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        assert "osac-project/osac-ci-artifacts answered HTTP 403" in refused(evidence, f"vmaas-pr42-{RUN_ID}-a1")
+        assert github.count(LIST_PATH) == 0
 
     def test_the_newest_of_several_published_artifacts_is_read(self, evidence, github, wfe):
         """A re-run publishes again under the same name: the newest is read."""
@@ -555,9 +577,10 @@ class TestFailedTestsErrors:
     def test_no_artifact_where_the_trigger_says(self, evidence, github):
         seed_direct_run(evidence)
         github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
 
         assert refused(evidence) == (
-            f"no {ARTIFACT_NAME} artifact in osac-project/osac-ci-artifacts, where scheduled runs keep it")
+            f"no {ARTIFACT_NAME} artifact in osac-project/osac-ci-artifacts or run {RUN_ID} of osac-project/osac")
 
     def test_another_suites_or_runs_artifact_is_not_this_captures(self, evidence, github, wfe):
         seed_merge_queue_run(evidence)
@@ -566,14 +589,14 @@ class TestFailedTestsErrors:
             artifact_entry(wfe.API_URL, art_id=43, name=f"osac-logs-caas-full-install-{RUN_ID + 1}")]}))
 
         assert refused(evidence, f"caas-main-{RUN_ID}-a1") == (
-            f"no osac-logs-caas-full-install-{RUN_ID} artifact in run {RUN_ID} of osac-project/osac, "
-            "where merge_queue runs keep it")
+            f"no osac-logs-caas-full-install-{RUN_ID} artifact in osac-project/osac-ci-artifacts "
+            f"or run {RUN_ID} of osac-project/osac")
         assert not [call for call in github.calls if call.endswith("/zip")]
 
     def test_a_trigger_with_no_artifact_place(self, evidence, github):
         seed_direct_run(evidence, event="push")
 
-        assert "only pull-request and merge-queue runs" in refused(evidence)
+        assert "only pull-request, merge-queue, scheduled and manual runs" in refused(evidence)
         assert not [call for call in github.calls if "/artifacts" in call]
 
     def test_expired(self, evidence, github, wfe):

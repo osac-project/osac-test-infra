@@ -313,7 +313,7 @@ def serve_artifacts(fake, api_url, artifacts, world, private_visible=True):
     read: a run's own listing for every run (empty when its artifacts are
     elsewhere), and the private repository's listing by name, which answers
     an empty listing for a name it does not hold, or 404 to a token that
-    cannot see it (an unrouted path is a 404)."""
+    cannot see it."""
     from helpers import FakeResponse
 
     for run, _ in world:
@@ -328,6 +328,11 @@ def serve_artifacts(fake, api_url, artifacts, world, private_visible=True):
                 held = [entry for entry in entries if entry["name"] == name and place == "private"]
                 fake.add(f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
                          FakeResponse(payload={"total_count": len(held), "artifacts": held}))
+        else:
+            for pattern in SUITE_NAMES:
+                fake.add(f"/repos/osac-project/osac-ci-artifacts/actions/artifacts"
+                         f"?name={pattern.format(run_id=run['id'])}&per_page=100",
+                         FakeResponse(404, text="Not Found"))
         for entry, (_, content) in zip(entries, published, strict=True):
             fake.add(entry["archive_download_url"].removeprefix(api_url), FakeResponse(content=content))
 
@@ -571,26 +576,26 @@ def test_the_tests_audit_names_a_private_repository_the_token_cannot_read(privat
     assert tests["coverage"]["missing"] == 3
     by_capture = {audit_row["capture_id"]: audit_row for audit_row in tests["failed_runs"]}
     assert set(by_capture) == {"caas-main-503-a1", "vmaas-main-505-a1"}
-    # The merge-queue run's page works: its artifact is on the run.
-    assert by_capture["caas-main-503-a1"]["page"] == ["test_cluster_create"]
-    # The incident's page fails, and says why; the audit cannot read the
-    # artifact either, so nothing is compared.
-    incident = by_capture["vmaas-main-505-a1"]
-    assert incident["page_error"].startswith("HTTP 502: osac-project/osac-ci-artifacts answered HTTP 404")
-    assert "PRIVATE_GITHUB_TOKEN needs read access" in incident["page_error"]
-    assert incident["junit"] is None and incident["junit_where"] == "osac-project/osac-ci-artifacts"
-    assert incident["problems"] == [f"the page cannot list the failed tests ({incident['page_error']})"]
+    # The private repository is looked in first for every run, so the merge-queue
+    # run's page fails the same way: a token that cannot read it is the one
+    # thing to fix, and every run says so.
+    for capture_id in ("caas-main-503-a1", "vmaas-main-505-a1"):
+        row = by_capture[capture_id]
+        assert row["page_error"].startswith("HTTP 502: osac-project/osac-ci-artifacts answered HTTP 404"), capture_id
+        assert "PRIVATE_GITHUB_TOKEN needs read access" in row["page_error"]
+        assert row["junit"] is None and row["junit_where"] == "osac-project/osac-ci-artifacts"
+        assert row["problems"] == [f"the page cannot list the failed tests ({row['page_error']})"]
     summary = result["summary"]["tests"]
-    assert (summary["private_readable"], summary["runs_missing"], summary["pages_error"]) == (False, 3, 1)
+    assert (summary["private_readable"], summary["runs_missing"], summary["pages_error"]) == (False, 3, 2)
     phases = _load("ci_observe_phases", "ci_observe_phases.py")
     source, notes = phases.audit_lines(result["summary"], NOW, "e2e")
     assert "test results stored for 0 of 3 suite runs that ran their tests" in source
     text = " ".join(notes)
-    assert ("cannot read osac-project/osac-ci-artifacts, where scheduled and manual E2E runs publish their "
+    assert ("cannot read osac-project/osac-ci-artifacts, where E2E runs publish their "
             "JUnit files") in text
-    assert "1 of 2 runs that failed in their tests cannot show their failed tests on their run page: HTTP 502" in text
+    assert "2 of 2 runs that failed in their tests cannot show their failed tests on their run page: HTTP 502" in text
     report = audit.report(result)
-    assert ("osac-project/osac-ci-artifacts, where scheduled and manual E2E runs publish their logs artifact: "
+    assert ("osac-project/osac-ci-artifacts, where E2E runs publish their logs artifact: "
             "NOT READABLE") in report
 
 

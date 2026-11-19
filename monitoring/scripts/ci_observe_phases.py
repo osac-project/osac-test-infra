@@ -622,7 +622,7 @@ def _audit_test_notes(tests: dict, when: str) -> list[str]:
     notes = []
     repo = tests.get("private_repo") or "the private artifact repository"
     if tests.get("private_readable") is False:
-        notes.append(f"the check against GitHub ({when}) cannot read {repo}, where scheduled and manual E2E runs "
+        notes.append(f"the check against GitHub ({when}) cannot read {repo}, where E2E runs "
                      f"publish their JUnit files ({tests.get('private_note') or 'no access'}): the test results and "
                      "failed tests of those runs are missing")
     if tests.get("runs_missing"):

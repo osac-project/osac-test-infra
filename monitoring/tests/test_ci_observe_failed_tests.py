@@ -126,7 +126,8 @@ def page(wfe, evidence, github, monkeypatch):
 
 
 def test_the_incident_shows_an_error_that_says_what_to_fix(page, github, caplog):
-    # Unrouted, so osac-ci-artifacts answers 404: the token cannot see it.
+    # osac-ci-artifacts answers 404: the token cannot see it.
+    github.add(PRIVATE_LISTING, FakeResponse(404, text="Not Found"))
     with caplog.at_level(logging.ERROR):
         shown = page.shows()
 
@@ -134,7 +135,7 @@ def test_the_incident_shows_an_error_that_says_what_to_fix(page, github, caplog)
     assert shown.startswith("error 502: osac-project/osac-ci-artifacts answered HTTP 404 to the artifact listing")
     assert "PRIVATE_GITHUB_TOKEN needs read access to the Actions artifacts of osac-project/osac-ci-artifacts" in shown
     assert f"failed tests of {CAPTURE} cannot be read" in caplog.text
-    assert github.count(RUN_ARTIFACTS) == 0, "a scheduled run's artifact is looked for in one place only"
+    assert github.count(RUN_ARTIFACTS) == 0, "a refusal is not followed by the run"
 
 
 def test_with_the_token_fixed_the_page_lists_the_failed_tests(page, github, wfe):

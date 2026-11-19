@@ -827,9 +827,10 @@ def e2e_audit(github, args, now, api_get, rng):
 
 # -- E2E tests: the run page's Failed tests and the test history ---------------
 
-# Where scheduled and manual E2E runs publish their logs artifact (with the
-# JUnit file), since 2026-11-13. Pull-request and merge-queue runs keep it on
-# the run.
+# Where E2E runs publish their logs artifact (with the JUnit file): scheduled
+# and manual runs since 2026-11-13, pull-request and merge-queue runs since
+# their callers pass the app key too. A run from before that, or one whose
+# caller passes none, still has it on the run, so the run is read second.
 PRIVATE_ARTIFACTS = os.getenv("PRIVATE_ARTIFACT_REPO", "osac-ci-artifacts")
 # The artifact a suite's full-install job publishes: VMaaS has no suite in the
 # name. A merge-queue run holds all three, each with its own capture.
@@ -921,28 +922,28 @@ def run_trigger(row):
 
 
 def artifact_failures(github, repo, run_id, suite, trigger):
-    """The JUnit file of one suite of a run, read here from the one place
-    its trigger says (the run itself for a pull-request or merge-queue run,
-    osac-ci-artifacts for a scheduled or manual one): {"failed", "tests",
+    """The JUnit file of one suite of a run, read here from osac-ci-artifacts
+    and, when that holds none, from the run itself: {"failed", "tests",
     "where", "note"}. failed is None when it could not be read."""
     if suite not in SUITE_ARTIFACTS:
         return {"failed": None, "tests": 0, "where": "", "note": "the capture names no suite"}
     name = SUITE_ARTIFACTS[suite].format(run=run_id)
-    if trigger in ("pr", "merge_queue"):
-        where = f"run {run_id} of {ORG}/{repo}"
-        path = f"/repos/{ORG}/{repo}/actions/runs/{run_id}/artifacts?per_page=100"
-    elif trigger in ("scheduled", "manual"):
-        where = f"{ORG}/{PRIVATE_ARTIFACTS}"
-        path = f"/repos/{ORG}/{PRIVATE_ARTIFACTS}/actions/artifacts?name={name}&per_page=100"
-    else:
+    if trigger not in ("pr", "merge_queue", "scheduled", "manual"):
         return {"failed": None, "tests": 0, "where": "", "note": f"a {trigger} run has no known artifact place"}
-    status, listing = github.try_get(path)
-    if status != 200:
-        answer = f"answered HTTP {status}" if status else "did not answer"
-        return {"failed": None, "tests": 0, "where": where, "note": f"{where} {answer}"}
-    artifacts = [a for a in (listing or {}).get("artifacts") or [] if a.get("name") == name]
+    places = [(f"{ORG}/{PRIVATE_ARTIFACTS}", f"/repos/{ORG}/{PRIVATE_ARTIFACTS}/actions/artifacts?name={name}&per_page=100"),
+              (f"run {run_id} of {ORG}/{repo}", f"/repos/{ORG}/{repo}/actions/runs/{run_id}/artifacts?per_page=100")]
+    artifacts, where = [], ""
+    for where, path in places:
+        status, listing = github.try_get(path)
+        if status != 200:
+            answer = f"answered HTTP {status}" if status else "did not answer"
+            return {"failed": None, "tests": 0, "where": where, "note": f"{where} {answer}"}
+        artifacts = [a for a in (listing or {}).get("artifacts") or [] if a.get("name") == name]
+        if artifacts:
+            break
     if not artifacts:
-        return {"failed": None, "tests": 0, "where": where, "note": f"no {name} in {where}"}
+        return {"failed": None, "tests": 0, "where": where,
+                "note": f"no {name} in {places[0][0]} or {places[1][0]}"}
     artifact = max(artifacts, key=lambda a: a.get("created_at") or "")
     if artifact.get("expired"):
         return {"failed": None, "tests": 0, "where": where, "note": f"{name} has expired"}
@@ -1309,7 +1310,7 @@ def tests_report(tests):
     private = tests["private"]
     readable = {True: "readable", False: "NOT READABLE", None: "unknown"}[private["readable"]]
     lines = ["E2E tests: the run pages' Failed tests and the test history",
-             f"  {private['repo']}, where scheduled and manual E2E runs publish their logs artifact: {readable}"
+             f"  {private['repo']}, where E2E runs publish their logs artifact: {readable}"
              + (f" ({private['note']})" if private["note"] else "")]
     lines += _check_lines([tests["coverage"]])
     failed = tests["failed_runs"]

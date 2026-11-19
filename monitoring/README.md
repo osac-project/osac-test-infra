@@ -153,7 +153,7 @@ them — it doesn't block on them):
    request's code-owner teams, so the token must be able to read the
    organization's teams: `admin:org` or `read:org` on a classic token, the
    organization permission **Members: Read-only** on a fine-grained one.
-   Scheduled and manual E2E runs publish their logs artifact (with the
+   E2E runs publish their logs artifact (with the
    JUnit file) to the private repository `osac-project/osac-ci-artifacts`,
    so the run pages' failed tests and the test history need a token that
    can read it: the `repo` scope on a classic token, that repository with

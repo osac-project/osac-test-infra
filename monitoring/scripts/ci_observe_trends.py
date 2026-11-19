@@ -19,11 +19,10 @@ when its day is rebuilt. Only finished runs that were never read and runs
 read by an older parser are read. Rebuilding a day replaces its rows, so
 rerunning never doubles a day.
 
-A run's artifact is read from the one place its trigger says (see
-ci_observe_run_evidence.artifact_place): its own run for a pull-request or
-merge-queue run, osac-ci-artifacts for a scheduled or manual one. A run
-with no artifact there, an expired one or one without junit.xml is stored
-with that reason. GitHub refusing or failing to answer (an HTTP error, a
+A run's artifact is read from osac-ci-artifacts and, when that holds none,
+from the run (see ci_observe_run_evidence.artifact_places). A run with no
+artifact in either, an expired one or one without junit.xml is stored with
+that reason. GitHub refusing or failing to answer (an HTTP error, a
 network error) is not a fact about one run: the pass stops there, logs the
 reason, stores nothing, and exits 1; the next pass reads those runs again.
 
@@ -83,7 +82,7 @@ from ci_observe_run_evidence import (
     CIObserveRunEvidence,
     EvidenceError,
     GitHubRefused,
-    artifact_place,
+    places_label,
     find_artifacts,
 )
 
@@ -638,8 +637,8 @@ class ArtifactFetcher:
             logger.debug("GitHub API rate limit remaining: %s", remaining)
 
     def _artifacts(self, run):
-        """The run's artifacts at the one place its trigger says (see
-        ci_observe_run_evidence.artifact_place): every suite's that is
+        """The run's artifacts, from osac-ci-artifacts or else from the run
+        (see ci_observe_run_evidence.artifact_places): every suite's that is
         there. Raises GitHubRefused when GitHub does not answer, which stops
         the pass; raises EvidenceError for a run whose trigger has no
         artifact place."""
@@ -653,7 +652,7 @@ class ArtifactFetcher:
     def fetch(self, run):
         """(cases, reason) for one run: the per-testcase rows of every live
         artifact it has, or a short reason when it has none. The reason is
-        this run's own fact (no artifact where its trigger says, expired,
+        this run's own fact (no artifact in either place, expired,
         too large, no junit.xml); GitHub not answering raises GitHubRefused
         instead, and the pass stops.
 
@@ -669,7 +668,7 @@ class ArtifactFetcher:
         except EvidenceError as error:
             return None, str(error)
         if not artifacts:
-            _, place, _ = artifact_place(run.get("trigger"), run["repo"], run_id, self.org)
+            place = places_label(run.get("trigger"), run["repo"], run_id, self.org)
             return None, f"no osac-logs-[<suite>-]full-install-{run_id} artifact in {place}"
         files = []
         unfinished = []
@@ -1252,7 +1251,7 @@ def _roll_up(conn, runs, force, now):
             no_data.append({**entry, "state": "parsed"})
             continue
         run["cases"] = []
-        # A run's own fact (no artifact where its trigger says, expired, no
+        # A run's own fact (no artifact in either place, expired, no
         # junit.xml): it does not change, so the run is not asked again.
         no_data.append({**entry, "state": "no_data"})
     logger.info(

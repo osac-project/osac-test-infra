@@ -104,19 +104,19 @@ class Served:
         self.cache = {}
 
     def publish(self, capture_id):
-        """The capture's artifact, where its run's trigger puts it."""
+        """The capture's artifact, in the private artifact repository."""
         evidence_module = sys.modules["ci_observe_run_evidence"]
         suite, run_id = capture_id.split("-")[0], int(capture_id.split("-")[2])
         rows = self.exporter._run_evidence._ci_observe_run_rows(run_id)
         trigger = self.exporter._run_evidence.run_trigger(rows, run_id)
         repo = rows[0]["repo"]
-        path, _, private = evidence_module.artifact_place(trigger, repo, run_id)
+        path, _, _ = evidence_module.artifact_places(trigger, repo, run_id)[0]
         name = evidence_module.SUITE_ARTIFACTS[suite].format(run_id=run_id)
         download = f"/repos/osac-project/{repo}/actions/artifacts/{run_id}/zip"
         entry = {"id": run_id, "name": name, "size_in_bytes": 512, "expired": False,
                  "created_at": "2026-11-01T00:00:00Z", "archive_download_url": f"{self.github.api_url}{download}",
                  "workflow_run": {"id": 1}}
-        listing = f"{path}?name={name}&per_page=100" if private else path
+        listing = f"{path}?name={name}&per_page=100"
         self.github.add(listing, FakeResponse(payload={"total_count": 1, "artifacts": [entry]}))
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:

@@ -424,7 +424,8 @@ class TestArtifactFetch:
         cases, reason = fetched(trends)
 
         assert cases is None
-        assert reason == f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in run {RUN_ID} of osac-project/osac"
+        assert reason == (f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in osac-project/osac-ci-artifacts "
+                          f"or run {RUN_ID} of osac-project/osac")
 
     def test_a_scheduled_run_is_read_from_the_private_repository_only(self, trends, github, wfe):
         for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
@@ -476,11 +477,13 @@ class TestArtifactFetch:
         for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
                      f"osac-logs-bmaas-full-install-{RUN_ID}"):
             github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
 
         cases, reason = fetched(trends, "scheduled")
 
         assert cases is None
-        assert reason == f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in osac-project/osac-ci-artifacts"
+        assert reason == (f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in osac-project/osac-ci-artifacts "
+                          f"or run {RUN_ID} of osac-project/osac")
 
     def test_a_trigger_without_an_artifact_place_is_a_reason(self, trends, github):
         cases, reason = fetched(trends, "other")
@@ -494,18 +497,35 @@ class TestArtifactFetch:
                      f"osac-logs-bmaas-full-install-{RUN_ID}"):
             github.add(f"/repos/other-org/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
                        FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(f"/repos/other-org/runs-here/actions/runs/{RUN_ID}/artifacts?per_page=100",
+                   FakeResponse(payload={"total_count": 0, "artifacts": []}))
 
         fetched(trends, "scheduled", "runs-here", org="other-org", api_url="https://api.github.com")
 
-        assert github.calls and all(call.startswith("/repos/other-org/osac-ci-artifacts/") for call in github.calls)
+        assert github.calls and all(call.startswith("/repos/other-org/") for call in github.calls)
+        assert [call for call in github.calls if "osac-ci-artifacts" in call], "the private repository is asked"
 
-    def test_a_pull_request_run_is_read_without_asking_the_private_repository(self, trends, github, wfe):
+    def test_a_pull_request_run_from_before_it_published_privately_is_read_from_the_run(self, trends, github, wfe):
+        """The private repository holds nothing for it, so the run's own artifact is read."""
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))
         github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
-        fetched(trends)
+        cases, reason = fetched(trends)
 
-        assert not [call for call in github.calls if "osac-ci-artifacts" in call]
+        assert reason is None and len(cases) == 3
+        assert [call for call in github.calls if "osac-ci-artifacts" in call], "the private repository is asked first"
+        assert github.count(LIST_PATH) == 1
+
+    def test_a_pull_request_run_that_published_privately_is_read_from_the_private_repository(self, trends, github, wfe):
+        github.add(PRIVATE_NAME_PATH.format(name=f"osac-logs-full-install-{RUN_ID}"),
+                   FakeResponse(payload={"total_count": 1, "artifacts": [private_entry(wfe.API_URL)]}))
+        github.add("/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip",
+                   FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        cases, reason = fetched(trends)
+
+        assert reason is None and len(cases) == 3
+        assert github.count(LIST_PATH) == 0, "the run is not asked when the private repository holds the artifact"
 
     def test_the_token_never_reaches_the_outcomes(self, trends, github, wfe):
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))

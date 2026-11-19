@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import requests
 
 
@@ -37,7 +38,10 @@ class FakeGitHub:
     """Routes requests.get by URL. A route is the URL without API_URL, and
     its value is a FakeResponse, a list of them (returned in turn, the last
     one repeating), or an exception instance to raise. Unrouted URLs get a
-    404."""
+    404, except the by-name artifact listing of the private artifact
+    repository, which holds nothing unless a test routes it: a run's artifact
+    is looked for there first, and a run whose artifact is on the run (from
+    before its trigger published privately) finds none there."""
 
     def __init__(self, api_url):
         self.api_url = api_url
@@ -53,6 +57,8 @@ class FakeGitHub:
         self.calls.append(path)
         queue = self.routes.get(path)
         if not queue:
+            if re.match(r"/repos/[^/]+/osac-ci-artifacts/actions/artifacts\?name=", path):
+                return FakeResponse(payload={"total_count": 0, "artifacts": []})
             return FakeResponse(404, text="not routed")
         result = queue.pop(0) if len(queue) > 1 else queue[0]
         if isinstance(result, BaseException):

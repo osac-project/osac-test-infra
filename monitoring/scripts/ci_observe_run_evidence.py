@@ -9,11 +9,11 @@ and, for /api/ci-observe/failed-tests, to the JUnit file inside the logs
 artifact of the capture's suite, downloaded from GitHub on demand, bounded
 and cached. Same exporter, same token, same data -- no second poller.
 
-The artifact is read from one place, decided by the run's trigger (see
-artifact_place), under one name, decided by the capture's suite (see
-SUITE_ARTIFACTS). Anything that stops that read is an EvidenceError whose
-message says what failed, where, and what to fix: there is no second place
-and no second source.
+The artifact is read from the private artifact repository or, for a run
+that has none there, from the run (see artifact_places), under one name,
+decided by the capture's suite (see SUITE_ARTIFACTS). Anything that stops
+that read is an EvidenceError whose message says what failed, where, and
+what to fix: a refusal from GitHub is never followed by another place.
 
 CIObserveRunEvidence holds an exporter reference and calls back into it
 for everything shared: _db(), _row_to_job(), _get(), _update_rate_limit(),
@@ -49,15 +49,16 @@ logger = logging.getLogger(__name__)
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 API_URL = os.getenv("API_URL", "https://api.github.com")
 JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "30"))
-# Where an E2E run's logs artifact (with the JUnit file) is, by why the run
-# ran. Scheduled and manual runs of the e2e-*-caller.yml workflows pass the
-# OSAC CI app key, so the job publishes the artifact to the private
-# repository (upload-artifacts' private-repo input). Pull-request and
-# merge-queue runs get no app key, on purpose (e2e-pr-*.yml, e2e-queue.yml):
-# the artifact stays on the run. A trigger with neither is an error.
+# Where an E2E run's logs artifact (with the JUnit file) is. Every E2E suite on
+# a self-hosted runner publishes it to the private repository (upload-artifacts'
+# private-repo input; the app key that allows it reaches the schedule, manual,
+# pull-request and merge-queue callers alike). A run from before that was
+# switched on for its trigger, or one whose caller passes no key, still has it
+# on the run. So a run's artifact is looked for in the private repository
+# first and, when that holds none, on the run. A trigger that is none of these
+# is an error.
 PRIVATE_ARTIFACT_REPO = os.getenv("PRIVATE_ARTIFACT_REPO", "osac-ci-artifacts")
-ON_THE_RUN = frozenset({"pr", "merge_queue"})
-IN_THE_PRIVATE_REPO = frozenset({"scheduled", "manual"})
+ARTIFACT_TRIGGERS = frozenset({"pr", "merge_queue", "scheduled", "manual"})
 # The artifact each suite's full-install job uploads. VMaaS's name has no
 # suite in it. A merge-queue run holds all three, each with its own capture.
 SUITE_ARTIFACTS = {
@@ -83,59 +84,65 @@ class GitHubRefused(EvidenceError):
     every run, so a batch reader stops on it."""
 
 
-def artifact_place(trigger, repo, run_id, org=ORG):
-    """(listing path, label, private) of the one place a run's artifact is:
-    its own run for a pull-request or merge-queue run, the private artifact
-    repository for a scheduled or manual one. Raises EvidenceError for any
-    other trigger."""
-    if trigger in ON_THE_RUN:
-        return (f"/repos/{org}/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
-                f"run {run_id} of {org}/{repo}", False)
-    if trigger in IN_THE_PRIVATE_REPO:
-        return f"/repos/{org}/{PRIVATE_ARTIFACT_REPO}/actions/artifacts", f"{org}/{PRIVATE_ARTIFACT_REPO}", True
-    raise EvidenceError(
-        f"run {run_id} is a {trigger or 'unknown'}-triggered run, and only pull-request and merge-queue runs "
-        f"(artifact on the run) and scheduled and manual runs (artifact in {org}/{PRIVATE_ARTIFACT_REPO}) "
-        "have a known artifact place"
-    )
+def artifact_places(trigger, repo, run_id, org=ORG):
+    """[(listing path, label, private)] in the order a run's artifact is
+    looked for: the private artifact repository, then the run itself. Raises
+    EvidenceError for a trigger that has no artifact place."""
+    if trigger not in ARTIFACT_TRIGGERS:
+        raise EvidenceError(
+            f"run {run_id} is a {trigger or 'unknown'}-triggered run, and only pull-request, merge-queue, "
+            "scheduled and manual runs have a known artifact place"
+        )
+    return [
+        (f"/repos/{org}/{PRIVATE_ARTIFACT_REPO}/actions/artifacts", f"{org}/{PRIVATE_ARTIFACT_REPO}", True),
+        (f"/repos/{org}/{repo}/actions/runs/{run_id}/artifacts?per_page=100", f"run {run_id} of {org}/{repo}", False),
+    ]
+
+
+def places_label(trigger, repo, run_id, org=ORG):
+    """The places a run's artifact is looked for, for a message."""
+    return " or ".join(label for _, label, _ in artifact_places(trigger, repo, run_id, org))
 
 
 def find_artifacts(get, trigger, repo, run_id, names, org=ORG, api_url=API_URL):
-    """The artifacts named in `names` at the one place the run's trigger
-    says, newest first per name: [(name, artifact, label, private)]. A name
-    with no artifact there is left out; the caller decides what that means.
-    Any answer from GitHub other than a listing raises EvidenceError: a
-    refusal from the private repository names the token's missing access.
-    `get` is a function from a URL to a response."""
-    path, label, private = artifact_place(trigger, repo, run_id, org)
-    urls = ([f"{api_url}{path}?name={name}&per_page=100" for name in names] if private
-            else [f"{api_url}{path}"])
+    """The artifacts named in `names`, newest first per name, from the
+    private artifact repository or, when that holds none of them, from the
+    run: [(name, artifact, label, private)]. A name with no artifact there
+    is left out; the caller decides what that means. Any answer from
+    GitHub other than a listing raises EvidenceError, and is not followed by
+    the next place: a refusal from the private repository names the token's
+    missing access. `get` is a function from a URL to a response."""
     found = {}
-    for url in urls:
-        try:
-            response = get(url)
-        except requests.exceptions.RequestException as error:
-            raise GitHubRefused(f"listing the artifacts of {label} failed: {error}") from None
-        if private and response.status_code in (401, 403, 404):
-            raise GitHubRefused(
-                f"{label} answered HTTP {response.status_code} to the artifact listing: the token cannot read it. "
-                + TOKEN_FIX.format(org=org, repo=PRIVATE_ARTIFACT_REPO)
-            )
-        if not response.ok:
-            raise GitHubRefused(f"{label} answered HTTP {response.status_code} to the artifact listing")
-        try:
-            listing = response.json()
-        except ValueError:
-            listing = None
-        artifacts = listing.get("artifacts") if isinstance(listing, dict) else None
-        if not isinstance(artifacts, list) or not all(isinstance(a, dict) for a in artifacts):
-            raise GitHubRefused(f"{label} answered something that is not an artifact listing")
-        for artifact in artifacts:
-            name = artifact.get("name")
-            if name in names:
-                found.setdefault(name, []).append(artifact)
+    for path, label, private in artifact_places(trigger, repo, run_id, org):
+        if found:
+            break  # the first place that holds any of them is where the run published
+        urls = ([f"{api_url}{path}?name={name}&per_page=100" for name in names] if private
+                else [f"{api_url}{path}"])
+        for url in urls:
+            try:
+                response = get(url)
+            except requests.exceptions.RequestException as error:
+                raise GitHubRefused(f"listing the artifacts of {label} failed: {error}") from None
+            if private and response.status_code in (401, 403, 404):
+                raise GitHubRefused(
+                    f"{label} answered HTTP {response.status_code} to the artifact listing: the token cannot read it. "
+                    + TOKEN_FIX.format(org=org, repo=PRIVATE_ARTIFACT_REPO)
+                )
+            if not response.ok:
+                raise GitHubRefused(f"{label} answered HTTP {response.status_code} to the artifact listing")
+            try:
+                listing = response.json()
+            except ValueError:
+                listing = None
+            artifacts = listing.get("artifacts") if isinstance(listing, dict) else None
+            if not isinstance(artifacts, list) or not all(isinstance(a, dict) for a in artifacts):
+                raise GitHubRefused(f"{label} answered something that is not an artifact listing")
+            for artifact in artifacts:
+                name = artifact.get("name")
+                if name in names:
+                    found.setdefault(name, (label, private, []))[2].append(artifact)
     return [
-        (name, max(found[name], key=lambda a: a.get("created_at") or ""), label, private)
+        (name, max(found[name][2], key=lambda a: a.get("created_at") or ""), found[name][0], found[name][1])
         for name in names if name in found
     ]
 
@@ -815,8 +822,7 @@ class CIObserveRunEvidence:
         name = SUITE_ARTIFACTS[suite].format(run_id=run_id)
         found = find_artifacts(self.exporter._get, trigger, repo, run_id, [name])
         if not found:
-            _, place, _ = artifact_place(trigger, repo, run_id)
-            raise EvidenceError(f"no {name} artifact in {place}, where {trigger} runs keep it")
+            raise EvidenceError(f"no {name} artifact in {places_label(trigger, repo, run_id)}")
         _, artifact, place, private = found[0]
         artifact_url = artifact_page_url(artifact, repo, run_id, private)
         if artifact.get("expired"):
