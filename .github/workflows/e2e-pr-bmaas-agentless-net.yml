@@ -1,9 +1,9 @@
 ---
-# The BMaaS Agentless suite of a pull request, started as its own run by the decision in e2e-pr.yml.
-# The policy maps `bmaas-agentless` to this workflow. Its run name and deepest job id must keep that
+# The BMaaS Agentless-Net suite of a pull request, started as its own run by the decision in e2e-pr.yml.
+# The policy maps `bmaas-agentless-net` to this workflow. Its run name and deepest job id must keep that
 # suite id so osac-ci can track this run and publish the result on the matching check line.
-name: E2E BMaaS Agentless PR suite
-run-name: "E2E suite · bmaas-agentless · #${{ inputs.pr-number }} · ${{ inputs.sha }}"
+name: E2E BMaaS Agentless-Net PR suite
+run-name: "E2E suite · bmaas-agentless-net · #${{ inputs.pr-number }} · ${{ inputs.sha }}"
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ on:
 permissions: {}
 
 concurrency:
-  # Same PR-scoped group as e2e-bmaas-agentless-cancel.yml. A new commit
+  # Same PR-scoped group as e2e-pr-cancel.yml. A new commit
   # cancels this suite. inputs.repo is the pull request head repository.
   group: e2e-bmaas-agentless-net-full-install-${{ inputs.repo }}-${{ inputs.pr-number }}
   cancel-in-progress: true
@@ -50,15 +50,11 @@ jobs:
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}
 
-  bmaas-agentless:
+  bmaas-agentless-net:
     needs: verify
     permissions:
       contents: read
       pull-requests: read
-      # Declared so GitHub accepts the called workflow. Attestation steps
-      # stay off while pr-number is set, so a pull request run does not use OIDC.
-      id-token: write
-      attestations: write
     uses: ./.github/workflows/e2e-bmaas-agentless-net-full-install.yml
     with:
       deploy-suite: bmaas

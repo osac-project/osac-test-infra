@@ -125,40 +125,53 @@ fi
 
 # ---------- step 8: install OSAC ----------
 
-installed_overlay=""
+# Every install is fresh. A stamp must not skip the charts on a reused lab.
 if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
-    requested_revision="$installed_revision"
     overlay_src="${INFRA_DIR}/values-bmaas-overlay.yaml"
     overlay_dst="${INSTALLER_DIR}/values/bmaas-agentless-overlay.yaml"
     overlay_sum="$(sha256sum "$overlay_src" | awk '{print $1}')"
-    installed_overlay="$overlay_sum"
-    installed_stamp="$(KUBECONFIG="$KUBECONFIG" oc get configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" -o jsonpath='{.data.profile}{" "}{.data.revision}{" "}{.data.overlay}' 2>/dev/null || true)"
-    if [[ "$installed_stamp" == "${OSAC_PROFILE} ${requested_revision} ${overlay_sum}" ]] \
-        && KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | grep -q "1/1" \
-        && KUBECONFIG="$KUBECONFIG" oc get deploy -n "$OSAC_NAMESPACE" -o name | grep -q bmf; then
-        info "OSAC profile ${OSAC_PROFILE} at ${requested_revision} is already installed"
-    else
-        info "Installing OSAC profile ${OSAC_PROFILE}..."
-        cp "$overlay_src" "$overlay_dst"
-        installed_overlay="$(sha256sum "$overlay_dst" | awk '{print $1}')"
-        if [[ "$installed_overlay" != "$overlay_sum" ]]; then
-            echo "ERROR: values overlay changed while it was copied" >&2
+    info "Installing OSAC profile ${OSAC_PROFILE}..."
+    cp "$overlay_src" "$overlay_dst"
+    installed_overlay="$(sha256sum "$overlay_dst" | awk '{print $1}')"
+    if [[ "$installed_overlay" != "$overlay_sum" ]]; then
+        echo "ERROR: values overlay changed while it was copied" >&2
+        exit 1
+    fi
+    extra_helm="-f values/bmaas-agentless-overlay.yaml"
+    add_split_image() {
+        local image="$1" repo_key="$2" tag_key="$3" pull_key="$4"
+        local tag repo
+        [[ -n "$image" ]] || return 0
+        if [[ "$image" == *" "* || "$image" != *:* ]]; then
+            echo "ERROR: refusing image override ${image}" >&2
             exit 1
         fi
-        # Drop the previous stamp before replacing the install. It is published
-        # again only after validation, so a failed install cannot be skipped.
-        KUBECONFIG="$KUBECONFIG" oc delete configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" --ignore-not-found
-        (cd "$INSTALLER_DIR" && \
-            KUBECONFIG="$KUBECONFIG" \
-            make install \
-                PLATFORM=openshift \
-                PROFILE="$OSAC_PROFILE" \
-                NS="$OSAC_NAMESPACE" \
-                AAP_LICENSE_FILE="${AAP_LICENSE_FILE:-/root/aap-license.zip}" \
-                EXTRA_HELM_ARGS="-f values/bmaas-agentless-overlay.yaml")
-    fi
-elif KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | grep -q "1/1"; then
-    info "OSAC already running — skipping install"
+        tag="${image##*:}"
+        repo="${image%:*}"
+        extra_helm+=" --set ${repo_key}=${repo} --set ${tag_key}=${tag} --set ${pull_key}=IfNotPresent"
+    }
+    add_image() {
+        local image="$1" key="$2"
+        [[ -n "$image" ]] || return 0
+        if [[ "$image" == *" "* ]]; then
+            echo "ERROR: refusing image override ${image}" >&2
+            exit 1
+        fi
+        extra_helm+=" --set-string ${key}=${image}"
+    }
+    add_split_image "${FULFILLMENT_SERVICE_IMAGE:-}" service.images.service.repository service.images.service.tag service.images.service.pullPolicy
+    add_split_image "${OSAC_OPERATOR_IMAGE:-}" operator.image.repository operator.image.tag operator.image.pullPolicy
+    add_split_image "${BMF_OPERATOR_IMAGE:-}" bmf.image.repository bmf.image.tag bmf.image.pullPolicy
+    add_image "${OSAC_AAP_IMAGE:-}" aap.bootstrap.image
+    add_image "${OSAC_AAP_IMAGE:-}" aap.configAsCode.eeImage
+    (cd "$INSTALLER_DIR" && \
+        KUBECONFIG="$KUBECONFIG" \
+        make install \
+            PLATFORM=openshift \
+            PROFILE="$OSAC_PROFILE" \
+            NS="$OSAC_NAMESPACE" \
+            AAP_LICENSE_FILE="${AAP_LICENSE_FILE:-/root/aap-license.zip}" \
+            EXTRA_HELM_ARGS="$extra_helm")
 else
     info "Installing OSAC via Helm (this may take several minutes)..."
     (cd "$INSTALLER_DIR" && \
@@ -205,11 +218,6 @@ if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
     fi
     KUBECONFIG="$KUBECONFIG" oc wait "${BMF_DEPLOYS[@]}" -n "$OSAC_NAMESPACE" \
         --for=condition=Available --timeout=300s
-    KUBECONFIG="$KUBECONFIG" oc create configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" \
-        --from-literal=profile="$OSAC_PROFILE" \
-        --from-literal=revision="$installed_revision" \
-        --from-literal=overlay="$installed_overlay" \
-        --dry-run=client -o yaml | KUBECONFIG="$KUBECONFIG" oc apply -f -
 fi
 info "OSAC is running:"
 KUBECONFIG="$KUBECONFIG" oc get pods -n "$OSAC_NAMESPACE" --no-headers | \

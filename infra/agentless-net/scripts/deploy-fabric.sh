@@ -157,6 +157,45 @@ rm -f "$RESOLVED_INVENTORY"
 
 info "Preparing network node..."
 docker exec "$NET_NODE" apk add --no-cache iptables iproute2 python3 openssh frr >/dev/null 2>&1
+if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
+    info "Installing dnsmasq and the DHCP supervisor on the network node"
+    docker exec "$NET_NODE" apk add --no-cache dnsmasq supervisor
+    docker exec "$NET_NODE" sh -ec '
+mkdir -p /etc/agentless-net/supervisor.d /var/log/agentless-net
+printf "%s\n" "; placeholder so the include glob matches" > /etc/agentless-net/supervisor.d/placeholder.ini
+cat > /etc/agentless-net/supervisord.conf <<EOF
+[unix_http_server]
+file=/run/agentless-net-supervisor.sock
+
+[supervisord]
+logfile=/var/log/agentless-net/supervisord.log
+pidfile=/run/agentless-net-supervisord.pid
+childlogdir=/var/log/agentless-net
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[supervisorctl]
+serverurl=unix:///run/agentless-net-supervisor.sock
+
+[include]
+files = /etc/agentless-net/supervisor.d/*.ini
+EOF
+'
+    docker exec -d "$NET_NODE" supervisord -c /etc/agentless-net/supervisord.conf || true
+    supervisor_ready=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if docker exec "$NET_NODE" supervisorctl -c /etc/agentless-net/supervisord.conf pid | grep -Eq '^[0-9]+$'; then
+            supervisor_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$supervisor_ready" -ne 1 ]]; then
+        echo "ERROR: AgentlessNet supervisor is not reachable on ${NET_NODE}" >&2
+        exit 1
+    fi
+fi
 docker exec "$NET_NODE" ssh-keygen -A >/dev/null 2>&1
 docker exec "$NET_NODE" sh -c "echo 'root:root' | chpasswd"
 docker exec "$NET_NODE" sh -c "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config"

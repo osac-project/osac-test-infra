@@ -19,8 +19,8 @@
 #
 # workflow_dispatch PR suites run the workflow file from the default branch,
 # so workflow_run.head_sha is that branch, not the tested commit. Their run
-# name is "E2E suite · <suite> · #<pr> · <sha>", or the caller title
-# "E2E BMaaS Agentless-Net Full Install / PR #<pr> @ <sha>". That identity is resolved
+# name is "E2E suite · <suite> · #<pr> · <sha>", or a caller title
+# "E2E <name> Full Install / PR #<pr> @ <sha>". That identity is resolved
 # before any lookup by head SHA, and only after the pull request is open
 # and the SHA is its head, or GitHub lists that commit on the pull request.
 set -euo pipefail
@@ -92,7 +92,7 @@ else
 fi
 
 if [[ "${run_event}" == "workflow_dispatch" ]] \
-  && suite_identity=$(jq -Rn --arg title "${run_title}" '$title | capture("^(?:E2E suite \u00b7 (?<suite>[A-Za-z0-9-]+) \u00b7 #|E2E BMaaS Agentless-Net Full Install / PR #)(?<pr>[0-9]+)(?: \u00b7 | @ )(?<sha>[0-9a-fA-F]{40})$")'); then
+  && suite_identity=$(jq -Rn --arg title "${run_title}" '$title | capture("^(?:E2E suite \u00b7 (?<suite>[A-Za-z0-9-]+) \u00b7 #|E2E .+ Full Install / PR #)(?<pr>[0-9]+)(?: \u00b7 | @ )(?<sha>[0-9a-fA-F]{40})$")'); then
   candidate_pr=$(jq -r '.pr' <<<"${suite_identity}")
   tested_sha=$(jq -r '.sha' <<<"${suite_identity}" | tr '[:upper:]' '[:lower:]')
   pr_meta=$(gh api "repos/${REPO}/pulls/${candidate_pr}" --jq '{st: .state, s: (.head.sha // "")}') || pr_meta=""

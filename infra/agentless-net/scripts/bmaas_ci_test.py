@@ -28,8 +28,8 @@ ROOT = Path(__file__).resolve().parents[3]
 INFRA = ROOT / "infra" / "agentless-net"
 WORKFLOW = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install.yml"
 CALLER = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install-caller.yml"
-PR_SUITE = ROOT / ".github" / "workflows" / "e2e-pr-bmaas-agentless.yml"
-CLEANUP = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-cancel.yml"
+PR_SUITE = ROOT / ".github" / "workflows" / "e2e-pr-bmaas-agentless-net.yml"
+CLEANUP = ROOT / ".github" / "workflows" / "e2e-pr-cancel.yml"
 
 
 class InventoryTest(unittest.TestCase):
@@ -675,6 +675,9 @@ class SanitizeTest(unittest.TestCase):
         self.assertNotIn(b"hunter2", assigned)
         self.assertIn(b"make install", assigned)
         self.assertIn(b"[REDACTED]", assigned)
+        bracketed = sanitize_diagnostics.redact(b'msg: "password: [hunter2]"\n')
+        self.assertNotIn(b"hunter2", bracketed)
+        self.assertIn(b"[REDACTED]", bracketed)
 
     def test_a_secret_token_inside_a_quoted_string_is_redacted(self) -> None:
         samples = (
@@ -755,37 +758,53 @@ class WorkflowContractTest(unittest.TestCase):
 
         suite = yaml.safe_load(PR_SUITE.read_text())
         cleanup = yaml.safe_load(CLEANUP.read_text())
+        cleanup_job = cleanup["jobs"]["cancel-stale-run"]
         self.assertTrue(suite["concurrency"]["group"].startswith("e2e-bmaas-agentless-net-full-install-"))
-        self.assertTrue(cleanup["concurrency"]["group"].startswith("e2e-bmaas-agentless-net-full-install-"))
+        self.assertTrue(cleanup_job["concurrency"]["group"].startswith("e2e-bmaas-agentless-net-full-install-"))
         self.assertIn("inputs.repo", suite["concurrency"]["group"])
         self.assertIn("inputs.pr-number", suite["concurrency"]["group"])
-        self.assertIn("github.event.pull_request.head.repo.full_name", cleanup["concurrency"]["group"])
-        self.assertIn("github.event.pull_request.number", cleanup["concurrency"]["group"])
+        self.assertIn("github.event.pull_request.head.repo.full_name", cleanup_job["concurrency"]["group"])
+        self.assertIn("github.event.pull_request.number", cleanup_job["concurrency"]["group"])
         self.assertTrue(suite["concurrency"]["cancel-in-progress"])
-        self.assertTrue(cleanup["concurrency"]["cancel-in-progress"])
-        self.assertNotIn("e2e-bmaas-agentless", str(cleanup["jobs"]))
+        self.assertTrue(cleanup_job["concurrency"]["cancel-in-progress"])
+        self.assertTrue(all(name.startswith("cancel-") for name in cleanup["jobs"]))
         self.assertNotIn("remove-label", CLEANUP.read_text())
         self.assertIn("cancel-stale-run", cleanup["jobs"])
+        for name in (
+            "e2e-pr-bmaas.yml",
+            "e2e-pr-bmaas-netris.yml",
+            "e2e-pr-caas.yml",
+            "e2e-pr-vmaas.yml",
+            "e2e-pr-vmaas-netris.yml",
+            "e2e-pr-stretched-netris.yml",
+        ):
+            other = yaml.safe_load((ROOT / ".github" / "workflows" / name).read_text())
+            self.assertIn("inputs.repo", other["concurrency"]["group"])
+            self.assertTrue(other["concurrency"]["cancel-in-progress"])
+            self.assertIn(other["concurrency"]["group"].split("-${{", 1)[0], CLEANUP.read_text())
 
         document = yaml.safe_load(WORKFLOW.read_text())
         self.assertIn("workflow_call", document[True])
         self.assertNotIn("workflow_dispatch", document[True])
         self.assertNotIn("pull_request", document[True])
-        self.assertEqual(set(document["jobs"]), {"authorize", "install", "notify"})
+        self.assertEqual(
+            set(document["jobs"]),
+            {"authorize", "provision", "push-secrets", "e2e", "teardown", "notify"},
+        )
         self.assertFalse(document[True]["workflow_call"]["inputs"]["notify-on-failure"]["default"])
         notify = document["jobs"]["notify"]
         self.assertIn("inputs.notify-on-failure", notify["if"])
         self.assertIn("contains(needs.*.result, 'failure')", notify["if"])
         self.assertEqual(notify["runs-on"], "${{ inputs.orchestrator-runner-label }}")
         self.assertEqual(
-            caller["jobs"]["e2e-bmaas-agentless"]["with"]["notify-on-failure"],
+            caller["jobs"]["e2e-bmaas-agentless-net"]["with"]["notify-on-failure"],
             "${{ github.event_name == 'schedule' }}",
         )
         self.assertIn("suite-inputs.yml@", caller["jobs"]["verify"]["uses"])
-        self.assertEqual(caller["jobs"]["e2e-bmaas-agentless"]["needs"], "verify")
+        self.assertEqual(caller["jobs"]["e2e-bmaas-agentless-net"]["needs"], "verify")
         self.assertIn(
             "needs.verify.outputs.fork-association",
-            caller["jobs"]["e2e-bmaas-agentless"]["with"]["fork-pr-author-association"],
+            caller["jobs"]["e2e-bmaas-agentless-net"]["with"]["fork-pr-author-association"],
         )
         self.assertNotIn("fork-pr-author", caller_trigger["workflow_dispatch"]["inputs"])
         workflow_text = WORKFLOW.read_text()
@@ -794,62 +813,42 @@ class WorkflowContractTest(unittest.TestCase):
             workflow_text,
         )
         self.assertIn("pr-repository requires both", workflow_text)
-        install = document["jobs"]["install"]
-        self.assertEqual(install["needs"], "authorize")
-        self.assertEqual(install["runs-on"], "${{ inputs.orchestrator-runner-label }}")
-        self.assertGreaterEqual(install["timeout-minutes"], 600)
-        self.assertEqual(install["permissions"]["id-token"], "write")
-        self.assertEqual(install["permissions"]["pull-requests"], "read")
-        self.assertEqual(install["permissions"]["attestations"], "write")
-        self.assertEqual(caller["permissions"]["id-token"], "write")
-        self.assertEqual(caller["permissions"]["attestations"], "write")
-        self.assertEqual(suite["jobs"]["bmaas-agentless"]["with"]["deploy-suite"], "bmaas")
-        self.assertEqual(suite["jobs"]["bmaas-agentless"]["permissions"]["id-token"], "write")
-        self.assertEqual(suite["jobs"]["bmaas-agentless"]["permissions"]["attestations"], "write")
-        self.assertNotIn("outputs.runner-label", WORKFLOW.read_text())
+        self.assertNotIn("id-token", CALLER.read_text())
+        self.assertNotIn("attestations", CALLER.read_text())
+        self.assertNotIn("id-token", PR_SUITE.read_text())
+        self.assertNotIn("attestations", workflow_text)
+        self.assertEqual(suite["jobs"]["bmaas-agentless-net"]["with"]["deploy-suite"], "bmaas")
+        self.assertIn("needs.provision.outputs.runner-label", workflow_text)
+        self.assertIn("./.github/workflows/ec2-runner-provision.yml", workflow_text)
+        self.assertIn("./.github/workflows/ec2-runner-teardown.yml", workflow_text)
+        self.assertNotIn("test-infra-sha", document["jobs"]["provision"].get("with", {}))
+        self.assertNotIn("test-infra-sha", document["jobs"]["teardown"].get("with", {}))
+        self.assertNotIn("run-bmaas-agentless.sh", workflow_text)
+        self.assertNotIn("destroy-suite", workflow_text)
+        self.assertNotIn("sanitize_diagnostics.py", workflow_text)
+        self.assertNotIn("attest-build-provenance", workflow_text)
 
-        steps = install["steps"]
-        joined = "\n".join(step.get("run", "") for step in steps)
-        remote = (ROOT / "scripts" / "ec2-runner" / "run-bmaas-agentless.sh").read_text()
-        self.assertIn("run-bmaas-agentless.sh", joined)
-        self.assertIn("provision.sh", joined)
-        self.assertIn("push-caas-agentless-net-secrets.sh", joined)
-        self.assertIn("teardown.sh", joined)
-        self.assertIn("sanitize_diagnostics.py", joined)
-        self.assertNotIn("verify-and-register.sh", joined)
-        self.assertNotIn("start-runner.sh", joined)
-        self.assertNotIn("setup-caas", joined)
-        self.assertNotIn("setup-caas", remote)
-        self.assertNotIn("verify-and-register", remote)
+        e2e = document["jobs"]["e2e"]
+        self.assertEqual(e2e["needs"], ["provision", "push-secrets"])
+        self.assertEqual(e2e["runs-on"], "${{ needs.provision.outputs.runner-label }}")
+        self.assertEqual(e2e["timeout-minutes"], 360)
+        self.assertEqual(e2e["permissions"], {"contents": "read"})
+        steps = e2e["steps"]
+        joined = "\n".join(step.get("run", "") + str(step.get("uses", "")) for step in steps)
+        self.assertIn("push-agentless-net-secrets.sh", document["jobs"]["push-secrets"]["steps"][-1]["run"])
         for target in (
             "setup-infra",
             "deploy-ocp",
             "deploy-osac",
             "deploy-suite",
             "gather-infra",
-            "gather-bmaas",
             "gather-suite",
-            "destroy-suite",
         ):
-            self.assertIn(target, remote)
-        self.assertIn("INFRA=agentless-net", remote)
-        self.assertIn("DEPLOY_SUITE=bmaas", remote)
-        self.assertNotIn("OSAC_PROFILE=bmaas-ci", remote)
-        cluster_exit = remote.split('if [ "$phase" = "cluster" ]', 1)[1].split("exit 0", 1)[0]
-        self.assertLess(cluster_exit.index("gather-infra"), cluster_exit.index('exit "$install_status"'))
-        self.assertNotRegex(remote, r"timeout\b[^\n]*\bssh_exec\b")
-        self.assertIn('timeout "$limit" ssh', remote)
-        self.assertIn("copy-logs", remote)
-        recovery = remote.split('if [ "$phase" = "copy-logs" ]', 1)[1].split("\n    exit\n", 1)[0]
-        self.assertLess(recovery.index(".gather-infra-complete"), recovery.index("Running make"))
-        self.assertLess(recovery.index(".gather-bmaas-complete"), recovery.index("Running make"))
-        self.assertLess(recovery.index("--timeout 15s"), recovery.index("Running make"))
-        self.assertLess(recovery.index("Keeping the"), recovery.index("copy_diagnostics 60s"))
-        self.assertLess(recovery.index("gather-infra"), recovery.index("gather-bmaas"))
-        self.assertLess(recovery.index("gather-bmaas"), recovery.index("copy_diagnostics 60s"))
-        self.assertIn("leaving time for the diagnostics copy", recovery)
-        copy_fn = remote.split("copy_diagnostics()", 1)[1].split('if [ "$phase" = "copy-logs" ]', 1)[0]
-        self.assertLess(copy_fn.index("mktemp"), copy_fn.index('rm -rf "$LOG_DIR"'))
+            self.assertIn(f"make {target} INFRA=agentless-net DEPLOY_SUITE=bmaas", joined)
+        self.assertIn("build-osac-images.sh", joined)
+        self.assertIn("./.github/actions/gather-artifacts", joined)
+        self.assertIn("./.github/actions/gather-ec2-runner-artifacts", joined)
+        self.assertNotIn("setup-caas", joined)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertIn('sh -s -- "$home" "$PUB_KEY"', setup)
         self.assertIn("--patch-file=/dev/stdin", setup)
@@ -861,53 +860,32 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(setup.index('domain_state" == "running"'), setup.index("detach-interface"))
         self.assertIn('"${live_flags[@]}" --config', setup)
         self.assertIn("<<'EOF'", setup)
-        teardown = next(step for step in steps if "teardown.sh" in step.get("run", ""))
-        self.assertEqual(teardown["if"], "always()")
         names = [step.get("name") for step in steps]
-        self.assertLess(names.index("Validate pull request revision"), names.index("Provision ephemeral EC2 instance"))
-        self.assertLess(names.index("Install the BMaaS cluster on the ephemeral host"), names.index("Prove one BMI on the ephemeral host"))
-        self.assertLess(names.index("Prove one BMI on the ephemeral host"), names.index("Copy diagnostics from the ephemeral host"))
-        self.assertLess(names.index("Copy diagnostics from the ephemeral host"), names.index("Terminate the ephemeral instance"))
-        self.assertLess(names.index("Terminate the ephemeral instance"), names.index("Sanitize diagnostics"))
-        self.assertLess(names.index("Sanitize diagnostics"), names.index("Upload sanitized diagnostics"))
-        phase_steps = [
-            step
-            for step in steps
-            if step.get("name") in {"Install the BMaaS cluster on the ephemeral host", "Prove one BMI on the ephemeral host"}
-        ]
-        self.assertEqual([step["run"].splitlines()[-1].strip() for step in phase_steps], [
-            "./scripts/ec2-runner/run-bmaas-agentless.sh cluster",
-            "./scripts/ec2-runner/run-bmaas-agentless.sh prove",
-        ])
+        self.assertLess(names.index("Deploy OCP from snapshot"), names.index("Build and load component images"))
+        self.assertLess(names.index("Build and load component images"), names.index("Deploy OSAC"))
+        self.assertLess(names.index("Deploy OSAC"), names.index("Prove one BMI"))
+        self.assertLess(names.index("Prove one BMI"), names.index("Gather infra diagnostics"))
+        self.assertLess(names.index("Gather infra diagnostics"), names.index("Gather BMaaS diagnostics"))
+        self.assertLess(names.index("Gather BMaaS diagnostics"), names.index("Gather and redact artifacts"))
         for step in steps:
             if "timeout-minutes" in step:
-                self.assertLessEqual(step["timeout-minutes"], 360)
-        phase_budget = sum(step["timeout-minutes"] for step in phase_steps)
-        self.assertGreaterEqual(phase_budget, 420)
-        copy_step = next(step for step in steps if step.get("name") == "Copy diagnostics from the ephemeral host")
-        self.assertIn("always()", copy_step["if"])
-        self.assertIn("copy-logs", copy_step["run"])
-        self.assertLessEqual(copy_step["timeout-minutes"], 4)
-        self.assertGreaterEqual(install["timeout-minutes"], phase_budget + 90)
-
-        upload = next(step for step in steps if step.get("name") == "Upload sanitized diagnostics")
-        self.assertIn("steps.publish-attestation.outcome == 'success'", upload["if"])
-        self.assertIn("inputs.pr-number != ''", upload["if"])
-        self.assertIn("steps.sanitize.outcome == 'success'", upload["if"])
-        self.assertIn("github.run_attempt", upload["with"]["name"])
-        self.assertEqual(upload["with"]["path"], "infra/agentless-net/logs-sanitized")
-        attest = next(step for step in steps if "attest-build-provenance" in step.get("uses", ""))
-        self.assertIn("inputs.pr-number == ''", attest["if"])
-        self.assertIn("e8998f949152b193b063cb0ec769d69d929409be", attest["uses"])
-        self.assertIn("logs-sanitized/**", attest["with"]["subject-path"])
-        sanitize = next(step for step in steps if step.get("name") == "Sanitize diagnostics")
-        self.assertNotIn("under-test", sanitize["run"])
-        trusted = next(step for step in steps if step.get("name") == "Checkout trusted scripts")
+                self.assertLessEqual(step["timeout-minutes"], 150)
+        deploy_osac = next(step for step in steps if step.get("name") == "Deploy OSAC")
+        self.assertIn("FULFILLMENT_SERVICE_IMAGE", deploy_osac["env"])
+        self.assertIn(
+            "steps.components.outputs.fulfillment_service_image",
+            deploy_osac["env"]["FULFILLMENT_SERVICE_IMAGE"],
+        )
+        self.assertEqual(deploy_osac["env"]["OSAC_BRANCH"], "${{ steps.components.outputs.osac_sha }}")
+        self.assertEqual(document["jobs"]["teardown"]["if"], "always()")
+        trusted = next(
+            step for step in document["jobs"]["push-secrets"]["steps"] if step.get("name") == "Checkout trusted scripts"
+        )
         self.assertEqual(trusted["with"]["repository"], "${{ job.workflow_repository }}")
         self.assertEqual(trusted["with"]["ref"], "${{ job.workflow_sha }}")
         self.assertFalse(trusted["with"]["persist-credentials"])
         under_test = next(step for step in steps if step.get("name") == "Checkout the revision under test")
-        self.assertEqual(under_test["with"]["path"], "under-test")
+        self.assertNotIn("path", under_test["with"])
         self.assertFalse(under_test["with"]["persist-credentials"])
         self.assertIn("inputs.test-infra-sha", under_test["with"]["ref"])
         self.assertIn("inputs.test-infra-repository", under_test["with"]["repository"])
@@ -945,15 +923,16 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIsNotNone(pattern)
         program = '$title | capture("' + pattern.group(1) + '")'
         for title, expected in (
-            ("E2E suite · bmaas-agentless · #795 · " + ("a" * 40), {"suite": "bmaas-agentless", "pr": "795", "sha": "a" * 40}),
+            ("E2E suite · bmaas-agentless-net · #795 · " + ("a" * 40), {"suite": "bmaas-agentless-net", "pr": "795", "sha": "a" * 40}),
             ("E2E BMaaS Agentless-Net Full Install / PR #795 @ " + ("b" * 40), {"pr": "795", "sha": "b" * 40}),
+            ("E2E BMaaS Netris Full Install / PR #12 @ " + ("c" * 40), {"pr": "12", "sha": "c" * 40}),
         ):
             parsed = subprocess.check_output(["jq", "-Rn", "--arg", "title", title, program], text=True)
             identity = json.loads(parsed)
             for key, value in expected.items():
                 self.assertEqual(identity[key], value)
         rerun = (ROOT / ".github" / "workflows" / "e2e-pr-rerun.yml").read_text()
-        self.assertIn('"E2E BMaaS Agentless PR suite"', rerun)
+        self.assertIn('"E2E BMaaS Agentless-Net PR suite"', rerun)
         self.assertIn("728d1b064cdbfa429c68ce5bc5a35b47b6c127d7", PR_SUITE.read_text())
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
@@ -1009,12 +988,13 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(fabric.index("l2advertisements.metallb.io"), fabric.index("oc get l2advertisement"))
         self.assertLess(fabric.index("caas-l2-advertisement is required"), fabric.index("skipping the MetalLB patch"))
         self.assertIn('"${DEPLOY_SUITE:-caas}" != "bmaas"', fabric)
-        self.assertIn("osac-bmaas-install-stamp", deploy)
+        self.assertNotIn("osac-bmaas-install-stamp", deploy)
+        self.assertNotIn("already running", deploy)
         self.assertLess(deploy.index('sha256sum "$overlay_dst"'), deploy.index("make install"))
-        self.assertLess(deploy.index("oc delete configmap osac-bmaas-install-stamp"), deploy.index("make install"))
-        self.assertLess(deploy.index("make install"), deploy.index('--from-literal=overlay="$installed_overlay"'))
         self.assertLess(deploy.index("installed_revision="), deploy.index("make install"))
-        self.assertIn('revision="$installed_revision"', deploy)
+        self.assertIn("FULFILLMENT_SERVICE_IMAGE", deploy)
+        self.assertIn("service.images.service.repository", deploy)
+        self.assertIn("aap.bootstrap.image", deploy)
         self.assertIn('fetch origin "$branch"', deploy)
         self.assertIn("fetch --prune --no-tags origin", deploy)
         self.assertNotIn("fetch --prune --tags origin", deploy)
@@ -1038,7 +1018,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("require_recorded_cluster", (INFRA / "scripts" / "destroy-caas.sh").read_text())
         self.assertIn("require_recorded_cluster", (INFRA / "scripts" / "destroy-fabric.sh").read_text())
         self.assertIn('wait --for=delete', (INFRA / "scripts" / "destroy-bmaas.sh").read_text())
-        self.assertIn("The proof already copied diagnostics", WORKFLOW.read_text())
+        self.assertNotIn("The proof already copied diagnostics", WORKFLOW.read_text())
         backend = (INFRA / "Makefile").read_text()
         self.assertIn("prepare-suite && $(MAKE) deploy-suite-workload", backend)
         self.assertIn('if [ "$(DEPLOY_SUITE)" = bmaas ]; then $(MAKE) prove-bmi', backend)
@@ -1053,14 +1033,15 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertNotIn('INFRA)" = agentless-net', root_suite)
         run_tests = root.split("run-tests: _validate-backend", 1)[1].split("\ndestroy-ocp:", 1)[0]
         self.assertLess(run_tests.index("does not run the Netris bmaas suite"), run_tests.index("_validate-suite-contract"))
-        self.assertIn("{.data.profile}", deploy)
-        self.assertIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
+        self.assertNotIn("{.data.profile}", deploy)
+        self.assertNotIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertLess(setup.index("Reusing the virtual BMH"), setup.index("reconcile-bmhs.py"))
         self.assertLess(setup.index("reconcile-bmhs.py"), setup.index("annotate baremetalhost"))
-        self.assertIn("apk add --no-cache dnsmasq supervisor", setup)
-        self.assertIn("/etc/agentless-net/supervisord.conf", setup)
-        self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf pid", setup)
+        self.assertNotIn("apk add --no-cache dnsmasq supervisor", setup)
+        self.assertIn("apk add --no-cache dnsmasq supervisor", fabric)
+        self.assertIn("/etc/agentless-net/supervisord.conf", fabric)
+        self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf pid", fabric)
         gather = (INFRA / "scripts" / "gather-bmaas.sh").read_text()
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf status", gather)
         self.assertIn(".gather-bmaas-complete", gather)
