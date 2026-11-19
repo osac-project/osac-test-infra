@@ -74,15 +74,19 @@ def _closing_quote(available: bytes, quote: bytes) -> int:
     return 0
 
 
-def _consume_quoted_secret(available: bytes) -> tuple[int, bytes]:
+def _consume_quoted_secret(available: bytes, separator: bytes) -> tuple[int, bytes]:
     """Consume one secret value inside an already quoted command.
 
-    A leading ``[`` is the error-text prose ``password: [permission denied``.
-    A leading quote can hold spaces. Anything else, including ``#hunter2``,
-    is one credential token. The caller scans the text after this value so a
-    later assignment on the same command is not left behind.
+    ``password: [permission denied`` is error prose: a colon, a space, and a
+    lowercase word. An equals value is a credential even when it starts with
+    ``[``, as in ``PASSWORD=[hunter2``. A leading quote can hold spaces.
+    Anything else, including ``#hunter2``, is one credential token. The caller
+    scans the text after this value so a later assignment on the same command
+    is not left behind.
     """
-    if not available or available[:1] == b"[":
+    if not available:
+        return 0, b""
+    if re.fullmatch(rb"\s*:\s+", separator) and re.match(rb"\[[a-z]", available):
         return 0, b""
     first = available[:1]
     if first in (b'"', b"'"):
@@ -121,7 +125,7 @@ def _redact_visible_assignments(line: bytes, spans: list[tuple[int, int]]) -> by
             continue
         value_at = match.start(3)
         span_end = next(end for start, end in spans if start <= match.start() < end)
-        consumed, replacement = _consume_quoted_secret(line[value_at:span_end])
+        consumed, replacement = _consume_quoted_secret(line[value_at:span_end], match.group(2))
         if consumed == 0:
             pieces.append(line[pos:match.end()])
             pos = match.end()

@@ -117,9 +117,16 @@ sysctl_backup=""
 prepare_failed() {
     local status=$?
     if [[ "$changed_sysctls" -eq 1 ]]; then
-        sudo sysctl -w "net.bridge.bridge-nf-call-iptables=${attempt_ipt}" || true
-        sudo sysctl -w "net.bridge.bridge-nf-call-ip6tables=${attempt_ip6}" || true
-        if [[ "$checkpoint_existed" -ne 1 ]]; then
+        local ipt_restored=0
+        local ip6_restored=0
+        if sudo sysctl -w "net.bridge.bridge-nf-call-iptables=${attempt_ipt}"; then
+            ipt_restored=1
+        fi
+        if sudo sysctl -w "net.bridge.bridge-nf-call-ip6tables=${attempt_ip6}"; then
+            ip6_restored=1
+        fi
+        # A failed rollback must keep the new checkpoint so a later restore can retry.
+        if [[ "$ipt_restored" -eq 1 && "$ip6_restored" -eq 1 && "$checkpoint_existed" -ne 1 ]]; then
             sudo rm -f "$STATE_FILE" || true
         fi
     fi

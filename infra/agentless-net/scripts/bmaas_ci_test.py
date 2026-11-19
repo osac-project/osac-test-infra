@@ -671,6 +671,10 @@ class SanitizeTest(unittest.TestCase):
         raw = b'{"message":"unable to read password: [permission denied"}\n'
         cleaned = sanitize_diagnostics.redact(raw)
         self.assertIn(b"permission denied", cleaned)
+        assigned = sanitize_diagnostics.redact(b'command: "make install PASSWORD=[hunter2"\n')
+        self.assertNotIn(b"hunter2", assigned)
+        self.assertIn(b"make install", assigned)
+        self.assertIn(b"[REDACTED]", assigned)
 
     def test_a_secret_token_inside_a_quoted_string_is_redacted(self) -> None:
         samples = (
@@ -977,6 +981,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(corrupt.index("return 1"), corrupt.index("sysctl -w"))
         self.assertIn("restore_host_bridge_sysctls || exit", bridges)
         self.assertLess(bridges.index("changed_sysctls=1"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
+        failed = bridges.split("prepare_failed()", 1)[1]
+        removal = failed.index('sudo rm -f "$STATE_FILE"')
+        self.assertLess(failed.index("ipt_restored"), removal)
+        self.assertLess(failed.index("ip6_restored"), removal)
+        self.assertIn('"$ipt_restored" -eq 1 && "$ip6_restored" -eq 1 && "$checkpoint_existed" -ne 1', failed)
         self.assertIn("sudo -n true", bridges)
         fabric_teardown = (INFRA / "scripts" / "destroy-fabric.sh").read_text()
         self.assertIn('prepare-host-bridges.sh" restore', fabric_teardown)
