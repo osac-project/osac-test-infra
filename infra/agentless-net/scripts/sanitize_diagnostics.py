@@ -77,17 +77,21 @@ def _closing_quote(available: bytes, quote: bytes) -> int:
 def _consume_quoted_secret(available: bytes, separator: bytes) -> tuple[int, bytes]:
     """Consume one secret value inside an already quoted command.
 
-    ``password: [permission denied`` is the one bracketed phrase left as
-    prose. Every other bracketed value, including ``password: [hunter2]``,
-    is a credential. A leading quote can hold spaces.
+    ``password: [permission denied`` is left as prose only when that is the
+    whole value. A longer value that begins with the same words is a
+    credential, as is ``password: [hunter2]``. A leading quote can hold spaces.
     Anything else, including ``#hunter2``, is one credential token. The caller
     scans the text after this value so a later assignment on the same command
     is not left behind.
     """
     if not available:
         return 0, b""
-    if re.fullmatch(rb"\s*:\s+", separator) and available.startswith(b"[permission denied"):
-        return 0, b""
+    phrase = b"[permission denied"
+    if re.fullmatch(rb"\s*:\s+", separator) and available.startswith(phrase):
+        rest = available[len(phrase):]
+        if re.fullmatch(rb"\]?[ \t]*", rest):
+            return 0, b""
+        return len(available), _REDACTED
     first = available[:1]
     if first in (b'"', b"'"):
         end = _closing_quote(available, first)

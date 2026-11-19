@@ -678,6 +678,9 @@ class SanitizeTest(unittest.TestCase):
         bracketed = sanitize_diagnostics.redact(b'msg: "password: [hunter2]"\n')
         self.assertNotIn(b"hunter2", bracketed)
         self.assertIn(b"[REDACTED]", bracketed)
+        extended = sanitize_diagnostics.redact(b'msg: "password: [permission denied hunter2"\n')
+        self.assertNotIn(b"hunter2", extended)
+        self.assertIn(b"[REDACTED]", extended)
 
     def test_a_secret_token_inside_a_quoted_string_is_redacted(self) -> None:
         samples = (
@@ -848,6 +851,21 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("build-osac-images.sh", joined)
         self.assertIn("./.github/actions/gather-artifacts", joined)
         self.assertIn("./.github/actions/gather-ec2-runner-artifacts", joined)
+        build = (INFRA / "scripts" / "build-osac-images.sh").read_text()
+        self.assertIn(
+            'export KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/agentless-lab-mgmt.kubeconfig}"',
+            build,
+        )
+        stage = next(step for step in steps if step.get("name") == "Stage Agentless diagnostics for redaction")
+        gather = next(step for step in steps if step.get("name") == "Gather and redact artifacts")
+        self.assertIn("always()", stage["if"])
+        self.assertIn("infra/agentless-net/logs/bmaas", stage["run"])
+        self.assertIn("${RUNNER_TEMP}/osac-artifacts/agentless-net", stage["run"])
+        self.assertNotIn("osac-ec2-runner-artifacts", stage["run"])
+        self.assertLess(steps.index(stage), steps.index(gather))
+        host_action = (ROOT / ".github" / "actions" / "gather-ec2-runner-artifacts" / "action.yml").read_text()
+        self.assertLess(host_action.index("release_gate.py"), host_action.index("actions/upload-artifact"))
+        self.assertIn("withholding them", host_action)
         self.assertNotIn("setup-caas", joined)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertIn('sh -s -- "$home" "$PUB_KEY"', setup)
@@ -983,6 +1001,8 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(deploy.index('if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]];'), deploy.index("values-bmaas-overlay.yaml"))
         fabric = (INFRA / "scripts" / "deploy-fabric.sh").read_text()
         self.assertLess(fabric.index('"${DEPLOY_SUITE:-}" == "bmaas"'), fabric.index("prepare-host-bridges.sh"))
+        self.assertLess(fabric.index("use_kubeconfig"), fabric.index("require_recorded_cluster"))
+        self.assertLess(fabric.index("require_recorded_cluster"), fabric.index("deploy -t"))
         self.assertIn("caas-l2-advertisement", fabric)
         self.assertIn("--ignore-not-found", fabric)
         self.assertLess(fabric.index("l2advertisements.metallb.io"), fabric.index("oc get l2advertisement"))
@@ -995,6 +1015,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("FULFILLMENT_SERVICE_IMAGE", deploy)
         self.assertIn("service.images.service.repository", deploy)
         self.assertIn("aap.bootstrap.image", deploy)
+        self.assertIn("--set-string ${tag_key}=${tag}", deploy)
         self.assertIn('fetch origin "$branch"', deploy)
         self.assertIn("fetch --prune --no-tags origin", deploy)
         self.assertNotIn("fetch --prune --tags origin", deploy)
@@ -1039,6 +1060,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(setup.index("Reusing the virtual BMH"), setup.index("reconcile-bmhs.py"))
         self.assertLess(setup.index("reconcile-bmhs.py"), setup.index("annotate baremetalhost"))
         self.assertNotIn("apk add --no-cache dnsmasq supervisor", setup)
+        setup_infra = (INFRA / "scripts" / "setup-infra.sh").read_text()
+        self.assertLess(
+            setup_infra.index('"${DEPLOY_SUITE:-}" == "bmaas"'),
+            setup_infra.index("Installing grpcurl"),
+        )
         self.assertIn("apk add --no-cache dnsmasq supervisor", fabric)
         self.assertIn("/etc/agentless-net/supervisord.conf", fabric)
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf pid", fabric)

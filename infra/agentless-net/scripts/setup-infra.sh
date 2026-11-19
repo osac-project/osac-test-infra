@@ -67,7 +67,7 @@ fi
 
 # ---------- grpcurl ----------
 
-if ! command -v grpcurl >/dev/null 2>&1; then
+if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]] && ! command -v grpcurl >/dev/null 2>&1; then
     info "Installing grpcurl"
     version=1.9.1
     work="$(mktemp -d)"

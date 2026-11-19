@@ -334,6 +334,21 @@ jobs:
             echo "path=${placeholder}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Stage Agentless diagnostics for redaction
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/osac-artifacts/agentless-net"
+          if [[ -d infra/agentless-net/logs/bmaas ]]; then
+            mkdir -p "${dest}/bmaas"
+            cp -a infra/agentless-net/logs/bmaas/. "${dest}/bmaas/"
+          fi
+          if [[ -d infra/agentless-net/logs ]]; then
+            mkdir -p "$dest"
+            find infra/agentless-net/logs -mindepth 1 -maxdepth 1 ! -name bmaas -exec cp -a {} "${dest}/" \;
+          fi
+
       - name: Gather and redact artifacts
         if: always()
         uses: ./.github/actions/gather-artifacts

@@ -148,7 +148,7 @@ if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
         fi
         tag="${image##*:}"
         repo="${image%:*}"
-        extra_helm+=" --set ${repo_key}=${repo} --set ${tag_key}=${tag} --set ${pull_key}=IfNotPresent"
+        extra_helm+=" --set ${repo_key}=${repo} --set-string ${tag_key}=${tag} --set ${pull_key}=IfNotPresent"
     }
     add_image() {
         local image="$1" key="$2"
