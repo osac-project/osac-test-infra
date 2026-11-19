@@ -13,6 +13,7 @@ INFRA_DIR="${SCRIPT_DIR}/.."
 # shellcheck source=use-kubeconfig.sh
 source "${SCRIPT_DIR}/use-kubeconfig.sh"
 use_kubeconfig "${INFRA_DIR}/.mgmt-network"
+require_recorded_cluster
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 

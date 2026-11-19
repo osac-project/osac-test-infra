@@ -4,7 +4,7 @@ set -euo pipefail
 
 : "${GITHUB_OUTPUT:?}"
 : "${GITHUB_RUN_ID:?}"
-KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/agentless-lab-mgmt.kubeconfig}"
+export KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/agentless-lab-mgmt.kubeconfig}"
 
 OSAC_REPO="${OSAC_REPO:-https://github.com/osac-project/osac.git}"
 OSAC_BRANCH="${OSAC_BRANCH:-main}"
