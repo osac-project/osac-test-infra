@@ -4,22 +4,16 @@ umask 077
 
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 artifact_dir="${RUNNER_TEMP}/osac-artifacts"
-rm -f "${artifact_dir}/.redaction-complete" "${RUNNER_TEMP}/mce-scan-complete"
+rm -f "${artifact_dir}/.redaction-complete"
 output=$(mktemp -d "${RUNNER_TEMP}/artifact-collection.XXXXXX")
 status="${output}/status.txt"
 log="${output}/collection.log"
 printf 'status=started\n' > "${status}"
 
 stage() {
-  if python3 -I "${GITHUB_WORKSPACE}/.github/scripts/inspect-artifacts.py" \
-    --prepare-only --directory "${output}" > /dev/null 2>&1; then
-    mkdir -p "${artifact_dir}/mgmt-cluster"
-    rm -rf "${artifact_dir}/mgmt-cluster/mce-must-gather"
-    mv "${output}" "${artifact_dir}/mgmt-cluster/mce-must-gather"
-  else
-    rm -rf "${output}"
-    echo "::warning::MCE output withheld: preparation unavailable or failed."
-  fi
+  mkdir -p "${artifact_dir}/mgmt-cluster"
+  rm -rf "${artifact_dir}/mgmt-cluster/mce-must-gather"
+  mv "${output}" "${artifact_dir}/mgmt-cluster/mce-must-gather"
 }
 trap stage EXIT
 
@@ -30,7 +24,7 @@ skip() {
 }
 
 [[ -s "${KUBECONFIG:-}" ]] || skip "management kubeconfig unavailable"
-for dependency in oc timeout jq python3; do
+for dependency in oc timeout jq; do
   command -v "${dependency}" >/dev/null || skip "required collection tool unavailable"
 done
 
