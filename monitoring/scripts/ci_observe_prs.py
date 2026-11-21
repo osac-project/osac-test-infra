@@ -3404,8 +3404,12 @@ class CIObservePRs:
         for row in rows:
             row_attempts = attempts.get((row["repo"], row["number"]), [])
             row["url"] = row.get("url") or pr_url(row["repo"], row["number"])
-            author = row.get("author") or ""
-            row["author_url"] = github_profile_url(author)
+            # row_author, not author: rebinding the `author` filter parameter
+            # here made every unfiltered index document carry a bogus
+            # "Filtered: author <newest pull request's author>." note, because
+            # the loop leaves the parameter holding the last row's author.
+            row_author = row.get("author") or ""
+            row["author_url"] = github_profile_url(row_author)
             row["repo_url"] = f"https://github.com/{ORG}/{row['repo']}"
             row["dates_display"] = dates_display(
                 row.get("state"), row.get("opened_at"), row.get("merged_at"), row.get("closed_at")
@@ -3423,7 +3427,7 @@ class CIObservePRs:
             row["detail_url"] = (
                 "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests"
                 f"?var-pr_repo={quote(row['repo'], safe='')}&var-pr_number={row['number']}&var-days={days}"
-                f"&var-pr_author={quote(author, safe='') if author else '$__all'}&var-wgs={wgs or 'all'}"
+                f"&var-pr_author={quote(row_author, safe='') if row_author else '$__all'}&var-wgs={wgs or 'all'}"
             )
             # The Pull requests page turns this list into a drop-down. The
             # label carries the three things a reader needs to choose.

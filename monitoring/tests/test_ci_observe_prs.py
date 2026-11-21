@@ -690,6 +690,25 @@ class TestHourly:
         assert service._coverage_until() == iso(NOW)
         assert all("/orgs/" not in call for call in github.calls)
 
+    def test_an_unfiltered_index_claims_no_author_filter(self, service):
+        """The row loop once rebound the `author` filter parameter, so every
+        unfiltered index document carried a bogus 'Filtered: author <the
+        newest pull request's author>.' note -- three reviewers saw three
+        different names in one evening, and the document's author field lied
+        with them."""
+        run_backfill(service)
+
+        clean = service.get_json({"days": [str(DAYS)]}, now=NOW)
+        assert clean["prs"], "the seeded window holds pull requests"
+        assert not [note for note in clean["notes"] if note.startswith("Filtered")]
+        assert clean["author"] == ""
+
+        author = clean["authors"][0]["author"]
+        filtered = service.get_json({"days": [str(DAYS)], "author": [author]}, now=NOW)
+        assert f"Filtered: author {author}." in filtered["notes"]
+        assert filtered["author"] == author
+        assert len(filtered["prs"]) < len(clean["prs"])
+
 
 # ---------------------------------------------------------------------------
 # pr_backfill_runs: what each pass did
