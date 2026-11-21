@@ -116,6 +116,54 @@ rm -rf "${HOME}/virtual-bmh-disks" "${HOME}/sushy-local" \
 
 ## Going further
 
+### CI lifecycle and reboot history
+
+CI enables `manage-virtual-bmh-vms.py create --record-history`. The manager
+atomically reserves exact domain names in the run inventory's `planned_names`
+before launching a runner-account recorder, then performs normal VM creation.
+Only successful creations enter `hosts`; partial failures retain the plan for
+diagnostics and verified deletion removes it. There are no extra definitions,
+power operations, guest inputs or boot configuration changes.
+
+The recorder runs `virsh -c qemu:///system event --all --loop --timestamp --timeout 86400`
+with `LC_ALL=C` and `TZ=UTC`. Launch ordering is best effort, not a subscription-readiness
+handshake: initial events can be missed. Virsh's `--all` can tolerate failed
+later event registrations; separate reboot delivery depends on QEMU support.
+Provisioning never waits for an event acknowledgment or retries a definition.
+
+Only timestamped lifecycle and separate reboot lines for exact inventory
+`hosts` or `planned_names` are retained. The inventory is reloaded for each
+matching event; the prefix grammar is only defense in depth. Missing or invalid
+inventory disables selection with a diagnostic status, never broader capture.
+Foreign, malformed, invalid UTF-8 and oversized lines are discarded without
+printing hostwide output. Retention is capped at 2 MiB of events, lines/read
+chunks at 4096 bytes, and runtime at 24 hours. Exit, deadline, byte cap and
+collection cancellation stop and reap the managed CLI child. Existing history
+directories are not overwritten by another recorder.
+
+Private raw files live beside the inventory in its `.history` directory.
+Collection stops recording, privately stages only events and status, and runs
+the existing release gate with the collected secret inventory before copying
+to `bmh-history/` in the artifact tree and creating the completion marker.
+Failed gathering leaves no marker; failed event redaction releases no history.
+Teardown retains the inventory/history if libvirt is unreachable or any domain
+of the run remains, and removes history after confirmed domain removal.
+If recorder exit cannot be confirmed (for example, pidfd is unavailable),
+collection releases no event files and cleanup retains the cooperative stop
+marker/history for a later attempt. Shutdown allows the CLI termination and
+reap grace period; it never force-kills the recorder while its child may live.
+Each collection discards any previous event staging destination before gating
+fresh files, so a rejected collection cannot republish stale event files.
+
+Guest serial capture is supplied unchanged by the existing VM serial PTY/log
+XML and disk-adjacent log path, and collected by `gather-osac-logs.sh` into
+`worker-console/`. This enhancement adds no serial helper, permissions policy,
+rotation guarantee or host rollout. The existing artifact scanning and
+public/private upload routing are unchanged. Live libvirt delivery and
+privileged serial permissions/rotation/SELinux behavior remain unverified here;
+keep the PR draft pending host integration checks. These records do not
+establish a guest failure cause.
+
 `.github/scripts/setup-virtual-bmh.sh` — the CI orchestrator — wires
 exactly these tools and is the shortest complete reference. The
 semantics (naming scheme, verified deletions, reconcile rules) live in

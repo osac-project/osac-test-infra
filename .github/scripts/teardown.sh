@@ -170,8 +170,10 @@ fi
 
 # Keep the inventory while VMs of the group remain — or libvirt is
 # unreachable: it is the map for cleaning up a leak by hand.
+timeout 10 python3 "$(dirname "${BASH_SOURCE[0]}")/bmh_history.py" cleanup "${BMH_INVENTORY_FILE}" || true
 if VM_LISTING=$(${VIRSH} list --all --name 2>/dev/null); then
-  if [[ -z "$(grep "^${BMH_VM_PREFIX}-" <<<"${VM_LISTING}" || true)" ]]; then
+  if [[ -z "$(grep "^${BMH_VM_PREFIX}-" <<<"${VM_LISTING}" || true)" \
+    && ! -d "${BMH_INVENTORY_FILE%.json}.history" ]]; then
     rm -f "${BMH_INVENTORY_FILE}"
   fi
 else
@@ -284,7 +286,8 @@ if [[ -d "${BMH_DISK_DIR}" ]]; then
   echo "ERROR: Disk directory '${BMH_DISK_DIR}' still present after cleanup" >&2
   BMH_LEAKED=true
 fi
-if [[ -f "${BMH_INVENTORY_FILE}" && -z "${REMAINING_VMS}" ]]; then
+if [[ -f "${BMH_INVENTORY_FILE}" && -z "${REMAINING_VMS}" \
+  && ! -d "${BMH_INVENTORY_FILE%.json}.history" ]]; then
   echo "ERROR: Virtual BMH inventory file '${BMH_INVENTORY_FILE}' still present after cleanup" >&2
   BMH_LEAKED=true
 fi

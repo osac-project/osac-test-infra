@@ -99,6 +99,7 @@ SUSHY_CACHE_PORT="${SUSHY_CACHE_PORT}" \
 
 # --- Create the VMs and the raw inventory ---
 VM_ARGS=(
+  --record-history
   --inventory-file "${INVENTORY_FILE}"
   --network "${CT_NETWORK}"
   --disk-dir "${VM_DISK_DIR}"
