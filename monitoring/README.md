@@ -437,10 +437,17 @@ One-time setup, all three manual:
    callback URL `https://<canonical-host>:3443/oauth/callback`. Put its
    client id and secret in `~/.monitoring-server/.env` as
    `MCP_GITHUB_CLIENT_ID` / `MCP_GITHUB_CLIENT_SECRET`.
-2. **Grafana service account** (Administration → Service accounts, role
-   Admin): create a token and set it as `MCP_GRAFANA_SERVICE_TOKEN`. A login
-   is admitted only if Grafana knows it, so Grafana's own user list stays
-   the gate.
+2. **Grafana service account** (Administration → Users and access →
+   Service accounts): create one named `ci-observe-mcp` with the **Admin**
+   basic role, then create a token for it (no expiration, or as long as you
+   like) and set it as `MCP_GRAFANA_SERVICE_TOKEN`. The account needs no
+   permission beyond its role: the server reads the org's user list
+   (`GET /api/org/users`) to decide whether a GitHub login has a Grafana
+   user. Verify on the central host — expect your colleagues' logins:
+
+```bash
+curl -sk -H "Authorization: Bearer <TOKEN>" https://127.0.0.1:3000/api/org/users | jq -r '.[].login'
+```
 3. **Secrets** in the same `.env`: `MCP_SESSION_SECRET` (any long random
    string; it signs the 12-hour tokens) and
    `MCP_EXTERNAL_URL=https://<canonical-host>:3443` (the origin Caddy

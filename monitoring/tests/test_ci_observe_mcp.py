@@ -440,6 +440,25 @@ def test_a_verifier_that_does_not_match_is_refused(server, monkeypatch):
     assert answer.status == 400
 
 
+def test_the_grafana_gate_reads_the_org_user_list(config, web):
+    web.add("https://grafana/api/org/users",
+            [{"login": "dev", "role": "Admin"}, {"login": "other", "role": "Viewer"}])
+    assert mcp.grafana_user_exists(config, "dev") is True
+    assert mcp.grafana_user_exists(config, "stranger") is False
+
+
+def test_a_refused_grafana_token_names_the_fix(config, web):
+    web.add("https://grafana/api/org/users", {"message": "no"}, status=403)
+    with pytest.raises(mcp.AuthError, match="Admin basic role"):
+        mcp.grafana_user_exists(config, "dev")
+
+
+def test_a_grafana_that_does_not_answer_is_an_error(config, web):
+    web.add("https://grafana/api/org/users", {"message": "broken"}, status=502)
+    with pytest.raises(mcp.AuthError, match="HTTP 502"):
+        mcp.grafana_user_exists(config, "dev")
+
+
 def test_a_login_without_a_grafana_user_is_refused(server, monkeypatch):
     monkeypatch.setattr(mcp, "github_login", lambda config, code: "stranger")
     monkeypatch.setattr(mcp, "grafana_user_exists",

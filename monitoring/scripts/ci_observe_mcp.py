@@ -63,6 +63,12 @@ from http.cookies import SimpleCookie
 from typing import Callable
 
 import requests
+import urllib3
+
+# The Grafana check calls the internal-CA listener with verify=False (the
+# cert is issued for the canonical hostname, not for 127.0.0.1); silence
+# urllib3's per-call warning so the log carries logins, not TLS notices.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger("ci_observe_mcp")
 
@@ -205,20 +211,31 @@ def github_login(config: Config, code: str) -> str:
 
 
 def grafana_user_exists(config: Config, login: str) -> bool:
-    """Whether Grafana knows this login: the one gate to the data."""
+    """Whether Grafana knows this login: the one gate to the data. Reads
+    the org's user list (GET /api/org/users), which a service account with
+    the Admin basic role may; the global user search needs a permission to
+    grant, and /api/users/lookup is gone in Grafana 13 (404 for the server
+    admin too), so neither is used."""
     answer = requests.get(
-        f"{config.grafana_url}/api/users/lookup/login/{urllib.parse.quote(login)}",
+        f"{config.grafana_url}/api/org/users",
         headers={"Authorization": f"Bearer {config.grafana_service_token}"},
         verify=config.grafana_verify_tls,
         timeout=15,
     )
     if answer.status_code == 200:
-        return True
-    if answer.status_code == 404:
-        return False
+        users = answer.json()
+        if not isinstance(users, list):
+            raise AuthError("Grafana answered its org user list with something other than a list;"
+                            " check MCP_GRAFANA_URL")
+        return any(isinstance(user, dict) and user.get("login") == login for user in users)
+    if answer.status_code in (401, 403):
+        raise AuthError(
+            f"Grafana refused the service account for the org user list: HTTP {answer.status_code}. "
+            "Check MCP_GRAFANA_URL and MCP_GRAFANA_SERVICE_TOKEN; the service account needs the "
+            "Admin basic role and nothing more."
+        )
     raise AuthError(
-        f"Grafana would not answer for the login {login}: HTTP {answer.status_code}. "
-        "Check MCP_GRAFANA_URL and MCP_GRAFANA_SERVICE_TOKEN."
+        f"Grafana would not answer the org user list: HTTP {answer.status_code}; check MCP_GRAFANA_URL"
     )
 
 
@@ -391,7 +408,7 @@ def _insight_tool(name: str, description: str, kind: str,
 
 
 def _fetch_document(config: Config, kind: str, pop: dict, extra: dict | None = None) -> tuple[int, dict]:
-    params = dict(_insight_query_pairs(pop)) 
+    params = dict(_insight_query_pairs(pop))
     params.update(extra or {})
     status, body = fetch_json(config, f"/api/ci-observe/{kind}?{urllib.parse.urlencode(params)}")
     if not isinstance(body, dict):
