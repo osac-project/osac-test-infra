@@ -155,7 +155,10 @@ def test_reclassify_failure_reasons(exporter):
     exporter._reclassify_failure_reasons_if_needed()
     reasons = {r["id"]: r["failure_reason"] for r in rows(exporter, "SELECT id, failure_reason FROM jobs")}
     assert reasons == {1: "gate", 2: "gate", 3: "test", 4: "infra", 5: "n/a", 6: "ran"}
-    exporter._reclassify_failure_reasons_if_needed()  # idempotent
+    # Idempotent: a second run changes nothing more.
+    before = rows(exporter, "SELECT id, failure_reason FROM jobs ORDER BY id")
+    exporter._reclassify_failure_reasons_if_needed()
+    assert rows(exporter, "SELECT id, failure_reason FROM jobs ORDER BY id") == before
 
 
 def test_reclassify_ai_status(exporter, wfe):

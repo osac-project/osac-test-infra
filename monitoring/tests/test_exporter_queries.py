@@ -138,7 +138,10 @@ def test_counts_json(history):
     assert counts["success_rate"] == 0.5
     assert counts["cache_oldest_at"] == "2026-10-10T01:00:00Z"
     empty = history.get_counts_json(q(repo="none"))
-    assert (empty["failure_rate"], empty["success_rate"], empty["total"]) == (0, 0, 0)
+    # No decisive runs: no rate, never a fabricated 0 that reads as
+    # "all passed".
+    assert empty["failure_rate"] is None and empty["success_rate"] is None
+    assert empty["total"] == 0
 
 
 def test_counts_by_workflow(history):
@@ -270,7 +273,10 @@ def test_pr_merge_time(merges):
     bad = merges.get_pr_merge_time_json(q(since="x", until="y"))
     assert bad["count"] == 4
     none = merges.get_pr_merge_time_json(q(repo="none"))
-    assert (none["count"], none["avg_open_to_merge_seconds"], none["avg_retest_count"]) == (0, 0, 0)
+    # An empty window is "not measured", never a 0-second merge average.
+    assert none["count"] == 0
+    assert none["avg_open_to_merge_seconds"] is None
+    assert none["avg_retest_count"] == 0
     assert none["approval_outliers"] == []
 
 

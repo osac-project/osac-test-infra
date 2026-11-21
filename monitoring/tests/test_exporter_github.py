@@ -213,7 +213,9 @@ def test_make_job_record(exporter, wfe):
     assert rec["pr_display"] == ""
 
     rec = exporter._make_job_record(make_run(event="push", run_started_at="bad"), "osac")
-    assert rec["duration_s"] == 0
+    # An unparseable timestamp is an unmeasured duration, never a 0-second
+    # run that joins every average.
+    assert rec["duration_s"] is None
 
 
 def test_run_count(exporter, github, R):

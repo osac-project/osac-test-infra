@@ -1213,7 +1213,7 @@ class WorkflowExporter:
                 "category": "e2e",
                 "status": result,
                 "conclusion": "" if result in ("in_progress", "queued") else result,
-                "duration_s": round(duration_s),
+                "duration_s": round(duration_s) if duration_s is not None else None,
                 "duration": self._fmt_duration(duration_s),
                 "updated_at": ended if result in ("success", "failure") else "",
                 "url": main.get("html_url") or record.get("url", ""),
@@ -2649,14 +2649,18 @@ class WorkflowExporter:
         """Build a flat dict for the JSON API from a workflow run."""
         started = run.get("run_started_at") or run.get("created_at", "")
         ended = run.get("updated_at", "")
-        duration_s = 0
+        # A duration the stored timestamps cannot support is None ("not
+        # measured"), never 0: a 0-second run reads as a measured instant
+        # and silently joins every average.
+        duration_s = None
         if started and ended:
             try:
                 t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
                 t1 = datetime.fromisoformat(ended.replace("Z", "+00:00"))
                 duration_s = max(0, (t1 - t0).total_seconds())
             except (ValueError, TypeError):
-                pass
+                logger.warning("Run %s has unparseable timestamps (%r, %r); its duration is not measured",
+                               run.get("id"), started, ended)
 
         conclusion = run.get("conclusion") or ""
         status = run.get("status", "unknown")
@@ -2704,7 +2708,7 @@ class WorkflowExporter:
             "conclusion": conclusion,
             "event": run.get("event", "unknown"),
             "trigger": WorkflowExporter._extract_trigger(run),
-            "duration_s": round(duration_s),
+            "duration_s": round(duration_s) if duration_s is not None else None,
             "duration": WorkflowExporter._fmt_duration(duration_s),
             "actor": run.get("actor", {}).get("login", ""),
             "url": run.get("html_url", ""),
@@ -2725,6 +2729,8 @@ class WorkflowExporter:
 
     @staticmethod
     def _fmt_duration(seconds):
+        if seconds is None:
+            return "not measured"
         if seconds <= 0:
             return "-"
         m, s = divmod(int(seconds), 60)
@@ -3794,6 +3800,11 @@ class WorkflowExporter:
 
             except Exception:
                 logger.exception("Error collecting metrics for %s", repo)
+                # A repo that raised mid-collection leaves the active
+                # picture incomplete: the by-category gauges derived from
+                # it must not publish an undercount that looks like a
+                # drop.
+                active_runs_complete = False
 
         queued_total.labels(org=ORG).set(tot_queued)
         zombie_total.labels(org=ORG).set(tot_zombies)
@@ -4750,7 +4761,9 @@ class WorkflowExporter:
         success_count = counts.get("success", 0)
         failure_count = counts.get("failure", 0)
         decisive = success_count + failure_count  # exclude cancelled
-        failure_rate = round(failure_count / decisive, 4) if decisive > 0 else 0
+        # A window with no decisive runs has no rate: 0 would read as
+        # "all passed", perfect health fabricated over nothing.
+        failure_rate = round(failure_count / decisive, 4) if decisive > 0 else None
         return {
             "success": success_count,
             "failure": failure_count,
@@ -4764,7 +4777,7 @@ class WorkflowExporter:
             # 1 - failure_rate rather than success_count/decisive so the
             # two rates always sum to exactly 1 (avoids float rounding
             # drift between two separately-rounded fractions).
-            "success_rate": round(1 - failure_rate, 4) if decisive > 0 else 0,
+            "success_rate": round(1 - failure_rate, 4) if failure_rate is not None else None,
             # How far back the exporter's in-memory data actually goes,
             # regardless of the query's own filters -- lets the dashboard
             # show "data since: X" instead of implying full coverage of
@@ -4930,11 +4943,11 @@ class WorkflowExporter:
             ]
             via_queue_count = sum(1 for r in rs if r["via_merge_queue"])
             retest_vals = [r["retest_count"] or 0 for r in rs]
-            avg_open = avg(open_vals) or 0
+            avg_open = avg(open_vals)
             avg_approval = avg(approval_vals)
             avg_queue_wait = avg(queue_wait_vals)
             avg_approval_to_queue = avg(approval_to_queue_vals)
-            median_open = median(open_vals) or 0
+            median_open = median(open_vals)
             median_approval = median(approval_vals)
             median_queue_wait = median(queue_wait_vals)
             median_approval_to_queue = median(approval_to_queue_vals)

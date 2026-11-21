@@ -162,10 +162,15 @@ def get(api, kind, **params):
 
 
 def span_test(key, setup, call, teardown, wait_setup=0.0, wait_call=0.0, wait_teardown=0.0):
+    def total(*values):
+        return None if any(value is None for value in values) else sum(values)
+
     return {
         "test_key": key, "nodeid": key, "worker": "gw0", "status": "passed", "started_at": iso(NOW),
-        "duration_s": setup + call + teardown, "setup_s": setup, "call_s": call, "teardown_s": teardown,
-        "wait_s": wait_setup + wait_call + wait_teardown, "wait_setup_s": wait_setup, "wait_call_s": wait_call,
+        "duration_s": total(setup, call, teardown),
+        "setup_s": setup, "call_s": call, "teardown_s": teardown,
+        "wait_s": total(wait_setup, wait_call, wait_teardown),
+        "wait_setup_s": wait_setup, "wait_call_s": wait_call,
         "wait_teardown_s": wait_teardown, "shared_setup_s": 0.0, "waits": 1,
     }
 
@@ -851,6 +856,27 @@ def test_an_error_message_groups_without_its_ids_and_numbers():
 
 
 def test_a_tests_time_parts_add_up_to_its_phases():
+    parts = insights.time_parts(span_test("k", 10.0, 70.0, 20.0, wait_call=50.0))
+    assert sum(parts) == 100.0
+    # A phase the trace did not measure is None, never 0: "not measured"
+    # must not read as "took no time".
+    parts = insights.time_parts(span_test("k", None, 70.0, 20.0))
+    assert parts[0] is None and parts[1] == 0.0 and sum(
+        value for value in parts if value is not None) == 90.0
+
+
+def test_the_waits_page_answers_when_a_phase_was_not_measured(stores):
+    """A test_spans row with a NULL phase (the span rollup writes one
+    whenever a trace lacks a phase span) must not crash the waits page:
+    the part is excluded from its column and from the total."""
+    run = stores.run(NOW - timedelta(days=1))
+    stores.spans("cap-a", run, NOW - timedelta(days=1),
+                 [span_test("a", None, 70.0, 20.0, wait_call=None)])
+
+    document = get(stores.api(), "waits")
+    row = next(row for row in document["test_time"] if row["tests"])
+    assert row["setup"] == 0.0, "the unmeasured phase contributes nothing"
+    assert row["actions"] == round(70.0 / 3600, 2)
     row = {"setup_s": 10.0, "call_s": 50.0, "teardown_s": 5.0, "wait_s": 35.0, "wait_setup_s": 5.0,
            "wait_call_s": 30.0, "wait_teardown_s": 0.0}
 

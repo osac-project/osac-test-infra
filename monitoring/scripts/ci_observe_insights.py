@@ -1637,23 +1637,27 @@ class CIObserveInsights:
     def _test_time_rows(tests, filters):
         """Where the recorded tests' time went, per suite and for all: hours
         of setup, waiting for the product, test actions and teardown. The
-        four parts add up to the tests' own time."""
+        four parts add up to the tests' own time. A phase a trace did not
+        measure is None and is excluded from its column and from the total."""
+        def known(part_index):
+            return [value for parts in split for value in [parts[part_index]] if value is not None]
+
         rows = []
         for suite in (*filters.suites, "all") if filters.suite == "all" else filters.suites:
             group = [row for row in tests if suite == "all" or row.get("suite") == suite]
             split = [time_parts(row) for row in group]
-            total = sum(sum(parts) for parts in split)
+            total = sum(value for parts in split for value in parts if value is not None)
             rows.append({
                 "category": phases.suite_label(suite),
                 "suite": suite,
                 "tests": len(group),
                 "recorded_runs": len({row["capture_id"] for row in group}),
-                "setup": round(sum(parts[0] for parts in split) / 3600, 2) if group else None,
-                "waits": round(sum(parts[1] for parts in split) / 3600, 2) if group else None,
-                "actions": round(sum(parts[2] for parts in split) / 3600, 2) if group else None,
-                "teardown": round(sum(parts[3] for parts in split) / 3600, 2) if group else None,
-                "wait_share": ratio(sum(parts[1] for parts in split), total),
+                "setup": round(sum(known(0)) / 3600, 2) if group else None,
+                "waits": round(sum(known(1)) / 3600, 2) if group else None,
+                "actions": round(sum(known(2)) / 3600, 2) if group else None,
+                "teardown": round(sum(known(3)) / 3600, 2) if group else None,
+                "wait_share": ratio(sum(known(1)), total),
             })
             for index, part in enumerate(("setup", "waits", "actions", "teardown")):
-                rows[-1][f"{part}_share"] = ratio(sum(parts[index] for parts in split), total)
+                rows[-1][f"{part}_share"] = ratio(sum(known(index)), total)
         return rows

@@ -469,12 +469,13 @@ def test_the_e2e_summary_counts_the_suite_workflows(stored_runs, capsys):
 
 def run_tests_audit(tmp_path, insights, world, capsys, **options):
     status = e2e_main(tmp_path, insights, world, "--json", **options)
-    return status, json.loads(capsys.readouterr().out)["e2e"]["tests"]
+    document = json.loads(capsys.readouterr().out)
+    return status, document["e2e"]["tests"], document.get("summary", {}).get("tests") or {}
 
 
 def test_the_tests_audit_agrees_with_correct_stores(stored_runs, capsys):
     world, tmp_path, insights = stored_runs
-    status, tests = run_tests_audit(tmp_path, insights, world, capsys)
+    status, tests, _ = run_tests_audit(tmp_path, insights, world, capsys)
 
     assert tests["private"]["readable"] is True
     coverage = tests["coverage"]
@@ -515,7 +516,7 @@ def test_the_tests_audit_catches_a_wrong_test_history_and_missing_results(stored
         conn.execute("UPDATE test_runs SET passed = 1 WHERE run_id = 503")
         conn.execute("DELETE FROM test_runs WHERE run_id = 501")
 
-    status, tests = run_tests_audit(tmp_path, insights, world, capsys)
+    status, tests, _ = run_tests_audit(tmp_path, insights, world, capsys)
 
     assert tests["coverage"]["missing"] == 1
     assert tests["coverage"]["examples"][0].startswith("https://github.com/osac-project/osac/actions/runs/501 (vmaas)")
@@ -599,13 +600,17 @@ def test_a_network_failure_in_the_tests_checks_is_a_finding_not_a_crash(stored_r
     monkeypatch.setattr(audit.GitHub, "download", lambda self, url, limit: (_ for _ in ()).throw(
         urllib.error.URLError("connection reset")))
 
-    status, tests = run_tests_audit(tmp_path, insights, world, capsys)
+    status, tests, summary = run_tests_audit(tmp_path, insights, world, capsys)
 
     [audited] = tests["failed_runs"]
     assert audited["junit"] is None
     assert "download failed" in audited["junit_note"]
     assert audited["problems"] == []
-    assert status == 0
+    # An unchecked run is not a passed check: the audit fails, or a green
+    # audit over unchecked pages is the 2026-11-14 incident one layer up.
+    assert summary["unverified"] == 1
+    assert "download failed" in summary["unverified_note"]
+    assert status == 1
 
 
 def test_a_gate_job_is_not_a_failed_test_step():

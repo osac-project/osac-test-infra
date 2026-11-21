@@ -1198,6 +1198,10 @@ def summarize(result):
         summary["ok"] = summary["ok"] and (
             tests["private_readable"] is True and not tests["runs_missing"] and not tests["pages_claim_none"]
             and not tests["pages_error"] and not tests["pages_differ"] and not tests["history_differ"]
+            # A run whose JUnit could not be downloaded was never checked:
+            # "unverified" is not a pass, or the 2026-11-14 incident's shape
+            # returns one layer up -- a green audit over unchecked pages.
+            and not tests["unverified"]
         )
     return summary
 
@@ -1277,6 +1281,8 @@ def main(argv=None, github=None, now=None, api_get=read_api):
               # verified yes: "GitHub did not answer" is not a pass.
               or (private_readable is not None and private_readable is not True)
               or not (tests.get("coverage") or {}).get("ok", True)
+              # A run whose JUnit could not be downloaded was never checked.
+              or any(a.get("junit") is None for a in tests.get("failed_runs", []))
               or any(a["problems"] for a in tests.get("failed_runs", [])))
     return 1 if failed and not args.out else 0
 
