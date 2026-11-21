@@ -1032,6 +1032,32 @@ jobs:
           junit-path: ${{ runner.temp }}/test-output/junit.xml
           timeout-seconds: "120"
 
+      # sos report of the runner machine: host-level, not cluster-level.
+      # Timing: after the cluster-log gathering, before Teardown — the
+      # machine still holds the libvirt/podman footprint the tests left.
+      # Destination: osac-artifacts/sos-report/ → the same gitleaks scan and
+      # release gate as the cluster logs → the private osac-ci-artifacts
+      # repository (never this run's public artifacts).
+      # Collection bounds live in scripts/osac-sos-report (fixed plugin
+      # list, 25 MiB caps, --clean, --no-env-vars).
+      # Skipped when the job is cancelled: always() steps then share a
+      # 5-minute budget, which a full sos run cannot fit into.
+      # Diagnostics must never fail the job (same rule as the AI diagnosis
+      # steps below): a passing test run stays green even when the sos
+      # collection breaks, and a failed collection shows as a red step with
+      # an annotation instead.
+      - name: Collect sos report of the runner machine
+        if: always() && !cancelled()
+        timeout-minutes: 15
+        continue-on-error: true
+        uses: ./.github/actions/collect-sos-report
+        with:
+          # Only with the private publication configured: without the CI App
+          # credentials the upload falls back to this run's artifacts, which
+          # any signed-in user can download. The cluster logs keep that
+          # fallback; the host report must not.
+          private-publication: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' }}
+
       - name: Teardown
         if: always()
         env:

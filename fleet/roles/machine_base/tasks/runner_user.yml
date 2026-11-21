@@ -20,6 +20,7 @@
     - cluster-tool-compact-boot
     - osac-compact-boot-diagnostics
     - osac-compact-kubeconfig
+    - osac-sos-report
     - osac-install-cluster-tool
 
 - name: Run machine-init.sh runner-user

@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""Collect a plugin-limited, obfuscated sos report of the runner machine.
+
+Root helper for the post-test phase of the e2e workflows, in three steps:
+
+1. Validate the caller: sudo by github-runner, registered RUNNER_TEMP.
+2. Run sos with a fixed plugin list and size caps (the exposure contract).
+3. Leave the unpacked report in <RUNNER_TEMP>/osac-artifacts/sos-report/,
+   owned by the runner user, for the upload-artifacts action to scan and
+   publish with the other artifacts.
+
+--build keeps the report an unpacked tree on purpose: the gitleaks scan and
+the release gate must censor it file by file, and an archive would hide the
+content from them.
+
+Usage: sudo osac-sos-report RUNNER_TEMP
+"""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import pwd
+import re
+import signal
+import stat
+import subprocess
+import sys
+
+_RUNNER_TEMP = re.compile(r"^runner-[1-9][0-9]*/_work/_temp$")
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_SOS_BINARY_CANDIDATES = ("/usr/bin/sos", "/usr/sbin/sos")
+_SOS_TIMEOUT_SECONDS = 600
+# The plugin list and size caps are the exposure contract: change them only
+# with the sos-report step in the e2e workflows in mind. --clean obfuscates
+# hostnames, IPs and MACs; --no-env-vars keeps the job's secrets out.
+_SOS_ARGUMENTS = (
+    "report",
+    "--build",
+    "--clean",
+    # Never update the host-wide cleaner map (/etc/sos/cleaner/): it maps
+    # obfuscated values back to real hostnames and IPs, and a per-run map
+    # must not persist on the machine between runs.
+    "--no-update",
+    "--batch",
+    "--no-report",
+    "--no-env-vars",
+    "--log-size=25",
+    "--journal-size=25",
+    "--only-plugins=networking,firewall_tables,kernel,libvirt,podman,block,lvm2,nvme,systemd,system,rpm",
+    # The e2e jobs build and run their test containers as github-runner
+    # (rootless podman), which sos's podman plugin skips by default: it
+    # collects root's store only. allusers adds the runner's store -- on
+    # these machines that is the podman footprint the tests leave behind.
+    "-k",
+    "podman.allusers",
+    # The per-run map file is relative to --tmp-dir (see run_sos): sos
+    # derives its cleaner cache from the map path, so everything cleaner-
+    # related stays in the pinned staging directory and is discarded with
+    # it. A side effect is that no host map is loaded either -- each run
+    # obfuscates from scratch, which is the more private direction.
+    "--map-file=cleaner-map",
+)
+
+
+def fail(message: str, code: int = 1) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def find_sos() -> str:
+    for candidate in _SOS_BINARY_CANDIDATES:
+        if os.access(candidate, os.X_OK):
+            return candidate
+    fail("sos is not installed; re-run scripts/machine-init.sh (packages step)")
+
+
+def open_directory(path: str) -> int:
+    """Open every path component without following symlinks."""
+    components = path.strip("/").split("/")
+    if not components or ".." in components:
+        fail(f"Invalid directory path: {path}", 2)
+    fd = os.open("/", _DIRECTORY_FLAGS)
+    try:
+        for component in components:
+            next_fd = os.open(component, _DIRECTORY_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        return fd
+    except OSError:
+        os.close(fd)
+        raise
+
+
+def ensure_output_directory(parent_fd: int, name: str, uid: int, gid: int) -> int:
+    """Create (or reuse) a runner-owned subdirectory, never via a symlink."""
+    created = False
+    try:
+        os.mkdir(name, mode=0o750, dir_fd=parent_fd)
+        created = True
+    except FileExistsError:
+        pass
+    try:
+        # O_NOFOLLOW makes a symlinked name fail here (ELOOP/ENOTDIR)
+        # instead of opening the link's target.
+        fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+    except OSError as error:
+        fail(f"Could not open the output directory {name}: {error}")
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISDIR(info.st_mode):
+            raise OSError(f"{name} is not a directory")
+        if created:
+            # The parent is runner-owned, so the runner user can move another
+            # directory over the name between the mkdir and the open. The
+            # inode this call created is owned by the invoking user (root, in
+            # production) and empty; anything else was substituted and must
+            # not be adopted or re-owned.
+            if info.st_uid != os.geteuid() or os.listdir(fd):
+                raise OSError(f"{name} was replaced between creation and opening")
+        elif info.st_uid != uid:
+            raise OSError(f"{name} exists but is not a runner-owned directory")
+        os.fchown(fd, uid, gid)
+        os.fchmod(fd, 0o750)
+        return fd
+    except OSError as error:
+        os.close(fd)
+        fail(f"Could not prepare the output directory {name}: {error}")
+
+
+def remove_tree(directory_fd: int) -> None:
+    """Recursively delete a directory tree through its pinned descriptor."""
+    for entry in os.listdir(directory_fd):
+        info = os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            fd = os.open(entry, _DIRECTORY_FLAGS, dir_fd=directory_fd)
+            try:
+                remove_tree(fd)
+            finally:
+                os.close(fd)
+            os.rmdir(entry, dir_fd=directory_fd)
+        else:
+            os.unlink(entry, dir_fd=directory_fd)
+
+
+def run_sos(staging_fd: int) -> None:
+    """Run sos with its work directory pinned to the open staging fd.
+
+    sos receives /proc/self/fd/<fd> as --tmp-dir: the descriptor pins the
+    directory inode, so a path entry swapped by the runner user mid-run
+    cannot redirect where root writes. With --build, sos leaves the finished
+    report as <staging>/sosreport-* and removes its private work directory.
+
+    sos output is discarded, not relayed: the workflow log is public and
+    plugin output is host data. Only fixed status messages reach it. The
+    process runs in its own session so a timeout can kill the whole tree --
+    sos spawns plugin commands a direct kill would orphan mid-write.
+    """
+    process = subprocess.Popen(
+        [
+            find_sos(),
+            *_SOS_ARGUMENTS,
+            # --map-file above is relative to this directory.
+            f"--tmp-dir=/proc/self/fd/{staging_fd}",
+        ],
+        pass_fds=(staging_fd,),
+        env={"PATH": "/usr/sbin:/usr/bin"},
+        cwd="/",
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        returncode = process.wait(timeout=_SOS_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        fail(f"sos report did not finish within {_SOS_TIMEOUT_SECONDS}s")
+    except BaseException:
+        # Cancellation (SIGTERM/SIGINT) unwinds through here: stop the whole
+        # process group and reap sos before the staging cleanup runs, so it
+        # cannot keep writing into a directory being deleted.
+        with contextlib.suppress(OSError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        raise
+    if returncode != 0:
+        fail(f"sos report failed with exit code {returncode}")
+    # --clean reports success even when the cleaner itself failed: sos
+    # prints an error and hands over an unobfuscated report. The
+    # *-private_map file is written only at the end of a successful cleaner
+    # run, so its absence means the report was never obfuscated.
+    if not any(entry.startswith("sosreport-") and entry.endswith("-private_map") for entry in os.listdir(staging_fd)):
+        fail("sos finished but produced no cleaner map - the report is not obfuscated")
+
+
+def move_report(staging_fd: int, destination_fd: int) -> None:
+    """Move the finished sosreport-* directory out of the staging area.
+
+    sos also drops a <report>-private_map file next to it: the mapping from
+    obfuscated values back to the real hostnames and IPs. It is a file, so
+    the isdir check below leaves it behind in staging and the cleanup on the
+    way out deletes it — publishing it would undo --clean.
+    """
+    moved = False
+    for entry in os.listdir(staging_fd):
+        if not entry.startswith("sosreport-"):
+            continue
+        info = os.stat(entry, dir_fd=staging_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            continue
+        os.rename(entry, entry, src_dir_fd=staging_fd, dst_dir_fd=destination_fd)
+        moved = True
+    if not moved:
+        fail("sos finished but no sosreport-* directory was found")
+
+
+def chown_tree(directory_fd: int, uid: int, gid: int) -> None:
+    """Hand the moved report to the runner user, fd-anchored throughout."""
+    for entry in os.scandir(directory_fd):
+        if entry.is_symlink():  # never re-point or descend through a link
+            continue
+        if entry.is_dir(follow_symlinks=False):
+            fd = os.open(entry.name, _DIRECTORY_FLAGS, dir_fd=directory_fd)
+            try:
+                os.fchown(fd, uid, gid)
+                os.fchmod(fd, 0o750)
+                chown_tree(fd, uid, gid)
+            finally:
+                os.close(fd)
+        else:
+            info = entry.stat(follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            fd = os.open(entry.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            try:
+                os.fchown(fd, uid, gid)
+                os.fchmod(fd, 0o640)
+            finally:
+                os.close(fd)
+
+
+def discard_staging(runner_temp_fd: int) -> None:
+    """Best-effort by-name removal of the staging directory; never raises.
+
+    Handles leftovers from hard-killed earlier runs and rmdir's the name
+    after main()'s pinned-descriptor cleanup emptied it. Only a root-owned
+    staging is removed: the runner user owns RUNNER_TEMP and could replace
+    the name with their own directory, which is not ours to delete.
+    """
+    try:
+        fd = os.open(".sos-staging", _DIRECTORY_FLAGS, dir_fd=runner_temp_fd)
+    except OSError:
+        return
+    try:
+        if os.fstat(fd).st_uid != 0:
+            print("::warning::.sos-staging exists but is not root-owned; leaving it in place", file=sys.stderr)
+            return
+        remove_tree(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+    with contextlib.suppress(OSError):
+        os.rmdir(".sos-staging", dir_fd=runner_temp_fd)
+
+
+def normalize_report(staging_fd: int, uid: int, gid: int) -> None:
+    """Hand each finished report to the runner user while it is still in
+    staging, so the artifact tree only ever receives normalized entries:
+    a rename within the same filesystem keeps the ownership and modes it
+    finds. A failure here leaves nothing moved, and the cleanup takes the
+    unnormalized report away.
+    """
+    for entry in os.listdir(staging_fd):
+        if not entry.startswith("sosreport-"):
+            continue
+        info = os.stat(entry, dir_fd=staging_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            continue
+        fd = os.open(entry, _DIRECTORY_FLAGS, dir_fd=staging_fd)
+        try:
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, 0o750)
+            chown_tree(fd, uid, gid)
+        finally:
+            os.close(fd)
+
+
+def validated_runner_temp(path: str, runner_home: str) -> str:
+    """Check RUNNER_TEMP is a registered runner temp dir; return it as-is."""
+    prefix = os.path.join(runner_home, "action-runners") + "/"
+    if not path.startswith(prefix) or not _RUNNER_TEMP.fullmatch(path[len(prefix) :]):
+        fail("RUNNER_TEMP must be a registered github-runner temp directory", 2)
+    return path
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        fail("Usage: osac-sos-report RUNNER_TEMP", 2)
+    runner_temp_arg = sys.argv[1]
+
+    try:
+        runner = pwd.getpwnam("github-runner")
+    except KeyError:
+        fail("This command must run on a machine provisioned by scripts/machine-init.sh")
+    if os.environ.get("SUDO_USER") != runner.pw_name:
+        fail("This command must be run through sudo by github-runner")
+    try:
+        uid = int(os.environ["SUDO_UID"])
+        gid = int(os.environ["SUDO_GID"])
+    except (KeyError, ValueError):
+        fail("Could not determine the invoking runner's UID and GID")
+    if uid != runner.pw_uid:
+        fail("This command must be run through sudo by github-runner")
+
+    runner_temp_fd = open_directory(validated_runner_temp(runner_temp_arg, runner.pw_dir))
+    staging_fd = -1
+    staging_is_ours = False
+    try:
+        if os.fstat(runner_temp_fd).st_uid != uid:
+            fail("RUNNER_TEMP must be owned by the invoking runner user")
+        artifact_fd = ensure_output_directory(runner_temp_fd, "osac-artifacts", uid, gid)
+        try:
+            report_fd = ensure_output_directory(artifact_fd, "sos-report", uid, gid)
+        finally:
+            os.close(artifact_fd)
+
+        # Staging lives in RUNNER_TEMP, outside the uploaded artifact tree: a
+        # cancelled run can only leave it behind, never publish it half-done.
+        # A leftover from a hard-killed earlier run is removed first.
+        discard_staging(runner_temp_fd)
+        try:
+            os.mkdir(".sos-staging", mode=0o700, dir_fd=runner_temp_fd)
+        except FileExistsError:
+            fail(".sos-staging exists and is not ours; remove ${RUNNER_TEMP}/.sos-staging as an admin")
+        staging_fd = os.open(".sos-staging", _DIRECTORY_FLAGS, dir_fd=runner_temp_fd)
+        # The runner user owns RUNNER_TEMP and could swap the name between
+        # the mkdir and this open; a root-owned directory there can only be
+        # the one this helper just created.
+        if os.fstat(staging_fd).st_uid != 0:
+            fail("staging is not the root-owned directory this helper created")
+        staging_is_ours = True
+        run_sos(staging_fd)
+        normalize_report(staging_fd, uid, gid)
+        move_report(staging_fd, report_fd)
+        # Vouch for this collection independently of the cluster-log gather:
+        # the upload keeps the sos report even when the gather failed and
+        # its own .redaction-complete marker is missing.
+        fd = os.open(
+            ".collection-complete", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640, dir_fd=report_fd
+        )
+        try:
+            os.fchown(fd, uid, gid)
+        finally:
+            os.close(fd)
+    finally:
+        if staging_fd >= 0:
+            # Cleanup goes through the pinned descriptor: the runner user
+            # owns RUNNER_TEMP and can rename the staging directory away
+            # from its name mid-run, which by-name cleanup would then miss
+            # (the *-private_map must not survive either way). Only the
+            # directory this helper created -- verified root-owned before
+            # sos ran -- is cleaned this way; a substituted directory
+            # belongs to the runner user and is left untouched. What can
+            # linger after a rename is an emptied, root-owned 0700
+            # directory in the ephemeral RUNNER_TEMP.
+            if staging_is_ours:
+                with contextlib.suppress(OSError):
+                    remove_tree(staging_fd)
+            os.close(staging_fd)
+        discard_staging(runner_temp_fd)
+        os.close(runner_temp_fd)
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))  # the finally blocks clean up
+    main()

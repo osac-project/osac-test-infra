@@ -28,6 +28,7 @@
       - openssh-clients
       - iproute
       - iputils
+      - sos
     state: present
 
 - name: Install ansible-builder (needed for AAP execution-environment images)

@@ -195,6 +195,110 @@ class UploadArtifactsTest(unittest.TestCase):
         self.assertLess(gate, names.index("Upload artifacts"))
 
 
+    def test_missing_marker_keeps_only_completed_sos_report(self) -> None:
+        # The cluster-log gather failed (no .redaction-complete), but the sos
+        # report vouches for itself with its own marker: it is published,
+        # the unverified cluster logs are not.
+        (self.artifacts / ".redaction-complete").unlink()
+        sos = self.artifacts / "sos-report"
+        sos.mkdir()
+        (sos / ".collection-complete").write_text("complete\n")
+        (sos / "sosreport-x" / "sos_commands").mkdir(parents=True)
+        (sos / "sosreport-x" / "sos_commands" / "networking.txt").write_text("host data\n")
+        result = self.run_step("Verify redaction complete")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("publishing the completed sos report only", result.stdout)
+        self.assertFalse((self.artifacts / "log.txt").exists())
+        self.assertTrue((sos / ".collection-complete").is_file())
+        self.assertTrue((sos / "sosreport-x" / "sos_commands" / "networking.txt").is_file())
+        self.assertTrue((self.artifacts / ".redaction-complete").is_file())
+
+    def test_missing_marker_without_sos_marker_still_fails_closed(self) -> None:
+        (self.artifacts / ".redaction-complete").unlink()
+        sos = self.artifacts / "sos-report"
+        sos.mkdir()
+        (sos / "sosreport-x").mkdir()
+        result = self.run_step("Verify redaction complete")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(self.artifacts.exists())
+
+    def fake_gitleaks_engine(self, findings: list[dict]) -> None:
+        # A docker stand-in: parses the step's real -v report-dir mount and
+        # --report-path argument and writes the given findings there, so the
+        # step's jq/redact logic runs against them exactly as in production.
+        binaries = self.temp / "gitleaks-bin"
+        binaries.mkdir()
+        for tool in ("bash", "jq", "rm", "python3", "mkdir", "chmod", "cp", "basename", "seq"):
+            (binaries / tool).symlink_to(shutil.which(tool))
+        report = self.temp / "engine-findings.json"
+        report.write_text(json.dumps(findings))
+        script = binaries / "docker"
+        script.write_text(
+            "#!/bin/bash\n"
+            "args=(\"$@\")\n"
+            "mount_src=; report_name=\n"
+            "for ((i=0; i<${#args[@]}; i++)); do\n"
+            "  case \"${args[$i]}\" in\n"
+            "    -v) case \"${args[$((i+1))]}\" in *:/out*) mount_src=\"${args[$((i+1))]%%:/out*}\";; esac ;;\n"
+            "    --report-path=*) report_name=\"$(basename \"${args[$i]#--report-path=}\")\" ;;\n"
+            "  esac\n"
+            "done\n"
+            f"cp {shlex.quote(str(report))} \"${{mount_src}}/${{report_name}}\"\n"
+        )
+        script.chmod(0o755)
+        self.environment["PATH"] = str(binaries)
+
+    def test_sos_report_findings_remove_only_the_sos_report(self) -> None:
+        # Residual findings confined to sos-report/ drop the sos report and
+        # keep the cluster logs; the run does not fail.
+        sos = self.artifacts / "sos-report"
+        sos.mkdir()
+        (sos / "sosreport-x.txt").write_text("leak\n")
+        findings = [{"RuleID": "generic", "File": "/scan/sos-report/sosreport-x.txt", "StartLine": 1}]
+        self.fake_gitleaks_engine(findings)
+        result = self.run_step("Scan artifacts with gitleaks", {"private-repo": "osac-project/osac-ci-artifacts"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("removing the sos report and continuing with the cluster logs", result.stdout)
+        self.assertFalse(sos.exists())
+        self.assertTrue((self.artifacts / "log.txt").is_file())
+
+    def test_cluster_log_findings_still_fail_closed(self) -> None:
+        findings = [{"RuleID": "generic", "File": "/scan/log.txt", "StartLine": 1}]
+        self.fake_gitleaks_engine(findings)
+        result = self.run_step("Scan artifacts with gitleaks", {"private-repo": "osac-project/osac-ci-artifacts"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("removing artifacts instead of uploading", result.stdout)
+        self.assertFalse(self.artifacts.exists())
+
+    def test_mixed_findings_fail_closed(self) -> None:
+        # One sos finding and one cluster-log finding: the sos-only drop
+        # must not apply, the whole upload fails closed.
+        sos = self.artifacts / "sos-report"
+        sos.mkdir()
+        (sos / "sosreport-x.txt").write_text("leak\n")
+        findings = [
+            {"RuleID": "generic", "File": "/scan/sos-report/sosreport-x.txt", "StartLine": 1},
+            {"RuleID": "generic", "File": "/scan/log.txt", "StartLine": 1},
+        ]
+        self.fake_gitleaks_engine(findings)
+        result = self.run_step("Scan artifacts with gitleaks", {"private-repo": "osac-project/osac-ci-artifacts"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(self.artifacts.exists())
+
+    def test_unmarked_sos_report_is_dropped_with_completed_gather(self) -> None:
+        # The cluster gather completed (.redaction-complete present): an sos
+        # report that lost its marker before vouching for itself must not
+        # ride along -- the cluster logs publish without it.
+        sos = self.artifacts / "sos-report"
+        sos.mkdir()
+        (sos / "sosreport-x").mkdir()
+        result = self.run_step("Verify redaction complete")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("sos report is incomplete", result.stdout)
+        self.assertFalse(sos.exists())
+        self.assertTrue((self.artifacts / "log.txt").is_file())
+
+
 class PublishPrivateArtifactsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.action = load_action("publish-private-artifacts")
@@ -410,7 +514,6 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
         mint = next(step for step in self.action["runs"]["steps"] if step["name"].startswith("Mint a token"))
         self.assertEqual(mint["with"]["permissions"], '{"actions":"write"}')
         self.assertEqual(mint["with"]["repositories"], "${{ steps.repo.outputs.name }}")
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

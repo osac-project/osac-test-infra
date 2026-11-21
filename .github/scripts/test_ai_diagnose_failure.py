@@ -1129,5 +1129,101 @@ class BuildDiagnosisBodyTests(unittest.TestCase):
         self.assertTrue(available)
 
 
+class DiagnosisExcludedSubdirsTests(unittest.TestCase):
+    """The host-level sos report ships with the artifacts but must never
+    reach the model: every path the diagnosis can read -- the log-signal
+    fallback, the file listing, and the read_artifact_file tool -- skips
+    the excluded top-level subdirectories.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.tmpdir = directory.name
+        # One matching file inside the excluded sos-report/ tree, one in
+        # regular cluster evidence -- same content, only the location
+        # differs, so the assertions prove filtering and not pattern drift.
+        excluded_dir = os.path.join(self.tmpdir, "sos-report", "sosreport-x")
+        os.makedirs(excluded_dir)
+        with open(os.path.join(excluded_dir, "sos_commands.txt"), "w") as f:
+            f.write("ERROR from the host sos report\n")
+        evidence_dir = os.path.join(self.tmpdir, "mgmt-cluster")
+        os.makedirs(evidence_dir)
+        with open(os.path.join(evidence_dir, "pods.txt"), "w") as f:
+            f.write("ERROR from cluster evidence\n")
+
+    def test_extract_log_signal_skips_excluded_subdir(self):
+        result = ai_diagnose_failure.extract_log_signal(self.tmpdir)
+        self.assertIn("ERROR from cluster evidence", result)
+        self.assertNotIn("sos report", result)
+
+    def test_build_file_listing_omits_excluded_subdir(self):
+        result = ai_diagnose_failure.build_file_listing(self.tmpdir)
+        self.assertIn("mgmt-cluster/pods.txt", result)
+        self.assertNotIn("sos-report", result)
+
+    def test_read_tool_rejects_excluded_subdir(self):
+        tool = ai_diagnose_failure.make_read_artifact_file_tool(self.tmpdir)
+        result = tool("sos-report/sosreport-x/sos_commands.txt")
+        self.assertIn("rejected", result)
+
+    def test_redaction_report_is_filtered_before_read_limits(self) -> None:
+        # A report larger than the tool's read limit, with sos-report
+        # entries early: every bounded slice the model can request is
+        # filtered -- the offset math runs on the filtered bytes, so no
+        # window ever lands on sos metadata.
+        import json
+
+        report = {
+            "censored": [
+                {"file": "sos-report/sosreport-a/cmd.txt", "rule": "r", "count": 1},
+                *[{"file": f"mgmt-cluster/pods-{i}.log", "rule": "r", "count": 1} for i in range(200)],
+            ],
+            "withheld": [
+                {"file": "sos-report/sosreport-b/hidden", "reason": "symlink"},
+                {"file": "mgmt-cluster/kept.log", "reason": "ok"},
+            ],
+        }
+        path = os.path.join(self.tmpdir, "redaction-report.json")
+        with open(path, "w") as f:
+            f.write(json.dumps(report))
+        self.assertGreater(os.path.getsize(path), ai_diagnose_failure.MAX_TOOL_READ_CHARS)
+        tool = ai_diagnose_failure.make_read_artifact_file_tool(self.tmpdir)
+        first = tool("redaction-report.json")
+        self.assertNotIn("sos-report", first)
+        self.assertIn("mgmt-cluster/pods-0.log", first)
+        self.assertIn("bytes 0-", first)  # bounded, not the whole file
+        offset_end = int(first.split("bytes 0-")[1].split(" ")[0])
+        continuation = tool("redaction-report.json", offset=offset_end)
+        self.assertNotIn("sos-report", continuation)
+
+    def test_hidden_files_are_invisible_to_the_fallback(self) -> None:
+        hidden_dir = os.path.join(self.tmpdir, ".hidden")
+        os.makedirs(hidden_dir)
+        with open(os.path.join(hidden_dir, "noise.txt"), "w") as f:
+            f.write("ERROR hidden noise\n")
+        with open(os.path.join(self.tmpdir, ".noise.txt"), "w") as f:
+            f.write("ERROR more hidden noise\n")
+        result = ai_diagnose_failure.extract_log_signal(self.tmpdir)
+        self.assertNotIn("hidden noise", result)
+        self.assertIn("ERROR from cluster evidence", result)
+
+    def test_nested_same_named_directory_is_not_excluded(self):
+        nested_dir = os.path.join(self.tmpdir, "mgmt-cluster", "sos-report")
+        os.makedirs(nested_dir)
+        with open(os.path.join(nested_dir, "nested.txt"), "w") as f:
+            f.write("ERROR nested evidence is cluster data\n")
+        # All three read paths treat the nested directory as cluster
+        # evidence: the listing, the log-signal fallback, and the tool.
+        listing = ai_diagnose_failure.build_file_listing(self.tmpdir)
+        self.assertIn("mgmt-cluster/sos-report/nested.txt", listing)
+        signal = ai_diagnose_failure.extract_log_signal(self.tmpdir)
+        self.assertIn("ERROR nested evidence is cluster data", signal)
+        tool = ai_diagnose_failure.make_read_artifact_file_tool(self.tmpdir)
+        self.assertEqual(tool("mgmt-cluster/sos-report/nested.txt"), "ERROR nested evidence is cluster data\n")
+
+
 if __name__ == "__main__":
     unittest.main()

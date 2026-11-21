@@ -235,6 +235,7 @@ To remove all runners from a machine:
 routine e2e CI invokes (`cluster-tool flavors/pull/destroy/boot/cleanup-haproxy`,
 compact boot through the local-only `cluster-tool-compact-boot` wrapper,
 selected compact boot diagnostics through `osac-compact-boot-diagnostics`,
+post-test sos reports through `osac-sos-report`,
 cluster-tool upgrades through `osac-install-cluster-tool vX.Y.Z` (see
 `fleet/README.md`, "Releasing a new cluster-tool version"),
 `ip link` on `br-*` bridges, and the `auth.json`/SNO/compact kubeconfig plumbing

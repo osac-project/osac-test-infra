@@ -1,0 +1,34 @@
+---
+name: Collect sos report of the runner machine
+description: >-
+  Host-level sos report through the root osac-sos-report helper, for the
+  post-test phase of the e2e workflows. Skips itself with a notice when the
+  helper is not installed (fleet rollout grace) or when the private artifact
+  publication is not configured -- without the CI App credentials the upload
+  falls back to this run's artifacts, which any signed-in user can download,
+  and the host report must not take that fallback. The caller keeps the step
+  non-blocking (continue-on-error) and owns placement, timeout and the
+  cancel condition.
+
+inputs:
+  private-publication:
+    description: "Whether the CI App credentials for the private artifact repository are configured (\"true\"/\"false\")"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Run osac-sos-report
+      shell: bash
+      env:
+        PRIVATE_PUBLICATION: ${{ inputs.private-publication }}
+      run: |
+        if [[ ! -x /usr/local/sbin/osac-sos-report ]]; then
+          echo "::notice::osac-sos-report is not installed - skipping the sos report (deploy via machine-init.sh, or the fleet playbook tags runner-user,packages)"
+          exit 0
+        fi
+        if [[ "${PRIVATE_PUBLICATION}" != "true" ]]; then
+          echo "::notice::CI App credentials for the private artifact repository are not configured - skipping the sos report"
+          exit 0
+        fi
+        sudo /usr/local/sbin/osac-sos-report "${RUNNER_TEMP}"

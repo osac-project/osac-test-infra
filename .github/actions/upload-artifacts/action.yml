@@ -95,16 +95,40 @@ runs:
       env:
         ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
       run: |
+        # An sos report without its own marker was interrupted before it
+        # could vouch for itself: drop it, whatever the cluster state -- it
+        # must not ride along a successful gather or a retention path.
+        if [[ -d "${ARTIFACT_DIR}/sos-report" ]] \
+          && [[ ! -f "${ARTIFACT_DIR}/sos-report/.collection-complete" ]]; then
+          echo "::warning::sos report is incomplete — removing it"
+          rm -rf "${ARTIFACT_DIR}/sos-report"
+        fi
         if [[ -d "${ARTIFACT_DIR}/compact-boot" ]] \
           && [[ ! -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
-          echo "::error::Compact-boot diagnostics are incomplete — removing artifacts instead of uploading"
-          rm -rf "${ARTIFACT_DIR}"
-          exit 1
+          if [[ -f "${ARTIFACT_DIR}/sos-report/.collection-complete" ]]; then
+            # Incomplete compact-boot diagnostics with a completed sos report:
+            # same retention shape as the cluster-marker path below.
+            echo "::warning::Compact-boot diagnostics are incomplete — publishing the completed sos report only"
+            find "${ARTIFACT_DIR}" -mindepth 1 -maxdepth 1 ! -name 'sos-report' -exec rm -rf -- {} +
+            touch "${ARTIFACT_DIR}/.redaction-complete"
+          else
+            echo "::error::Compact-boot diagnostics are incomplete — removing artifacts instead of uploading"
+            rm -rf "${ARTIFACT_DIR}"
+            exit 1
+          fi
         fi
         if [[ -d "${ARTIFACT_DIR}" ]] && [[ ! -f "${ARTIFACT_DIR}/.redaction-complete" ]]; then
-          echo "::error::Gather script did not complete — refusing to upload"
-          rm -rf "${ARTIFACT_DIR}"
-          exit 1
+          if [[ -f "${ARTIFACT_DIR}/sos-report/.collection-complete" ]]; then
+            # The cluster-log gather failed, but the sos report vouches for
+            # itself (its own marker): keep it, drop the unverified rest.
+            echo "::warning::Cluster-log collection did not complete — publishing the completed sos report only"
+            find "${ARTIFACT_DIR}" -mindepth 1 -maxdepth 1 ! -name 'sos-report' -exec rm -rf -- {} +
+            touch "${ARTIFACT_DIR}/.redaction-complete"
+          else
+            echo "::error::Gather script did not complete — refusing to upload"
+            rm -rf "${ARTIFACT_DIR}"
+            exit 1
+          fi
         fi
         # The marker stays: the cancelled variant of this step may run again
         # after a cancel interrupted this one. A new collection removes it
@@ -255,7 +279,23 @@ runs:
               || fail_closed "Could not read the final gitleaks report"
             if [[ "${REMAINING}" -gt 0 ]]; then
               if [[ "${FAIL_CLOSED}" == "true" ]]; then
-                fail_closed "${REMAINING} finding(s) remain in ${SCAN_SUBJECT} after ${MAX_PASSES} redaction passes"
+                # The sos report is best-effort host diagnostics: a finding
+                # that survives redaction removes the sos report alone,
+                # never the cluster logs it ships beside.
+                SOS_FINDINGS=$(jq '[.[] | select((.File | ltrimstr("/")) | ltrimstr("scan/") | startswith("sos-report/"))] | length' "${FINAL_REPORT}") \
+                  || fail_closed "Could not read the sos-report findings of the final pass"
+                if [[ "$((REMAINING - SOS_FINDINGS))" -eq 0 ]]; then
+                  echo "::warning::${SOS_FINDINGS} finding(s) remain in the sos report after ${MAX_PASSES} redaction passes — removing the sos report and continuing with the cluster logs"
+                  rm -rf "${ARTIFACT_DIR}/sos-report"
+                  # Publication is only authorized once the subtree is
+                  # really gone; a silent rm failure must not leak it.
+                  if [[ -e "${ARTIFACT_DIR}/sos-report" ]]; then
+                    fail_closed "could not remove the sos report after unredactable findings"
+                  fi
+                  break
+                else
+                  fail_closed "${REMAINING} finding(s) remain in ${SCAN_SUBJECT} after ${MAX_PASSES} redaction passes"
+                fi
               fi
               echo "::warning::${REMAINING} finding(s) remain after ${MAX_PASSES} redaction passes — uploading anyway (post-upload scanner will cover)"
               echo "Remaining findings (sanitized):"

@@ -14,7 +14,6 @@ dump, to keep the prompt (and cost) predictable regardless of how much a
 given failure happened to log.
 """
 import datetime
-import glob
 import json
 import os
 import re
@@ -65,6 +64,19 @@ MAX_JUNIT_BYTES = 20 * 1024 * 1024
 
 ARTIFACT_DIR = os.environ.get("ARTIFACT_DIR", "")
 JUNIT_PATH = os.environ.get("JUNIT_PATH", "")
+# Top-level subdirectories of ARTIFACT_DIR that never reach the model. The
+# host-level sos report (scripts/osac-sos-report) is machine diagnostics,
+# not test evidence: it ships with the uploaded artifacts but stays out of
+# the diagnosis -- the log-signal fallback, the file listing, and the
+# read_artifact_file tool all skip it.
+DIAGNOSIS_EXCLUDED_SUBDIRS = ("sos-report",)
+
+
+def diagnosis_path_is_excluded(relative_path):
+    """True when a path relative to ARTIFACT_DIR sits inside one of the
+    DIAGNOSIS_EXCLUDED_SUBDIRS (first path component match)."""
+    first_component = relative_path.split(os.sep, 1)[0] if relative_path else ""
+    return first_component in DIAGNOSIS_EXCLUDED_SUBDIRS
 # Path to the raw GitHub Actions log for the e2e-*-full-install job itself
 # (downloaded via `gh api .../actions/jobs/{id}/logs`) -- pre-filtered by
 # the caller to just the FAILING step's own timestamp window when that
@@ -391,10 +403,27 @@ def extract_log_signal(artifact_dir):
     # this fallback doesn't burn its cap on `failed=0`/`unreachable=0`
     # Ansible recap lines either.
     matches = []
-    paths = sorted(
-        glob.glob(os.path.join(artifact_dir, "**", "*.txt"), recursive=True)
-    ) + sorted(glob.glob(os.path.join(artifact_dir, "**", "*.log"), recursive=True))
-    for path in paths:
+    # Walk instead of recursive globs so the excluded subdirectory is pruned
+    # at the artifact root before any filesystem work (a same-named directory
+    # nested deeper is cluster evidence and stays). Keeps the original
+    # .txt-before-.log priority.
+    text_paths = []
+    log_paths = []
+    for root, dirs, files in os.walk(artifact_dir):
+        if root == artifact_dir:
+            dirs[:] = [d for d in dirs if d not in DIAGNOSIS_EXCLUDED_SUBDIRS]
+        # Hidden entries were invisible to the glob this walk replaced:
+        # keep them invisible, or one dotfile could exhaust the match cap
+        # before the visible cluster logs reach the model.
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for name in files:
+            if name.startswith("."):
+                continue
+            if name.endswith(".txt"):
+                text_paths.append(os.path.join(root, name))
+            elif name.endswith(".log"):
+                log_paths.append(os.path.join(root, name))
+    for path in sorted(text_paths) + sorted(log_paths):
         rel_path = os.path.relpath(path, artifact_dir)
         try:
             with open(path, "r", errors="replace") as f:
@@ -576,7 +605,11 @@ def build_file_listing(artifact_dir):
     if not artifact_dir or not os.path.isdir(artifact_dir):
         return "(no artifact directory found)"
     entries = []
-    for root, _dirs, files in os.walk(artifact_dir):
+    for root, dirs, files in os.walk(artifact_dir):
+        # Skip the excluded subdirectories at the artifact root only (a
+        # same-named directory nested deeper is cluster evidence).
+        if root == artifact_dir:
+            dirs[:] = [d for d in dirs if d not in DIAGNOSIS_EXCLUDED_SUBDIRS]
         for name in sorted(files):
             full = os.path.join(root, name)
             rel = os.path.relpath(full, artifact_dir)
@@ -594,6 +627,29 @@ def build_file_listing(artifact_dir):
     if truncated:
         lines.append(f"... ({len(entries)} of more shown, list truncated)")
     return "\n".join(lines)
+
+
+_REDACTION_REPORT_NAME = "redaction-report.json"
+
+
+def _redaction_report_without_excluded(text):
+    """Drop top-level sos-report entries from a redaction report the model
+    reads: host diagnostics stay out of the diagnosis even as redaction
+    metadata. The file on disk is unchanged; only the model's view of it."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return text
+    for section in ("censored", "withheld"):
+        entries = data.get(section)
+        if isinstance(entries, list):
+            data[section] = [
+                entry
+                for entry in entries
+                if not isinstance(entry, dict)
+                or not str(entry.get("file", "")).startswith("sos-report" + os.sep)
+            ]
+    return json.dumps(data, indent=2) + "\n"
 
 
 def make_read_artifact_file_tool(artifact_dir):
@@ -634,10 +690,24 @@ def make_read_artifact_file_tool(artifact_dir):
         candidate = os.path.realpath(os.path.join(root, path))
         if candidate != root and not candidate.startswith(root + os.sep):
             return "(rejected: path escapes the artifact directory)"
+        if diagnosis_path_is_excluded(os.path.relpath(candidate, root)):
+            return "(rejected: path is inside an excluded subdirectory)"
         if not os.path.isfile(candidate):
             return "(no such file)"
+        # The redaction report is filtered as a whole, before any offset or
+        # read-limit logic, so no slice of it ever carries sos-report
+        # metadata. Every other file is read as a bounded window only.
+        filtered = None
+        if os.path.basename(candidate) == _REDACTION_REPORT_NAME:
+            try:
+                with open(candidate, "rb") as f:
+                    filtered = _redaction_report_without_excluded(
+                        f.read().decode("utf-8", errors="replace")
+                    ).encode("utf-8")
+            except OSError as exc:
+                return f"(could not read file: {exc})"
         try:
-            size = os.path.getsize(candidate)
+            size = len(filtered) if filtered is not None else os.path.getsize(candidate)
         except OSError as exc:
             return f"(could not read file: {exc})"
         if size == 0:
@@ -647,18 +717,21 @@ def make_read_artifact_file_tool(artifact_dir):
             return f"(offset {offset} is past the end of the {size}-byte file)"
         read_len = min(MAX_TOOL_READ_CHARS, size - start)
         end = start + read_len
-        # Seeks to the exact range and reads only read_len bytes -- never
-        # loads the whole file first. Pod logs up to ~2MB have been seen
-        # in practice, and a single diagnosis can call this tool up to
-        # MAX_TOOL_CALLS times, so reading the full file just to slice an
-        # 8KB window out of it would be repeated, avoidable I/O and
-        # memory overhead on every call.
-        try:
-            with open(candidate, "rb") as f:
-                f.seek(start)
-                raw = f.read(read_len)
-        except OSError as exc:
-            return f"(could not read file: {exc})"
+        if filtered is not None:
+            raw = filtered[start:end]
+        else:
+            # Seeks to the exact range and reads only read_len bytes -- never
+            # loads the whole file first. Pod logs up to ~2MB have been seen
+            # in practice, and a single diagnosis can call this tool up to
+            # MAX_TOOL_CALLS times, so reading the full file just to slice an
+            # 8KB window out of it would be repeated, avoidable I/O and
+            # memory overhead on every call.
+            try:
+                with open(candidate, "rb") as f:
+                    f.seek(start)
+                    raw = f.read(read_len)
+            except OSError as exc:
+                return f"(could not read file: {exc})"
         # Decoded per-slice (not the whole file) -- a multi-byte UTF-8
         # character split at a slice boundary can garble one character at
         # the edge; errors="replace" turns that into a single "?" rather
