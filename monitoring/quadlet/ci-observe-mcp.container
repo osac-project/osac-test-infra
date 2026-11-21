@@ -10,12 +10,13 @@
 # ~/.monitoring-server/.env (see monitoring-setup.sh's warning and the
 # module docstring of scripts/ci_observe_mcp.py):
 #   MCP_GITHUB_CLIENT_ID, MCP_GITHUB_CLIENT_SECRET  (the GitHub OAuth app;
-#     callback URL https://<canonical-host>:3443/oauth/callback)
+#     callback URL https://osac-ci-1.redhat.com/oauth/callback)
 #   MCP_GRAFANA_SERVICE_TOKEN  (a Grafana service-account token; the
 #     account needs the Admin basic role and nothing more -- the server
 #     reads the org's user list to admit logins Grafana knows)
 #   MCP_SESSION_SECRET  (any long random string; signs the 12-hour tokens)
-#   MCP_EXTERNAL_URL  (the origin it is published under, with the port)
+#   MCP_EXTERNAL_URL  (https://osac-ci-1.redhat.com -- the origin the VPN
+#     and the runner fleet both reach through HAProxy's :443 SNI route)
 #
 # Quadlet generates a systemd unit (ci-observe-mcp.service) from this file.
 

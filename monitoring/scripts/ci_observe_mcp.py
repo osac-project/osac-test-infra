@@ -29,17 +29,22 @@ a missing one stops the server with the full list, before it binds.
 Run inside the exporter container image (see quadlet/ci-observe-mcp.container):
 
     MCP_GITHUB_CLIENT_ID=... MCP_GITHUB_CLIENT_SECRET=... \\
-    MCP_GRAFANA_URL=https://osac-ci-1.redhat.com:3000 \\
+    MCP_GRAFANA_URL=https://osac-ci.redhat.com:3000 \\
     MCP_GRAFANA_SERVICE_TOKEN=... MCP_SESSION_SECRET=... \\
-    MCP_EXTERNAL_URL=https://osac-ci-1.redhat.com:3443 \\
+    MCP_EXTERNAL_URL=https://osac-ci-1.redhat.com \\
     python3 ci_observe_mcp.py
 
-MCP_EXTERNAL_URL is the ORIGIN this server is published under (Caddy on
-:3443 proxies /mcp and the OAuth endpoints to it); the MCP endpoint itself
-is {MCP_EXTERNAL_URL}/mcp, and the OAuth discovery documents sit at
-{MCP_EXTERNAL_URL}/.well-known/... where the MCP spec's clients look for
-them. The GitHub OAuth app's callback URL is
-{MCP_EXTERNAL_URL}/oauth/callback.
+MCP_EXTERNAL_URL is the ORIGIN this server is published under. The machine's
+firewall leaves only :443 open to the VPN, and HAProxy's SNI route for
+osac-ci-1.redhat.com on :443 ends at Caddy's OTLP vhost, so the MCP server
+shares that vhost (the Caddyfile routes /mcp and the OAuth endpoints to
+127.0.0.1:9105 without the fleet's basic auth; the server's own OAuth gate
+protects them). The MCP endpoint itself is {MCP_EXTERNAL_URL}/mcp, and the
+OAuth discovery documents sit at {MCP_EXTERNAL_URL}/.well-known/... where
+the MCP spec's clients look for them. The GitHub OAuth app's callback URL
+is {MCP_EXTERNAL_URL}/oauth/callback. The certificate is Caddy's internal
+CA: clients must trust it (the root is at
+~/.monitoring-server/data/caddy/caddy/pki/authorities/local/root.crt).
 """
 
 from __future__ import annotations

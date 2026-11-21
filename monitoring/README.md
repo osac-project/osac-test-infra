@@ -104,7 +104,7 @@ starts from that deploy. Every panel and the daily digest filter on
 | `workflow-exporter` | central only | 127.0.0.1:9103 | Workflow queue depth, run history/duration, failed-step counts (via GitHub API); SQLite-backed, 30-day retention. Also serves the JSON API the ci-observe dashboards read, including `/api/ci-observe/runs`, which joins the run history to Tempo's recording ids. The container runs with `Network=host` so it can reach the host's Tempo on 127.0.0.1:3210 (`CI_OBSERVE_TEMPO_URL` overrides it); `BIND_ADDRESS=127.0.0.1` keeps its own API off the network interfaces. |
 | `service-health-textfile.timer` | every machine | n/a | Writes `osac_service_active` textfile-collector metrics every 30s |
 | `ci-observe-audit.timer` | central only | n/a | Daily at 03:35 UTC: `ci_observe_audit.py` checks the ci-observe stores and API against GitHub (every completed E2E run of 28 days listed, a sample of runs and pull requests compared field by field, the Overview recounted, the test results' coverage, and the newest failed runs' failed tests on the run page and in the test history against their own JUnit files) and writes `ci-observe-audit.json`, which every ci-observe page shows under **About these numbers** |
-| `ci-observe-mcp.service` | central only | 127.0.0.1:9105 | The ci-observe MCP server (`ci_observe_mcp.py`): typed questions over the exporter's JSON API, answered with rows, the exact API URL, a Grafana URL and the about row. Caddy's `:3443` vhost proxies `/mcp` and its OAuth endpoints to it, so clients on the VPN reach it at `https://<canonical-host>:3443/mcp`. Login is GitHub OAuth, and only GitHub logins that have a Grafana user are admitted. Starts only once its secrets are in `~/.monitoring-server/.env` (`monitoring-setup.sh` warns and skips it otherwise) |
+| `ci-observe-mcp.service` | central only | 127.0.0.1:9105 | The ci-observe MCP server (`ci_observe_mcp.py`): typed questions over the exporter's JSON API, answered with rows, the exact API URL, a Grafana URL and the about row. The machine's firewall leaves only `:443` open to the VPN, so it shares Caddy's OTLP vhost: HAProxy's SNI route for `osac-ci-1.redhat.com` ends at that vhost, which routes `/mcp` and the OAuth endpoints to the server (no basic auth; the server's own GitHub-OAuth gate protects them). Clients on the VPN reach it at `https://osac-ci-1.redhat.com/mcp`. Login is GitHub OAuth, and only GitHub logins that have a Grafana user are admitted. Starts only once its secrets are in `~/.monitoring-server/.env` (`monitoring-setup.sh` warns and skips it otherwise) |
 | `monitoring-tunnel@<host>--<port>.service` | central only, one per agent | n/a | Persistent SSH tunnel forwarding an agent's `node_exporter:9100` and `haproxy_exporter:9104` to local ports `<port>`/`<port>+1` on the central machine |
 | `ci-observe-tempo210` | central only | 127.0.0.1:3210 (API), 14418 (OTLP) | Tempo 2.10 traces backend for ci-observe, separate from the LGTM bundle (Tempo 3.1.1's TraceQL search bug grafana/tempo#8054 drops ~1/3 of matching spans). The LGTM bundle's Tempo stays up on 3200 as the read-only archive datasource `ci-observe-traces-archive`. See [The ci-observe live OTLP ingest](#the-ci-observe-live-otlp-ingest-caddy-vhost--haproxy-route). |
 | `otelcol-router.service` | central only (host service, root) | 127.0.0.1:14318 (OTLP), 127.0.0.1:18888 (self-metrics) | Splits the runner fleet's OTLP pushes by signal: traces → `ci-observe-tempo210` on 14418, logs + metrics → the ci-observe LGTM bundle's OTLP receiver on 4318. A host process on purpose (rootless podman/pasta cross-container networking silently ate OTLP in earlier container-based router attempts); deployed as root by `scripts/deploy-otelcol-router.sh`, not by `monitoring-setup.sh`. Scraped by central Prometheus for exporter errors and accepted/sent counters. |
@@ -434,7 +434,7 @@ API, never a database.
 One-time setup, all three manual:
 
 1. **GitHub OAuth app** (org settings → Developer settings → OAuth Apps):
-   callback URL `https://<canonical-host>:3443/oauth/callback`. Put its
+   callback URL `https://osac-ci-1.redhat.com/oauth/callback`. Put its
    client id and secret in `~/.monitoring-server/.env` as
    `MCP_GITHUB_CLIENT_ID` / `MCP_GITHUB_CLIENT_SECRET`.
 2. **Grafana service account** (Administration → Users and access →
@@ -450,17 +450,28 @@ curl -sk -H "Authorization: Bearer <TOKEN>" https://127.0.0.1:3000/api/org/users
 ```
 3. **Secrets** in the same `.env`: `MCP_SESSION_SECRET` (any long random
    string; it signs the 12-hour tokens) and
-   `MCP_EXTERNAL_URL=https://<canonical-host>:3443` (the origin Caddy
-   publishes; the MCP endpoint is `<origin>/mcp`).
+   `MCP_EXTERNAL_URL=https://osac-ci-1.redhat.com` (the origin the VPN
+   reaches through HAProxy's `:443` SNI route; the MCP endpoint is
+   `<origin>/mcp`).
 
 Then `systemctl --user restart ci-observe-mcp.service` (a monitoring deploy
-does it, and warns loudly while the variables are missing). Clients:
+does it, and warns loudly while the variables are missing). The `:443`
+certificate is Caddy's internal CA — clients must trust it:
 
 ```bash
-claude mcp add --transport http ci-observe https://<canonical-host>:3443/mcp
+scp github-runner@osac-ci-1:.monitoring-server/data/caddy/caddy/pki/authorities/local/root.crt \
+    /tmp/caddy-root.crt
+sudo cp /tmp/caddy-root.crt /etc/pki/ca-trust/source/anchors/ && sudo update-ca-trust
 ```
 
-Claude Code then opens the browser for the GitHub login on first use.
+Clients:
+
+```bash
+opencode mcp add --global ci-observe --url https://osac-ci-1.redhat.com/mcp
+claude mcp add --transport http ci-observe https://osac-ci-1.redhat.com/mcp
+```
+
+Both then open the browser for the GitHub login on first use.
 claude.ai and Claude Desktop connectors cannot reach a VPN-only server;
 Claude Desktop can bridge with a local `npx mcp-remote`.
 

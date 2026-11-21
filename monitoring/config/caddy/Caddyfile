@@ -82,12 +82,23 @@ http://127.0.0.1:2021 {
 # repositories, then redeploy the monitoring stack.
 https://osac-ci-1.redhat.com:4319 {
 	tls internal
-	basic_auth {
-		ci-observe CI_OBSERVE_OTLP_HASH
+	# The ci-observe MCP server shares this vhost: :443 is the one port the
+	# VPN and the runner fleet both reach, and HAProxy's SNI route for
+	# osac-ci-1.redhat.com ends here. The MCP paths carry no basic auth --
+	# the server has its own GitHub-OAuth gate -- and everything else stays
+	# behind the fleet's basic auth.
+	@mcp path /mcp /mcp/* /authorize /oauth/callback /token /register /healthz /.well-known/oauth-*
+	handle @mcp {
+		reverse_proxy 127.0.0.1:9105
 	}
-	# DEPLOYMENT ORDER: the otelcol-router (systemd service on this machine,
-# deployed by monitoring/scripts/deploy-otelcol-router.sh) must be running
-# before this proxy target is applied. monitoring-setup.sh warns if the
-# router is not healthy when deploying this file (see deploy_caddyfile).
-reverse_proxy 127.0.0.1:14318
+	handle {
+		basic_auth {
+			ci-observe CI_OBSERVE_OTLP_HASH
+		}
+		# DEPLOYMENT ORDER: the otelcol-router (systemd service on this machine,
+		# deployed by monitoring/scripts/deploy-otelcol-router.sh) must be running
+		# before this proxy target is applied. monitoring-setup.sh warns if the
+		# router is not healthy when deploying this file (see deploy_caddyfile).
+		reverse_proxy 127.0.0.1:14318
+	}
 }
