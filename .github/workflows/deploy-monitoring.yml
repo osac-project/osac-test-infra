@@ -260,7 +260,7 @@ jobs:
           fi
 
       - name: Notify Slack
-        if: always()
+        if: failure()
         continue-on-error: true
         uses: ./.github/actions/notify-slack
         with:
