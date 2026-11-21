@@ -16,7 +16,7 @@ A full check of the live stack (osac-ci-1) found one live fault and three data g
 
 Two smaller repairs: the snapshot workflow `e2e-vmaas.yml` now uploads its artifact as `osac-logs-full-install-<run>`, the VMaaS suite's one name, so its JUnit reaches the test history (it had not run in 90 days, so nothing to re-read); and the insight documents take an `end` parameter (a UTC date or second-precision time), so a window can end anywhere in the past, not only at now.
 
-The six runs whose Failed tests panel answers 502 "no artifact in run ..., where pr/merge_queue runs keep it" are runs cancelled mid-test: their gather and upload steps are skipped by design, so the artifact never existed. The panel is right; the audit counts them under its errors, which is also right.
+The six runs whose Failed tests panel answers 502 "no artifact in run ..., where pr/merge_queue runs keep it" are runs cancelled mid-test: their gather and upload steps are skipped by design, so the artifact never existed. The panel is right, and it now says so: when the suite's stored steps include no upload step, the error adds that no artifact was ever uploaded. The audit counts them under its errors, which is also right.
 
 Known and accepted: scheduled and manual runs from before 2026-11-13 stay unreadable until their on-run artifacts expire around 2026-12-13; the tokens and the stores are otherwise healthy (checked 2026-11-21: audit `runs_missing: 0` for the job history, `private_readable: true`).
 

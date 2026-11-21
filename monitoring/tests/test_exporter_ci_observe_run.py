@@ -559,6 +559,35 @@ class TestFailedTestsErrors:
         assert refused(evidence) == (
             f"no {ARTIFACT_NAME} artifact in osac-project/osac-ci-artifacts, where scheduled runs keep it")
 
+    def test_a_run_whose_upload_step_never_ran_says_so(self, evidence, github):
+        """A cancelled job skips its upload step (a skipped step stores no
+        timestamps), so no artifact ever existed: the error says that,
+        because 'no artifact' alone reads like a vanished artifact."""
+        seed_direct_run(evidence, steps=[{"name": "Run E2E tests", "duration_s": 600}])
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        message = refused(evidence)
+        assert message.startswith(
+            f"no {ARTIFACT_NAME} artifact in osac-project/osac-ci-artifacts, where scheduled runs keep it")
+        assert "no upload step" in message and "no artifact was ever uploaded" in message
+
+    def test_a_run_whose_upload_step_ran_does_not_claim_it_never_did(self, evidence, github):
+        seed_direct_run(evidence, steps=[
+            {"name": "Run E2E tests", "duration_s": 600},
+            {"name": "Scan and upload artifacts", "duration_s": 30},
+        ])
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        assert refused(evidence) == (
+            f"no {ARTIFACT_NAME} artifact in osac-project/osac-ci-artifacts, where scheduled runs keep it")
+
+    def test_a_run_whose_steps_were_never_read_makes_no_claim(self, evidence, github):
+        seed_direct_run(evidence, steps=[])
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        assert refused(evidence) == (
+            f"no {ARTIFACT_NAME} artifact in osac-project/osac-ci-artifacts, where scheduled runs keep it")
+
     def test_another_suites_or_runs_artifact_is_not_this_captures(self, evidence, github, wfe):
         seed_merge_queue_run(evidence)
         github.add(LIST_PATH, FakeResponse(payload={"total_count": 2, "artifacts": [

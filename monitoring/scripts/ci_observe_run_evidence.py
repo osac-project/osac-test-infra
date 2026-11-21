@@ -788,6 +788,22 @@ class CIObserveRunEvidence:
         self._cache.put(key, ("ok", document), CIObserveRunEvidence.NATIVE_CACHE_TTL_SECONDS)
         return document
 
+    def _no_upload_step_ever_ran(self, rows):
+        """Whether the suite's stored steps name no upload step at all. A
+        step that never ran stores no timestamps, so it is absent from the
+        stored steps: a cancelled or lost job leaves no upload step behind,
+        while a job whose upload ran (always() && !cancelled()) keeps it.
+        No claim when the steps were never read or hold nothing."""
+        for row in rows:
+            steps = row.get("steps")
+            if not isinstance(steps, list) or not steps:
+                continue
+            names = [str(step.get("name") or "") if isinstance(step, dict) else "" for step in steps]
+            if any(name.startswith("Scan and upload artifacts") for name in names):
+                return False
+            return True
+        return False
+
     def _failed_tests_uncached(self, capture_id, suite, run_id, run_attempt):
         if not self.exporter._github_token():
             raise EvidenceError("no GitHub token is configured (PRIVATE_GITHUB_TOKEN), so no artifact can be read")
@@ -816,7 +832,11 @@ class CIObserveRunEvidence:
         found = find_artifacts(self.exporter._get, trigger, repo, run_id, [name])
         if not found:
             _, place, _ = artifact_place(trigger, repo, run_id)
-            raise EvidenceError(f"no {name} artifact in {place}, where {trigger} runs keep it")
+            reason = f"no {name} artifact in {place}, where {trigger} runs keep it"
+            if self._no_upload_step_ever_ran(own):
+                reason += ("; the suite's stored steps include no upload step, so no artifact was ever"
+                           " uploaded (the job log says why it never ran)")
+            raise EvidenceError(reason)
         _, artifact, place, private = found[0]
         artifact_url = artifact_page_url(artifact, repo, run_id, private)
         if artifact.get("expired"):
