@@ -65,10 +65,12 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
-      # No osac-ci-app-* secrets here, on purpose: this run checks out the pull request's own commit as the test
-      # infrastructure, so the actions that would receive the app key (upload-artifacts, mint-github-app-token) would
-      # be the pull request author's. The artifact of a pull request run stays on the run until publication can run
-      # from trusted code in a job of its own.
+      # The GitHub App that publishes the logs to the private repository. This run checks out the pull request's own
+      # commit as the test infrastructure, so the key is not used by any step of the `e2e` job: that job only stages
+      # the files on its runner host. The `publish-private` job of the called workflow, which checks out the actions
+      # of the default branch and never the pull request, is the only one that reads it.
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       test-suite: bmaas/sanity
       test-filter: not TestBmaasNetworking
