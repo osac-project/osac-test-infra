@@ -26,6 +26,11 @@ After=workflow-exporter.service
 [Container]
 Image=localhost/osac-workflow-exporter:latest
 ContainerName=ci-observe-mcp
+# The image's default CMD is the workflow exporter itself; without this
+# line the "MCP" container would start a second exporter and die on the
+# occupied port. The image ENTRYPOINT is python3, so this runs
+# `python3 /app/ci_observe_mcp.py`.
+Exec=/app/ci_observe_mcp.py
 
 # Host networking like the exporter: the server reads the exporter on the
 # host's loopback (127.0.0.1:9103) and Grafana on 127.0.0.1:3000, and is
