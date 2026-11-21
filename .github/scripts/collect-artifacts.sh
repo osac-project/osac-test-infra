@@ -4,9 +4,7 @@
 # cluster; the scan and upload that follow do not (see the upload-artifacts
 # action), so a workflow can destroy the cluster in between.
 #
-# The collection is all-or-nothing: if gather-osac-logs.sh fails or is stopped
-# by the timeout, .redaction-complete is not written and the upload action
-# refuses to upload the unredacted files.
+# Only successful collection and shared redaction authorize .redaction-complete.
 #
 # Required env: KUBECONFIG, RUNNER_TEMP, GITHUB_WORKSPACE
 # Optional env: E2E_NAMESPACE, JUNIT_PATH, INVENTORY_FILE (read by
@@ -15,6 +13,10 @@ set -eo pipefail
 
 ARTIFACT_DIR="${RUNNER_TEMP}/osac-artifacts"
 COLLECT_TIMEOUT_SECONDS="${COLLECT_TIMEOUT_SECONDS:-900}"
+if [[ -L "${ARTIFACT_DIR}" || -L "${ARTIFACT_DIR}/mgmt-cluster" ]]; then
+  echo "::error::Artifact directory links are not permitted"
+  exit 1
+fi
 
 # The upload action keeps the marker, so one left by an earlier collection of
 # this job (a Netris job collects twice, a cancelled run collects again) must
@@ -26,6 +28,7 @@ rm -f "${ARTIFACT_DIR}/.redaction-complete"
 # and redact this path successfully before it can be uploaded.
 if [[ ! -f "${KUBECONFIG:-}" && -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
   echo "No kubeconfig is available; retaining selected compact-boot host diagnostics only."
+  rm -rf -- "${ARTIFACT_DIR}/mgmt-cluster/must-gather"
   touch "${ARTIFACT_DIR}/.redaction-complete"
   exit 0
 fi
@@ -39,22 +42,21 @@ if [[ -d "${ARTIFACT_DIR}/netris-logs" \
 fi
 export NETRIS_ARTIFACT_LAYOUT
 
-rc=0
-timeout "${COLLECT_TIMEOUT_SECONDS}" \
-  "${GITHUB_WORKSPACE}/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}" || rc=$?
-
-# The release gate censors the values of the cluster's own Secrets wherever they
-# show up. The snapshot lives next to the artifact directory, never inside it,
-# and is readable by this user only.
+export OSAC_COLLECTION_DEADLINE=$(( $(date +%s) + COLLECT_TIMEOUT_SECONDS ))
 INVENTORY_DIR="${RUNNER_TEMP}/osac-secret-inventory"
 mkdir -p "${INVENTORY_DIR}"
-(umask 077 && timeout 60 oc get secrets -n "${E2E_NAMESPACE:-osac-e2e-ci}" -o json \
+chmod 700 "${INVENTORY_DIR}"
+rm -f "${INVENTORY_DIR}/k8s-secrets.json"
+inventory_seconds=$(( COLLECT_TIMEOUT_SECONDS < 15 ? COLLECT_TIMEOUT_SECONDS : 15 ))
+(umask 077 && timeout -k 2 "${inventory_seconds}" oc get secrets \
+  -n "${E2E_NAMESPACE:-osac-e2e-ci}" -o json \
   > "${INVENTORY_DIR}/k8s-secrets.json" 2>/dev/null) \
   || { rm -f "${INVENTORY_DIR}/k8s-secrets.json"; echo "::notice::Secret inventory not collected"; }
 
-if [[ "${rc}" -eq 0 ]]; then
+remaining=$(( OSAC_COLLECTION_DEADLINE - $(date +%s) ))
+if (( remaining > 0 )) && timeout -k 5 "${remaining}" \
+  "${GITHUB_WORKSPACE}/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}"; then
   touch "${ARTIFACT_DIR}/.redaction-complete"
-elif [[ "${rc}" -eq 124 ]]; then
-  echo "::warning::Log collection stopped after ${COLLECT_TIMEOUT_SECONDS}s" \
-    "- the artifacts are incomplete and will not be uploaded"
+else
+  echo "::warning::Collection or redaction incomplete; artifacts will not be uploaded"
 fi

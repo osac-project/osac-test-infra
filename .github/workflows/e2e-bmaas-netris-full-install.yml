@@ -587,21 +587,21 @@ jobs:
           make run-tests INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" TEST='not TestCrossTenantBmaasNetworking'
 
       - name: Gather infra diagnostics
-        if: always()
+        if: always() && !cancelled()
         shell: bash
         timeout-minutes: 10
         continue-on-error: true
         run: make gather-infra INFRA=netris
 
       - name: Gather management cluster diagnostics
-        if: always()
+        if: always() && !cancelled()
         shell: bash
         timeout-minutes: 10
         continue-on-error: true
         run: make -C infra/netris gather-mgmt-cluster
 
       - name: Gather Netris diagnostics
-        if: always()
+        if: always() && !cancelled()
         shell: bash
         timeout-minutes: 10
         continue-on-error: true
@@ -612,6 +612,7 @@ jobs:
       - name: Select kubeconfig for artifact collection
         id: artifact-kubeconfig
         if: always()
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -631,16 +632,45 @@ jobs:
           EOF
           fi
 
-      - name: Gather and redact Netris artifacts
-        if: always()
-        uses: ./.github/actions/gather-artifacts
+      - name: Gather cluster logs
+        id: gather
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: ./.github/actions/collect-artifacts
         with:
           namespace: osac-e2e-ci
           kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
+
+      - name: Gather cluster logs (job cancelled, short cap)
+        if: cancelled() && (steps.gather.outcome == 'skipped' || steps.gather.outcome == 'cancelled')
+        continue-on-error: true
+        uses: ./.github/actions/collect-artifacts
+        with:
+          namespace: osac-e2e-ci
+          kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
+          timeout-seconds: "120"
+
+      - name: Scan and upload artifacts
+        id: upload
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: ./.github/actions/upload-artifacts
+        with:
           artifact-name: ${{ inputs.deploy-suite }}-netris-artifacts
+          known-secret-files: /root/pull-secret
+
+      - name: Scan and upload artifacts (job cancelled)
+        if: cancelled() && (steps.upload.outcome == 'skipped' || steps.upload.outcome == 'cancelled')
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: ./.github/actions/upload-artifacts
+        with:
+          artifact-name: ${{ inputs.deploy-suite }}-netris-artifacts
+          known-secret-files: /root/pull-secret
+          overwrite: "true"
 
       - name: Gather EC2 runner artifacts
-        if: always()
+        if: always() && !cancelled()
         uses: ./.github/actions/gather-ec2-runner-artifacts
 
   teardown:

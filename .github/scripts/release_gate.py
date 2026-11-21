@@ -378,6 +378,34 @@ def _is_archive(data: bytes) -> bool:
     return data.startswith(_ARCHIVE_MAGICS)
 
 
+def _tar_header(data: bytes) -> bool:
+    try:
+        tarfile.TarInfo.frombuf(data[:512], "utf-8", "surrogateescape")
+        return True
+    except tarfile.HeaderError:
+        return False
+
+
+def must_gather_archive(data: bytes) -> bool:
+    if _is_archive(data) or data.startswith((b"PK\x05\x06", b"PK\x07\x08")) or _tar_header(data):
+        return True
+    for candidate in re.finditer(rb"[A-Za-z0-9+/_=-][A-Za-z0-9+/_= \t\r\n-]{31,}", data):
+        sample = re.sub(rb"\s", b"", data[candidate.start() : min(candidate.end(), candidate.start() + 8192)])
+        for offset in range(4):
+            value = sample[offset:].split(b"=", 1)[0]
+            try:
+                decoded = base64.b64decode(value + b"=" * (-len(value) % 4), altchars=b"-_", validate=True)
+            except binascii.Error:
+                continue
+            if any(magic in decoded for magic in (b"\x1f\x8b\x08", *_ARCHIVE_MAGICS[1:])):
+                return True
+            for marker in re.finditer(b"ustar", decoded):
+                start = marker.start() - 257
+                if start >= 0 and _tar_header(decoded[start : start + 512]):
+                    return True
+    return False
+
+
 def _tar_holds_archive(payload: bytes) -> bool:
     """True if a tar stream has a member that is itself an archive."""
     if payload[257:262] != b"ustar":
@@ -485,8 +513,10 @@ def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bo
     report = Report()
     for path in _entries(root):
         relative = str(path.relative_to(root))
+        must_gather = path.relative_to(root).parts[:2] == ("mgmt-cluster", "must-gather")
+        withheld_name = "mgmt-cluster/must-gather/[withheld]" if must_gather else relative
         if path.is_symlink():
-            report.withheld.append({"file": relative, "reason": "symbolic link"})
+            report.withheld.append({"file": withheld_name, "reason": "symbolic link"})
             if not check:
                 path.unlink()
             continue
@@ -496,6 +526,11 @@ def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bo
             if path.stat().st_size > MAX_FILE_BYTES:
                 raise ValueError("larger than the inspection limit")
             data = path.read_bytes()
+            if must_gather and must_gather_archive(data):
+                report.withheld.append({"file": withheld_name, "reason": "must-gather archive"})
+                if not check:
+                    path.unlink()
+                continue
             payload = _archive_payload(data)
             if payload is False:
                 raise ValueError("archive that could not be inspected")
@@ -525,12 +560,10 @@ def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bo
                 else:
                     path.write_bytes(cleaned)
         except (OSError, ValueError, MemoryError) as exc:
-            report.withheld.append({"file": relative, "reason": f"{exc.__class__.__name__}: {exc}"})
+            reason = "must-gather file could not be inspected" if must_gather else f"{exc.__class__.__name__}: {exc}"
+            report.withheld.append({"file": withheld_name, "reason": reason})
             if not check:
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
+                path.unlink()
     return report
 
 
