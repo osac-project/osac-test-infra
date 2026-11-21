@@ -106,8 +106,11 @@ class Config:
     bind: str
     port: int
     exporter_url: str
-    grafana_url: str
-    external_url: str          # the origin this server is published under (https://host:3443)
+    grafana_url: str          # the address browsers use for Grafana links
+    grafana_api_url: str      # the address this server reads Grafana through; the
+                              # VPN-only name does not resolve on the host, so this
+                              # is the loopback listener by default of deployment
+    external_url: str         # the origin this server is published under (https://host:3443)
     github_client_id: str
     github_client_secret: str
     grafana_service_token: str
@@ -138,6 +141,7 @@ class Config:
             port=int(os.getenv("MCP_PORT", "9105")),
             exporter_url=os.getenv("EXPORTER_URL", "http://127.0.0.1:9103").rstrip("/"),
             grafana_url=os.getenv("MCP_GRAFANA_URL").rstrip("/"),
+            grafana_api_url=(os.getenv("MCP_GRAFANA_API_URL") or os.getenv("MCP_GRAFANA_URL", "")).rstrip("/"),
             external_url=os.getenv("MCP_EXTERNAL_URL").rstrip("/"),
             github_client_id=os.getenv("MCP_GITHUB_CLIENT_ID", ""),
             github_client_secret=os.getenv("MCP_GITHUB_CLIENT_SECRET", ""),
@@ -224,13 +228,22 @@ def grafana_user_exists(config: Config, login: str) -> bool:
     the org's user list (GET /api/org/users), which a service account with
     the Admin basic role may; the global user search needs a permission to
     grant, and /api/users/lookup is gone in Grafana 13 (404 for the server
-    admin too), so neither is used."""
-    answer = requests.get(
-        f"{config.grafana_url}/api/org/users",
-        headers={"Authorization": f"Bearer {config.grafana_service_token}"},
-        verify=config.grafana_verify_tls,
-        timeout=15,
-    )
+    admin too), so neither is used. A Grafana that cannot be reached is an
+    error naming the address, never a crash."""
+    try:
+        answer = requests.get(
+            f"{config.grafana_api_url}/api/org/users",
+            headers={"Authorization": f"Bearer {config.grafana_service_token}"},
+            verify=config.grafana_verify_tls,
+            timeout=15,
+        )
+    except requests.RequestException as error:
+        raise AuthError(
+            f"Grafana could not be reached at {config.grafana_api_url}: {error}. "
+            "The VPN-only hostname does not resolve on the monitoring host; set "
+            "MCP_GRAFANA_API_URL to an address the container can reach, such as "
+            "https://127.0.0.1:3000."
+        ) from error
     if answer.status_code == 200:
         users = answer.json()
         if not isinstance(users, list):
