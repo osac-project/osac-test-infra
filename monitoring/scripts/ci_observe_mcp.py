@@ -199,17 +199,20 @@ def github_login(config: Config, code: str) -> str:
     )
     if not answer.ok:
         raise AuthError(f"GitHub would not exchange the login code: HTTP {answer.status_code}")
-    access_token = answer.json().get("access_token")
+    body = answer.json()
+    access_token = body.get("access_token")
     if not access_token:
-        raise AuthError("GitHub named no access token for the login code")
-    user = requests.get(
+        detail = body.get("error") or "no error named"
+        description = body.get("error_description") or ""
+        raise AuthError(f"GitHub refused the login code: {detail}. {description}".strip())
+    access_token = requests.get(
         f"{config.github_api_url}/user",
         headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"},
         timeout=15,
     )
-    if not user.ok:
-        raise AuthError(f"GitHub would not say who logged in: HTTP {user.status_code}")
-    login = user.json().get("login")
+    if not access_token.ok:
+        raise AuthError(f"GitHub would not say who logged in: HTTP {access_token.status_code}")
+    login = access_token.json().get("login")
     if not login:
         raise AuthError("GitHub named no login")
     return login
