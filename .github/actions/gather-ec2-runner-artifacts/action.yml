@@ -23,6 +23,28 @@ runs:
         ARTIFACT_DIR="${RUNNER_TEMP}/osac-ec2-runner-artifacts"
         "$GITHUB_WORKSPACE/scripts/ec2-runner/gather-host-logs.sh" "${ARTIFACT_DIR}"
 
+    - name: Redact host logs
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="${RUNNER_TEMP}/osac-ec2-runner-artifacts"
+        if [[ ! -d "$dir" ]]; then
+          exit 0
+        fi
+        args=(--report "${RUNNER_TEMP}/osac-ec2-runner-redaction-report.json")
+        if [[ -f /root/pull-secret ]]; then
+          args+=(--secret-file /root/pull-secret)
+        fi
+        if [[ -f "${RUNNER_TEMP}/pull-secret.json" ]]; then
+          args+=(--secret-file "${RUNNER_TEMP}/pull-secret.json")
+        fi
+        if ! python3 -I "${GITHUB_WORKSPACE}/.github/scripts/release_gate.py" "$dir" "${args[@]}"; then
+          echo "::error::Host diagnostics could not be redacted — withholding them"
+          rm -rf "$dir"
+          exit 1
+        fi
+
     - name: Upload artifacts
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

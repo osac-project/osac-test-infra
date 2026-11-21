@@ -186,12 +186,29 @@ setup-suite: _validate-backend
 prepare-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) prepare-suite DEPLOY_SUITE=$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
-# Operates on an installed OSAC lab; the backend prepares and deploys the suite.
-# The target name is unrelated to the DEPLOY_SUITE variable.
-deploy-suite: _validate-backend _validate-suite-contract
-	$(MAKE) -C $(INFRA_DIR) deploy-suite DEPLOY_SUITE=$(DEPLOY_SUITE) SUITE_STAGE=$(SUITE_STAGE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+# Operates on an installed OSAC lab. Every backend writes contract inputs
+# during prepare-suite, so preparation runs before validation. setup stops
+# there. all and workload then run the backend workload stage.
+deploy-suite: _validate-backend
+	@case "$(SUITE_STAGE)" in \
+		all|setup) $(MAKE) prepare-suite INFRA=$(INFRA) DEPLOY_SUITE=$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG) ;; \
+		workload) ;; \
+		*) echo "Unsupported deploy-suite stage: $(SUITE_STAGE)" >&2; exit 2 ;; \
+	esac
+	@$(MAKE) _validate-suite-contract
+	@stage="$(SUITE_STAGE)"; \
+	if [ "$$stage" = setup ]; then \
+		exit 0; \
+	fi; \
+	if [ "$$stage" = all ]; then stage=workload; fi; \
+	$(MAKE) -C $(INFRA_DIR) deploy-suite DEPLOY_SUITE=$(DEPLOY_SUITE) SUITE_STAGE="$$stage" EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
-run-tests: _validate-backend _validate-suite-contract
+run-tests: _validate-backend
+	@if [ "$(INFRA)" = agentless-net ] && [ "$(TEST_SUITE)" = bmaas ]; then \
+		echo "ERROR: agentless-net proves one BMI and does not run the Netris bmaas suite." >&2; \
+		exit 2; \
+	fi
+	@$(MAKE) _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
 		$(MAKE) test-$(TEST_SUITE)
 

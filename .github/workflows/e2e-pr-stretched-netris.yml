@@ -33,6 +33,11 @@ on:
 
 permissions: {}
 
+concurrency:
+  # Same PR-scoped group as e2e-pr-cancel.yml. A new commit cancels this suite.
+  group: e2e-pr-stretched-netris-${{ inputs.repo }}-${{ inputs.pr-number }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     permissions:

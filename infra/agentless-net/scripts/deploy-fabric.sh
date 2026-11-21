@@ -10,10 +10,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${SCRIPT_DIR}/.."
 
-# shellcheck source=/dev/null
-source "${INFRA_DIR}/.mgmt-network"
-
-export KUBECONFIG
+# shellcheck source=use-kubeconfig.sh
+source "${SCRIPT_DIR}/use-kubeconfig.sh"
+use_kubeconfig "${INFRA_DIR}/.mgmt-network"
+require_recorded_cluster
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 
@@ -68,6 +68,13 @@ done
 wait
 info "All switches ready."
 
+# Host bridges must exist before a virtual BMH fabric NIC is attached.
+# The sysctl change is BMaaS-only. CaaS still creates its bridges in setup-caas.
+if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
+    info "Preparing host bridges for fabric NICs..."
+    "${SCRIPT_DIR}/prepare-host-bridges.sh"
+fi
+
 # ---------- fix sudo on switches ----------
 
 info "Fixing sudo permissions on switches..."
@@ -110,9 +117,30 @@ KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
     "
 echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24, gateway 10.0.0.30 (net-node)"
 
-KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
-    --type=merge -p "{\"spec\":{\"interfaces\":[\"$FABRIC_NIC\"]}}"
-echo "  L2Advertisement: announcing on $FABRIC_NIC (fabric)"
+# --ignore-not-found does not hide a missing CRD. The bmaas-ci profile does
+# not install MetalLB, so an absent CRD is a skip and any other read error
+# still stops the deploy.
+if ! crd="$(KUBECONFIG="$KUBECONFIG" oc get crd l2advertisements.metallb.io --ignore-not-found -o name)"; then
+    echo "ERROR: failed to read l2advertisements.metallb.io CRD" >&2
+    exit 1
+fi
+if [[ -z "$crd" ]]; then
+    advertisement=""
+elif ! advertisement="$(KUBECONFIG="$KUBECONFIG" oc get l2advertisement caas-l2-advertisement -n metallb-system --ignore-not-found -o name)"; then
+    echo "ERROR: failed to read caas-l2-advertisement" >&2
+    exit 1
+fi
+if [[ -z "$advertisement" && "${DEPLOY_SUITE:-caas}" != "bmaas" ]]; then
+    echo "ERROR: caas-l2-advertisement is required for DEPLOY_SUITE=${DEPLOY_SUITE:-caas}" >&2
+    exit 1
+fi
+if [[ -n "$advertisement" ]]; then
+    KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
+        --type=merge -p "{\"spec\":{\"interfaces\":[\"$FABRIC_NIC\"]}}"
+    echo "  L2Advertisement: announcing on $FABRIC_NIC (fabric)"
+else
+    info "caas-l2-advertisement is absent; skipping the MetalLB patch"
+fi
 
 # ---------- configure trunk ports ----------
 
@@ -130,6 +158,45 @@ rm -f "$RESOLVED_INVENTORY"
 
 info "Preparing network node..."
 docker exec "$NET_NODE" apk add --no-cache iptables iproute2 python3 openssh frr >/dev/null 2>&1
+if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]]; then
+    info "Installing dnsmasq and the DHCP supervisor on the network node"
+    docker exec "$NET_NODE" apk add --no-cache dnsmasq supervisor
+    docker exec "$NET_NODE" sh -ec '
+mkdir -p /etc/agentless-net/supervisor.d /var/log/agentless-net
+printf "%s\n" "; placeholder so the include glob matches" > /etc/agentless-net/supervisor.d/placeholder.ini
+cat > /etc/agentless-net/supervisord.conf <<EOF
+[unix_http_server]
+file=/run/agentless-net-supervisor.sock
+
+[supervisord]
+logfile=/var/log/agentless-net/supervisord.log
+pidfile=/run/agentless-net-supervisord.pid
+childlogdir=/var/log/agentless-net
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[supervisorctl]
+serverurl=unix:///run/agentless-net-supervisor.sock
+
+[include]
+files = /etc/agentless-net/supervisor.d/*.ini
+EOF
+'
+    docker exec -d "$NET_NODE" supervisord -c /etc/agentless-net/supervisord.conf || true
+    supervisor_ready=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if docker exec "$NET_NODE" supervisorctl -c /etc/agentless-net/supervisord.conf pid | grep -Eq '^[0-9]+$'; then
+            supervisor_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$supervisor_ready" -ne 1 ]]; then
+        echo "ERROR: AgentlessNet supervisor is not reachable on ${NET_NODE}" >&2
+        exit 1
+    fi
+fi
 docker exec "$NET_NODE" ssh-keygen -A >/dev/null 2>&1
 docker exec "$NET_NODE" sh -c "echo 'root:root' | chpasswd"
 docker exec "$NET_NODE" sh -c "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config"

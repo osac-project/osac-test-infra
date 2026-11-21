@@ -20,10 +20,9 @@ INFRA_DIR="${SCRIPT_DIR}/.."
 # shellcheck source=infra/agentless-net/scripts/setup-caas-lib.sh
 source "${SCRIPT_DIR}/setup-caas-lib.sh"
 
-# shellcheck source=/dev/null
-source "${INFRA_DIR}/.mgmt-network"
-
-export KUBECONFIG
+# shellcheck source=use-kubeconfig.sh
+source "${SCRIPT_DIR}/use-kubeconfig.sh"
+use_kubeconfig "${INFRA_DIR}/.mgmt-network"
 
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 PULL_SECRET="${OSAC_PULL_SECRET_PATH:-/root/pull-secret}"
