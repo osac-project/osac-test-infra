@@ -317,7 +317,7 @@ class CIObserveRunEvidence:
                 steps.append({
                     "job_name": job.get("display_name") or job.get("workflow", ""),
                     "step_name": name,
-                    "duration_s": step.get("duration_s", 0),
+                    "duration_s": step.get("duration_s"),
                     "conclusion": conclusion,
                 })
                 if len(steps) >= CIObserveRunEvidence.EVIDENCE_MAX_STEPS:
@@ -404,8 +404,9 @@ class CIObserveRunEvidence:
             "conclusion": conclusion,
             "status": next((r.get("status") for r in rows if r.get("status")),
                            conclusion or "unknown"),
-            "duration_s": max((r.get("duration_s") or 0 for r in rows), default=0),
-            "url": url or f"https://github.com/{ORG}/{repo}/actions/runs/{run_id}",
+            "duration_s": max((r.get("duration_s") for r in rows if r.get("duration_s") is not None),
+                              default=None),
+            "url": url or (f"https://github.com/{ORG}/{repo}/actions/runs/{run_id}" if repo else ""),
             "runner_name": ", ".join(runners),
             # Stored with the job row (the exporter's run payload carries
             # it), so most runs need no extra GitHub call. The caller falls
@@ -559,7 +560,10 @@ class CIObserveRunEvidence:
                 totals["failures"] += sum(1 for c in cases if c.find("failure") is not None)
                 totals["errors"] += sum(1 for c in cases if c.find("error") is not None)
                 totals["skipped"] += sum(1 for c in cases if c.find("skipped") is not None)
-                time_s += sum(self._junit_time(case) or 0 for case in cases)
+                time_s += sum(
+                    measured for case in cases
+                    if (measured := self._junit_time(case)) is not None
+                )
                 for case in cases:
                     problem = case.find("failure")
                     if problem is None:

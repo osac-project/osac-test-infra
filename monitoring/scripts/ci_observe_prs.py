@@ -1238,8 +1238,11 @@ def lifecycle_facts(events):
         if any(push["kind"] == "force_push" for push in between):
             rebase_rereviews += 1
         if between:
-            # From the last change to the approval of it.
-            rereview_waits.append(seconds_between(between[-1]["at"], approval["at"]) or 0)
+            # From the last change to the approval of it. An unmeasurable
+            # wait is skipped, never counted as 0 seconds.
+            wait = seconds_between(between[-1]["at"], approval["at"])
+            if wait is not None:
+                rereview_waits.append(wait)
     queued = [event for event in events if event["kind"] == "queued"]
     merged = next((event for event in events if event["kind"] == "merged"), None)
 
@@ -2992,7 +2995,9 @@ class CIObservePRs:
         final = record.get("last_approval_at")
         record["review_seconds"] = seconds_between(record.get("first_review_at"), final)
         if record.get("queued_at"):
-            record["waiting_seconds"] = seconds_between(final, record["queued_at"])
+            # ordered_seconds, matching the stored path: an approval that
+            # came after the queue entry is not a 0-second wait.
+            record["waiting_seconds"] = ordered_seconds(final, record["queued_at"])
         elif record["state"] == "open" and final:
             # Approved but not queued yet: the wait is still running.
             record["waiting_seconds"] = seconds_between(final, _iso(now))
@@ -3386,8 +3391,16 @@ class CIObservePRs:
                 )
             ]
             attempts = {}
-            for attempt in conn.execute("SELECT * FROM pr_queue_attempts WHERE started_at >= ?", (cutoff,)):
-                attempts.setdefault((attempt["repo"], attempt["number"]), []).append(dict(attempt))
+            # Attempts belong to the pull requests in the window, however
+            # long ago they entered the queue: selecting by the attempt's
+            # start silently drops every entry older than the cutoff, so a
+            # long-lived pull request reads as "no queue history" while
+            # its detail page (which loads without the cutoff) shows it.
+            pr_keys = {(row["repo"], row["number"]) for row in rows}
+            for attempt in conn.execute("SELECT * FROM pr_queue_attempts"):
+                key = (attempt["repo"], attempt["number"])
+                if key in pr_keys:
+                    attempts.setdefault(key, []).append(dict(attempt))
 
         authors = _authors(rows)
         if author:
@@ -4163,10 +4176,17 @@ def _attempt_out(row):
     """The queue-attempt row as the dashboard reads it."""
     attempt = dict(row)
     attempt["run_ids"] = _stored_run_ids(attempt.get("run_ids"), attempt.get("run_id"))
-    attempt["run_count"] = len(attempt["run_ids"])
-    attempt["run_urls"] = [
-        f"https://github.com/{ORG}/{attempt['repo']}/actions/runs/{run_id}" for run_id in attempt["run_ids"]
-    ]
+    if attempt["run_ids"] is None:
+        # A corrupt stored list: the count is unknown, never "1 run" for
+        # what was a multi-workflow entry.
+        attempt["run_count"] = None
+        attempt["run_urls"] = []
+    else:
+        attempt["run_count"] = len(attempt["run_ids"])
+        attempt["run_urls"] = [
+            f"https://github.com/{ORG}/{attempt['repo']}/actions/runs/{run_id}"
+            for run_id in attempt["run_ids"]
+        ]
     attempt["run_url"] = attempt.get("url") or ""
     attempt["duration_display"] = human_duration(attempt.get("duration_seconds"))
     attempt["started_display"] = _short_moment(attempt.get("started_at"))
@@ -4183,12 +4203,14 @@ def _attempt_out(row):
 
 
 def _stored_run_ids(value, run_id):
-    """The workflow run ids of one queue attempt. A row written before the
-    grouping carries only its primary run id."""
+    """The workflow run ids of one queue attempt, or None when the stored
+    list cannot be read: a corrupt value is an unknown count, not a
+    single-run attempt. A row written before the grouping carries only
+    its primary run id."""
     try:
         ids = json.loads(value) if value else []
     except (TypeError, ValueError):
-        ids = []
+        return None
     if not ids and run_id is not None:
         ids = [run_id]
     return ids

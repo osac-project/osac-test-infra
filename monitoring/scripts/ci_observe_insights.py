@@ -426,7 +426,9 @@ class Stores:
         return phases.read_audit_summary(os.path.join(folder, phases.AUDIT_FILE_NAME))
 
     def rollup_passes(self):
-        """{job: finished_at} of the hourly rollups' last passes."""
+        """{job: finished_at} of the hourly rollups' last passes, or None
+        when the table could not be read: a read failure is not 'the
+        rollup never ran', and it must not turn staleness detection off."""
         conn = self._open(self.trends_db)
         if conn is None:
             return {}
@@ -435,8 +437,9 @@ class Stores:
                 return {}
             rows = conn.execute("SELECT job, finished_at FROM rollup_passes")
             return {row["job"]: row["finished_at"] for row in rows}
-        except sqlite3.Error:
-            return {}
+        except sqlite3.Error as error:
+            logger.error("the rollup pass table could not be read: %s", error)
+            return None
         finally:
             conn.close()
 
@@ -676,6 +679,10 @@ class CIObserveInsights:
                     "GitHub; newer runs are missing"
                 )
         passes = self.stores.rollup_passes()
+        if passes is None:
+            parts.append("Test results and inside-the-tests: the rollup pass table could"
+                         " not be read, so their freshness is unknown")
+            passes = {}
         for job, label, noun, timer in (
             ("trends", "Test results", "test results", "ci-observe-trends.timer"),
             ("spans", "Inside the tests", "inside-the-tests numbers", "ci-observe-spans.timer"),
@@ -1612,11 +1619,20 @@ class CIObserveInsights:
             "waits": len(current),
             "wait_hours": round(sum(row["duration_s"] or 0 for row in current) / 3600, 1),
             "test_hours": round(test_time / 3600, 1),
+            # Waits the trace could not be attributed to a test: they are in
+            # the tables above, so the share must say how many are unproven.
+            "unattributed_waits": sum(row.get("unattributed_waits") or 0 for row in runs
+                                      if row["day"] >= window_day),
         }
         coverage["wait_share"] = ratio(coverage["wait_hours"], coverage["test_hours"])
         notes = []
         if not current_runs:
             notes.append("no recorded run in this window has a complete trace yet")
+        if coverage["unattributed_waits"]:
+            notes.append(
+                f"{coverage['unattributed_waits']} wait(s) could not be attributed to a test; they are"
+                " counted in the wait tables but not in any test's own time"
+            )
         return {
             "population": (
                 f"poll_until waits of recorded VMaaS, CaaS and BMaaS runs in the last {filters.days} days, from "

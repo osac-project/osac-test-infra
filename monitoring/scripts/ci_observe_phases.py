@@ -396,6 +396,11 @@ CAUSES = (
     ("runner", "Runner lost", "CI infrastructure", AREA_COLORS["CI infrastructure"]),
     ("blocked", "Blocked request", "Blocked", AREA_COLORS["Blocked"]),
     ("other", "Other step failed", "CI infrastructure", AREA_COLORS["CI infrastructure"]),
+    # Not a cause anyone wants on a page: the honest answer when neither
+    # the failed-step text nor the timeline can name one. It rolls up with
+    # CI infrastructure (where the fabricated "Runner lost" put it too),
+    # but the label says what is true instead of blaming CI.
+    ("unknown", "Cause unknown: no step data", "CI infrastructure", AREA_COLORS["CI infrastructure"]),
 )
 CAUSE_KEYS = tuple(key for key, *_ in CAUSES)
 CAUSE_LABELS = {key: label for key, label, _, _ in CAUSES}
@@ -457,6 +462,12 @@ def failure_cause(conclusion: str | None, failed_step_text: str | None, timeline
     if (conclusion or "").lower() == "timed_out" or cancelled:
         step = cancelled[1] if cancelled else ""
         return _cause("timeout", step, step_phase(step, cancelled[0]) if cancelled else "")
+    if not timeline:
+        # No failed-step text and no timeline: the data to name a cause is
+        # missing, and "Runner lost" is a confident claim that blames CI.
+        # "unknown" says what is true; the audit's sample comparison still
+        # flags the row.
+        return _cause("unknown", "", "")
     return _cause("runner", "", "")
 
 

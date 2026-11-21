@@ -332,7 +332,8 @@ def _test_recent(rows, limit):
             "duration_s": row["duration_s"],
             "commit": row["source_sha"],
             "run_id": str(row["run_id"]),
-            "run_url": f"https://github.com/{ORG}/{row['repo']}/actions/runs/{row['run_id']}",
+            "run_url": (f"https://github.com/{ORG}/{row['repo']}/actions/runs/{row['run_id']}"
+                        if row.get("repo") else ""),
         })
     return recent
 
@@ -581,7 +582,8 @@ def _job_recent(rows, limit):
     for row in rows[:limit]:
         duration = row["duration_s"] if row["duration_s"] else None
         run_id = row["run_id"] or str(row["id"])
-        url = row["url"] or f"https://github.com/{ORG}/{row['repo']}/actions/runs/{run_id}"
+        url = row["url"] or (f"https://github.com/{ORG}/{row['repo']}/actions/runs/{run_id}"
+                    if row.get("repo") else "")
         recent.append({
             "created_at": row["created_at"],
             "day": (row["created_at"] or "")[:10],

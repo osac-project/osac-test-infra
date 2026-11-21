@@ -162,7 +162,14 @@ def test_a_failure_without_a_failed_step_is_a_timeout_or_a_lost_runner(phases):
     assert timed_out["cause"] == "timeout"
     assert timed_out["step"] == "Run E2E tests"
     assert timed_out["phase"] == "test"
-    assert phases.failure_cause("failure", "", [])["cause"] == "runner"
+    # A timeline that shows no failed step at all is a lost runner; no
+    # timeline and no failed-step text is an honest "cause unknown", not a
+    # confident claim that blames CI.
+    empty_timeline = [{"name": "e2e", "conclusion": "failure", "steps": []}]
+    assert phases.failure_cause("failure", "", empty_timeline)["cause"] == "runner"
+    unknown = phases.failure_cause("failure", "", [])
+    assert unknown["cause"] == "unknown"
+    assert "no step data" in unknown["label"]
     assert phases.failure_cause("timed_out", "", None)["cause"] == "timeout"
 
 

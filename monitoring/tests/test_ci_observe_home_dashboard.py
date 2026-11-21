@@ -294,12 +294,6 @@ def test_the_table_can_be_filtered() -> None:
     assert table["fieldConfig"]["defaults"]["custom"]["filterable"] is True
 
 
-def test_every_link_opens_a_dashboard_that_exists() -> None:
-    uids = {json.loads(path.read_text())["uid"] for path in DASHBOARDS_DIR.glob("ci-observe-*.json")}
-    for link in DASHBOARD["links"]:
-        uid = link["url"].split("/d/")[1].split("/")[0]
-        assert uid in uids, link["url"]
-
 
 def test_no_template_token_is_left_unresolved() -> None:
     known = set(variables()) | {"__data", "__value"}

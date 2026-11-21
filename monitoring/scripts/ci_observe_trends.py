@@ -1265,9 +1265,13 @@ def _roll_up(conn, runs, force, now):
         logger.info("  %s run %s: no test data (%s)", run["repo"], run_id, reason)
         if run_id in stored and not force:
             # An older pass read this run and the artifact is gone now: keep
-            # what was read, and stop asking.
+            # what was read, and stop asking. The rows keep the version they
+            # were actually stored with, so a parser upgrade still re-reads
+            # them; stamping the current version here would mark old-format
+            # rows as current forever.
             run["cases"] = stored[run_id]
-            no_data.append({**entry, "state": "parsed"})
+            previous = fetches.get(run_id) or {}
+            no_data.append({**entry, "state": "parsed", "version": previous.get("version") or entry["version"]})
             continue
         run["cases"] = []
         # A run's own fact (no artifact where its trigger says, expired, no

@@ -79,13 +79,22 @@ check_remote_haproxy() {
 }
 
 ###############################################################################
-# Detect mode: central has prometheus.service, agent does not
+# Detect mode: a central machine has the prometheus CONTAINER running; an
+# agent does not. The old detection (is-enabled on the unit) turned a
+# central machine whose prometheus.service was disabled or failed to
+# generate into an "agent": every central check was skipped and the script
+# exited green on exactly the machine it should have failed.
 ###############################################################################
 IS_CENTRAL=false
-if systemctl --user list-unit-files prometheus.service &>/dev/null; then
-    if systemctl --user is-enabled prometheus.service &>/dev/null; then
-        IS_CENTRAL=true
-    fi
+if podman container exists prometheus 2>/dev/null; then
+    IS_CENTRAL=true
+elif systemctl --user list-unit-files prometheus.service 2>/dev/null | grep -q "prometheus.service"; then
+    # The unit exists but its container does not: that is a broken central
+    # machine, not an agent. Fail instead of switching modes.
+    echo "CRITICAL: prometheus.service exists but the prometheus container is not" >&2
+    echo "          running. This looks like a central machine with a broken stack." >&2
+    echo "          Fix: systemctl --user restart prometheus.service" >&2
+    exit 1
 fi
 
 if [[ "${IS_CENTRAL}" == "true" ]]; then

@@ -244,12 +244,23 @@ reload_prometheus() {
         if curl -sf -X POST http://127.0.0.1:9091/-/reload 2>/dev/null; then
             info "Prometheus config reloaded."
         else
-            echo "  WARNING: Prometheus reload failed -- restart it manually or run:"
-            echo "    curl -X POST http://127.0.0.1:9091/-/reload"
+            # The scrape config on disk is not loaded: a runner registered
+            # now is silently missing from Prometheus until someone reloads
+            # by hand. One retry, then fail the operation -- "registered"
+            # must not read as done.
+            sleep 3
+            if curl -sf -X POST http://127.0.0.1:9091/-/reload 2>/dev/null; then
+                info "Prometheus config reloaded (second attempt)."
+            else
+                echo "  ERROR: Prometheus reload failed twice -- the scrape config on disk is NOT loaded." >&2
+                echo "         Reload it by hand:  curl -X POST http://127.0.0.1:9091/-/reload" >&2
+                return 1
+            fi
         fi
     else
-        echo "  WARNING: curl not available -- reload Prometheus manually:"
-        echo "    curl -X POST http://127.0.0.1:9091/-/reload"
+        echo "  ERROR: curl not available -- Prometheus cannot be reloaded:" >&2
+        echo "    curl -X POST http://127.0.0.1:9091/-/reload" >&2
+        return 1
     fi
 }
 
@@ -308,11 +319,14 @@ deploy_caddyfile() {
     # request fails the moment Caddy reloads with the new file. Warn loudly
     # instead of gating: telemetry must never block a monitoring deploy.
     if ! curl -sf -m 5 http://127.0.0.1:14333/healthcheck >/dev/null 2>&1; then
-        echo "  WARNING: otelcol-router is NOT healthy on 127.0.0.1:14333." >&2
-        echo "           Deploying this Caddyfile anyway will break the ci-observe OTLP" >&2
-        echo "           ingest (Caddy will proxy to a dead upstream on :14318)." >&2
-        echo "           Install/recover the router first:" >&2
-        echo "             sudo monitoring/scripts/deploy-otelcol-router.sh" >&2
+        echo "  ERROR: otelcol-router is NOT healthy on 127.0.0.1:14333." >&2
+        echo "         Deploying this Caddyfile anyway (telemetry must not block a monitoring" >&2
+        echo "         deploy), but it will break the ci-observe OTLP ingest: Caddy will proxy" >&2
+        echo "         to a dead upstream on :14318. Install/recover the router first:" >&2
+        echo "           sudo monitoring/scripts/deploy-otelcol-router.sh" >&2
+        # The deploy continues on purpose, but the job must not read as
+        # green while a known-dead upstream is being shipped.
+        OTEL_ROUTER_UNHEALTHY=1
     fi
 
     local tmp
@@ -1093,16 +1107,31 @@ else
 fi
 phase ${phase_num} "Enabling loginctl linger"
 
-loginctl enable-linger "$(whoami)" 2>/dev/null || true
+# Linger must be on: without it the entire user-level stack dies when the
+# deploying user logs out. A failure here is setup that did not happen.
+if ! loginctl enable-linger "$(whoami)" 2>/dev/null; then
+    echo "ERROR: loginctl enable-linger failed -- the monitoring stack will stop" >&2
+    echo "       when this user logs out. Fix it before deploying again." >&2
+    exit 1
+fi
 
 # Enable services so they survive reboots (Quadlet WantedBy handles this for
-# container units, but explicit enable ensures consistent state).
+# container units, but explicit enable ensures consistent state). A service
+# that cannot be enabled will not come back after a reboot.
 for svc in "${COMMON_SERVICES[@]}"; do
-    systemctl --user enable "${svc}" 2>/dev/null || true
+    if ! systemctl --user enable "${svc}" 2>/dev/null; then
+        echo "ERROR: systemctl --user enable ${svc} failed -- it will not come back" >&2
+        echo "       after a reboot." >&2
+        exit 1
+    fi
 done
 if [[ "${MODE}" == "central" ]]; then
     for svc in "${CENTRAL_SERVICES[@]}"; do
-        systemctl --user enable "${svc}" 2>/dev/null || true
+        if ! systemctl --user enable "${svc}" 2>/dev/null; then
+            echo "ERROR: systemctl --user enable ${svc} failed -- it will not come back" >&2
+            echo "       after a reboot." >&2
+            exit 1
+        fi
     done
 fi
 
@@ -1111,6 +1140,13 @@ fi
 ###############################################################################
 echo ""
 echo "============================================"
+if [[ -n "${OTEL_ROUTER_UNHEALTHY:-}" ]]; then
+    echo "  Setup complete, WITH A FAILURE: the otelcol-router is unhealthy," >&2
+    echo "  so the deployed Caddyfile proxies OTLP to a dead upstream." >&2
+    echo "  Recover it:  sudo monitoring/scripts/deploy-otelcol-router.sh" >&2
+    echo "============================================" >&2
+    exit 1
+fi
 if [[ "${MODE}" == "central" ]]; then
     echo "  Monitoring setup complete (central)!"
 else
