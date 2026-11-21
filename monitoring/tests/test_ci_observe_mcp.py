@@ -83,7 +83,8 @@ def web(monkeypatch):
 def config():
     return mcp.Config(
         bind="127.0.0.1", port=0, exporter_url="http://exporter", grafana_url="https://grafana",
-        external_url="https://outside", github_client_id="cid", github_client_secret="secret",
+        grafana_api_url="https://grafana", external_url="https://outside",
+        github_client_id="cid", github_client_secret="secret",
         grafana_service_token="token", session_secret="session-secret", github_api_url="https://gh",
         grafana_verify_tls=False,
     )
@@ -498,6 +499,34 @@ def test_a_refused_login_code_names_githubs_reason(config, monkeypatch):
     monkeypatch.setattr(mcp.requests, "post", lambda *args, **kwargs: Refused())
     with pytest.raises(mcp.AuthError, match="bad_verification_code"):
         mcp.github_login(config, "the-code")
+
+
+def test_the_grafana_check_reads_a_separate_reachable_address(config, web):
+    """The VPN-only Grafana name does not resolve on the monitoring host;
+    the check goes through MCP_GRAFANA_API_URL (loopback there) while the
+    links keep the public name."""
+    reachable = mcp.Config(
+        bind="127.0.0.1", port=0, exporter_url="http://exporter", grafana_url="https://grafana",
+        grafana_api_url="https://127.0.0.1:3000", external_url="https://outside",
+        github_client_id="cid", github_client_secret="secret",
+        grafana_service_token="token", session_secret="session-secret", github_api_url="https://gh",
+        grafana_verify_tls=False,
+    )
+    web.add("https://127.0.0.1:3000/api/org/users", [{"login": "dev"}])
+    assert mcp.grafana_user_exists(reachable, "dev") is True
+    assert all("127.0.0.1:3000" in call for call in web.calls)
+
+
+def test_an_unreachable_grafana_is_an_error_not_a_crash(config, web, monkeypatch):
+    """A DNS failure in the Grafana check must answer a clear error, not
+    kill the request: the browser then reloaded the dead page and the
+    consumed nonce read as 'the login state was broken'."""
+    monkeypatch.setattr(
+        mcp.requests, "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            mcp.requests.exceptions.ConnectionError("Failed to resolve 'osac-ci.redhat.com'")))
+    with pytest.raises(mcp.AuthError, match="could not be reached"):
+        mcp.grafana_user_exists(config, "dev")
 
 
 def test_the_grafana_gate_reads_the_org_user_list(config, web):
