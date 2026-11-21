@@ -468,6 +468,23 @@ def test_a_verifier_that_does_not_match_is_refused(server, monkeypatch):
     assert answer.status == 400
 
 
+def test_a_refused_login_code_names_githubs_reason(config, monkeypatch):
+    """The error carries GitHub's own reason, not a generic line: a burned
+    code (bad_verification_code) and a wrong secret (incorrect_client_
+    credentials) must be tellable apart from the browser."""
+    class Refused:
+        ok = True
+        status_code = 200
+
+        def json(self):
+            return {"error": "bad_verification_code",
+                    "error_description": "The code passed is incorrect or expired."}
+
+    monkeypatch.setattr(mcp.requests, "post", lambda *args, **kwargs: Refused())
+    with pytest.raises(mcp.AuthError, match="bad_verification_code"):
+        mcp.github_login(config, "the-code")
+
+
 def test_the_grafana_gate_reads_the_org_user_list(config, web):
     web.add("https://grafana/api/org/users",
             [{"login": "dev", "role": "Admin"}, {"login": "other", "role": "Viewer"}])
