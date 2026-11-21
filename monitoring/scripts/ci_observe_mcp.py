@@ -106,8 +106,11 @@ class Config:
     bind: str
     port: int
     exporter_url: str
-    grafana_url: str
-    external_url: str          # the origin this server is published under (https://host:3443)
+    grafana_url: str          # the address browsers use for Grafana links
+    grafana_api_url: str      # the address this server reads Grafana through; the
+                              # VPN-only name does not resolve on the host, so this
+                              # is the loopback listener by default of deployment
+    external_url: str         # the origin this server is published under (https://host:3443)
     github_client_id: str
     github_client_secret: str
     grafana_service_token: str
@@ -138,6 +141,7 @@ class Config:
             port=int(os.getenv("MCP_PORT", "9105")),
             exporter_url=os.getenv("EXPORTER_URL", "http://127.0.0.1:9103").rstrip("/"),
             grafana_url=os.getenv("MCP_GRAFANA_URL").rstrip("/"),
+            grafana_api_url=(os.getenv("MCP_GRAFANA_API_URL") or os.getenv("MCP_GRAFANA_URL", "")).rstrip("/"),
             external_url=os.getenv("MCP_EXTERNAL_URL").rstrip("/"),
             github_client_id=os.getenv("MCP_GITHUB_CLIENT_ID", ""),
             github_client_secret=os.getenv("MCP_GITHUB_CLIENT_SECRET", ""),
@@ -193,23 +197,27 @@ def github_login(config: Config, code: str) -> str:
             "client_id": config.github_client_id,
             "client_secret": config.github_client_secret,
             "code": code,
+            "redirect_uri": f"{config.external_url}/oauth/callback",
         },
         headers={"Accept": "application/json"},
         timeout=15,
     )
     if not answer.ok:
         raise AuthError(f"GitHub would not exchange the login code: HTTP {answer.status_code}")
-    access_token = answer.json().get("access_token")
+    body = answer.json()
+    access_token = body.get("access_token")
     if not access_token:
-        raise AuthError("GitHub named no access token for the login code")
-    user = requests.get(
+        detail = body.get("error") or "no error named"
+        description = body.get("error_description") or ""
+        raise AuthError(f"GitHub refused the login code: {detail}. {description}".strip())
+    access_token = requests.get(
         f"{config.github_api_url}/user",
         headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"},
         timeout=15,
     )
-    if not user.ok:
-        raise AuthError(f"GitHub would not say who logged in: HTTP {user.status_code}")
-    login = user.json().get("login")
+    if not access_token.ok:
+        raise AuthError(f"GitHub would not say who logged in: HTTP {access_token.status_code}")
+    login = access_token.json().get("login")
     if not login:
         raise AuthError("GitHub named no login")
     return login
@@ -220,13 +228,22 @@ def grafana_user_exists(config: Config, login: str) -> bool:
     the org's user list (GET /api/org/users), which a service account with
     the Admin basic role may; the global user search needs a permission to
     grant, and /api/users/lookup is gone in Grafana 13 (404 for the server
-    admin too), so neither is used."""
-    answer = requests.get(
-        f"{config.grafana_url}/api/org/users",
-        headers={"Authorization": f"Bearer {config.grafana_service_token}"},
-        verify=config.grafana_verify_tls,
-        timeout=15,
-    )
+    admin too), so neither is used. A Grafana that cannot be reached is an
+    error naming the address, never a crash."""
+    try:
+        answer = requests.get(
+            f"{config.grafana_api_url}/api/org/users",
+            headers={"Authorization": f"Bearer {config.grafana_service_token}"},
+            verify=config.grafana_verify_tls,
+            timeout=15,
+        )
+    except requests.RequestException as error:
+        raise AuthError(
+            f"Grafana could not be reached at {config.grafana_api_url}: {error}. "
+            "The VPN-only hostname does not resolve on the monitoring host; set "
+            "MCP_GRAFANA_API_URL to an address the container can reach, such as "
+            "https://127.0.0.1:3000."
+        ) from error
     if answer.status_code == 200:
         users = answer.json()
         if not isinstance(users, list):
@@ -839,6 +856,33 @@ def mint_code(login: str, challenge: str, redirect_uri: str, now: float) -> str:
     return code
 
 
+# The logins in flight: /authorize sends GitHub a short random state and
+# keeps the client's parameters (its id, redirect URI, PKCE challenge and
+# state) here instead. Carrying them through GitHub's state -- a ~300
+# character blob -- made GitHub mint codes it then refused at exchange
+# (bad_verification_code, isolated by a controlled experiment: the same
+# authorize with a short state exchanges fine), so the blob never leaves
+# this process. Fifteen minutes of life; a restart forces a new login.
+AUTHORIZES: dict[str, dict] = {}
+AUTHORIZE_SECONDS = 15 * 60
+
+
+def mint_authorize(redirect_uri: str, challenge: str, state: str, now: float) -> str:
+    nonce = secrets.token_urlsafe(16)
+    AUTHORIZES[nonce] = {"redirect_uri": redirect_uri, "challenge": challenge,
+                         "state": state, "expires": now + AUTHORIZE_SECONDS}
+    for key in [key for key, entry in AUTHORIZES.items() if entry["expires"] < now]:
+        AUTHORIZES.pop(key, None)
+    return nonce
+
+
+def take_authorize(nonce: str, now: float) -> dict | None:
+    entry = AUTHORIZES.pop(nonce, None)
+    if entry is None or entry["expires"] < now:
+        return None
+    return entry
+
+
 # -- the HTTP server ----------------------------------------------------------------
 
 
@@ -956,8 +1000,6 @@ class McpHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_request",
                                                      "error_description": "PKCE with S256 is required"})
             return
-        carry = urllib.parse.urlencode({"client_id": client_id, "redirect_uri": redirect_uri,
-                                        "code_challenge": challenge, "state": state})
         cookies = SimpleCookie()
         cookies.load(self.headers.get("Cookie") or "")
         morsel = cookies.get(SESSION_COOKIE)
@@ -969,12 +1011,15 @@ class McpHandler(BaseHTTPRequestHandler):
                 target += f"&state={urllib.parse.quote(state)}"
             self._redirect(target)
             return
+        # The client's parameters stay here (see AUTHORIZES); GitHub gets a
+        # short nonce as the state.
+        nonce = mint_authorize(redirect_uri, challenge, state, now)
         github = ("https://github.com/login/oauth/authorize?"
                   + urllib.parse.urlencode({
                       "client_id": config.github_client_id,
                       "redirect_uri": self._external("/oauth/callback"),
                       "scope": "read:user",
-                      "state": carry,
+                      "state": nonce,
                   }))
         self._redirect(github)
 
@@ -982,20 +1027,21 @@ class McpHandler(BaseHTTPRequestHandler):
         config = self.state.config
         query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
         code = (query.get("code") or [""])[0]
-        carry = (query.get("state") or [""])[0]
-        if not code or not carry:
+        nonce = (query.get("state") or [""])[0]
+        if not code or not nonce:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "the login was refused"})
             return
-        client = urllib.parse.parse_qs(carry)
-        redirect_uri = (client.get("redirect_uri") or [""])[0]
-        challenge = (client.get("code_challenge") or [""])[0]
-        state = (client.get("state") or [""])[0]
-        if not redirect_uri or not challenge:
+        entry = take_authorize(nonce, now)
+        if entry is None:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "the login state was broken"})
             return
+        redirect_uri = entry["redirect_uri"]
+        challenge = entry["challenge"]
+        state = entry["state"]
         try:
             login = github_login(config, code)
         except AuthError as error:
+            logger.error("the GitHub login of the OAuth callback was refused: %s", error)
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
         try:
@@ -1006,6 +1052,7 @@ class McpHandler(BaseHTTPRequestHandler):
                 })
                 return
         except AuthError as error:
+            logger.error("the Grafana check of the OAuth callback failed: %s", error)
             self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
             return
         token = mint_token(config.session_secret, login, now)
