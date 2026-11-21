@@ -139,6 +139,21 @@ RECONCILE_INTERVAL = int(os.getenv("RECONCILE_INTERVAL", "1800"))
 RECONCILE_HOURS = int(os.getenv("RECONCILE_HOURS", "48"))
 RECONCILE_MIN_RATE_LIMIT = int(os.getenv("RECONCILE_MIN_RATE_LIMIT", "1000"))
 
+# The reconciliation re-lists only the last RECONCILE_HOURS. The gap check
+# guards the whole retention window: once an hour it asks GitHub how many
+# completed runs each fully-past day holds (one call per repo per day) and
+# compares that with the stored rows. A day whose count matches is marked ok;
+# a day that differs is verified run by run through the same storing path the
+# backfill uses. So the check is instant while everything is there and spends
+# calls only on a real gap. GitHub's day count includes event="dynamic" runs
+# the exporter never stores, and counts a run created at the window's edge on
+# both days that touch it; a verified day records that difference as its
+# adjustment instead of re-verifying every hour. A probe GitHub did not answer
+# is recorded as an error for that day, never as "no gap".
+GAP_CHECK_INTERVAL = int(os.getenv("GAP_CHECK_INTERVAL", "3600"))
+GAP_CHECK_MIN_RATE_LIMIT = int(os.getenv("GAP_CHECK_MIN_RATE_LIMIT", "2500"))
+GAP_CHECK_VERIFIES_PER_PASS = int(os.getenv("GAP_CHECK_VERIFIES_PER_PASS", "4"))
+
 # ---------------------------------------------------------------------------
 # Prometheus metrics
 # ---------------------------------------------------------------------------
@@ -207,6 +222,34 @@ reconciled_runs = Counter(
     "github_actions_reconciled_runs_total",
     "Completed runs the polling missed or kept with an outdated result, stored by the reconciliation",
     ["org", "repo"],
+)
+gap_check_days = Gauge(
+    "github_actions_gap_check_days",
+    "Fully-past days of the retention window in each gap-check state "
+    "(ok: count matches, pending: differs, verification queued, gapped: runs verified missing, error: GitHub did not answer)",
+    ["org", "repo", "state"],
+)
+gap_check_missing = Gauge(
+    "github_actions_gap_check_missing_runs",
+    "Runs the gap check verified as missing from the job history",
+    ["org", "repo"],
+)
+gap_check_skipped = Counter(
+    "github_actions_gap_check_skipped_total",
+    "Gap-check passes skipped because the shared GitHub budget was below GAP_CHECK_MIN_RATE_LIMIT",
+    ["org"],
+)
+gap_check_last_success = Gauge(
+    "github_actions_gap_check_last_success",
+    "Unix time of the last gap-check pass that got an answer for every day of every repo",
+    ["org"],
+)
+store_last_success = Gauge(
+    "ci_observe_store_last_success",
+    "Unix time of the last success of each ci-observe store: jobs a finished poll cycle, "
+    "trends and spans their last rollup pass, prs the end of the last fully covered window, "
+    "audit the daily check. A store that cannot be read keeps its last value and ages",
+    ["org", "store"],
 )
 
 
@@ -1396,6 +1439,12 @@ class WorkflowExporter:
         # time.monotonic() of the last reconciliation; None runs one on the
         # first cycle, which also covers what a restart missed.
         self._reconciled_at = None
+        # time.monotonic() of the last gap check; None runs one on the first
+        # cycle, so a restart proves the whole window before it trusts it.
+        self._gap_checked_at = None
+        # The last freshness error logged per store, so a store that stays
+        # unreadable logs once per distinct reason, not once per cycle.
+        self._store_freshness_errors: dict[str, str] = {}
         # Run-evidence lookup for /api/ci-observe/run (see
         # get_ci_observe_run_json and ci_observe_run_evidence.py): parsed
         # native JUnit results and run metadata fetched on demand from
@@ -1495,6 +1544,25 @@ class WorkflowExporter:
                         "approval_to_queue_seconds", "via_merge_queue"):
                 if col not in pr_merges_cols:
                     conn.execute(f"ALTER TABLE pr_merges ADD COLUMN {col} INTEGER")
+            # One row per (repo, day) of the retention window, written by the
+            # hourly gap check: GitHub's completed-run count for the day, the
+            # difference a verification could not store (dynamic runs, a run
+            # created at the day's edge and counted on both days), the stored
+            # count, and the state the comparison ended in.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS day_checks (
+                    repo TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    expected INTEGER,
+                    adjustment INTEGER NOT NULL DEFAULT 0,
+                    stored INTEGER,
+                    missing INTEGER,
+                    state TEXT NOT NULL,
+                    error TEXT NOT NULL DEFAULT '',
+                    checked_at TEXT NOT NULL,
+                    PRIMARY KEY (repo, day)
+                )
+            """)
             # The capture registry the request path reads (see
             # CaptureRegistry): captures and the per-source coverage rows.
             self._captures.ensure_schema(conn)
@@ -3138,6 +3206,245 @@ class WorkflowExporter:
             stored += new
         return stored
 
+    # -- gap check ------------------------------------------------------------
+
+    GAP_CHECK_STATES = ("ok", "pending", "gapped", "error")
+
+    @staticmethod
+    def _gap_check_days(now):
+        """The fully-past days of the retention window, oldest first. The
+        oldest day still lies entirely inside the retention (the prune
+        deletes by created_at age, so a straddling day would never match),
+        and today is left to the polling and the reconciliation: its count
+        is still growing."""
+        first = (now - timedelta(days=JOBS_HISTORY_DAYS - 1)).date()
+        last = now.date() - timedelta(days=1)
+        days = []
+        day = first
+        while day <= last:
+            days.append(day.isoformat())
+            day += timedelta(days=1)
+        return days
+
+    def _stored_runs_on_day(self, repo, day):
+        """Distinct runs stored for one repo and day, [00:00:00Z, next
+        00:00:00Z). A suite row carries its parent run's id in run_id; a
+        run row carries its own in id, so counting ids must fold the two
+        together."""
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT COALESCE(NULLIF(run_id, ''), CAST(id AS TEXT))) FROM jobs"
+                " WHERE repo = ? AND created_at >= ? AND created_at < ?",
+                (repo, f"{day}T00:00:00Z", f"{self._next_day(day)}T00:00:00Z"),
+            ).fetchone()
+        return row[0]
+
+    @staticmethod
+    def _next_day(day):
+        return (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).date().isoformat()
+
+    def _probe_day(self, repo, day):
+        """GitHub's count of completed runs created from a day's start to
+        the next day's start (one call), or (None, reason) when GitHub did
+        not answer. The created filter includes both ends, so a run created
+        at the next day's midnight is counted here and on its own day; the
+        verification absorbs that as adjustment."""
+        url = (f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
+               f"?status=completed&per_page=1&created={day}T00:00:00Z..{self._next_day(day)}T00:00:00Z")
+        resp = self._get(url)
+        if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
+            return None, "the shared GitHub budget ran out"
+        if not resp.ok:
+            return None, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        try:
+            total = resp.json().get("total_count")
+        except ValueError:
+            return None, f"HTTP {resp.status_code}: the answer was not a listing"
+        if not isinstance(total, int):
+            return None, f"HTTP {resp.status_code}: the answer named no total_count"
+        return total, ""
+
+    def _record_day_check(self, repo, day, *, expected=None, adjustment=None, stored=None,
+                          missing=None, state, error=""):
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO day_checks (repo, day, expected, adjustment, stored, missing, state, error, checked_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(repo, day) DO UPDATE SET"
+                " expected=excluded.expected, adjustment=excluded.adjustment, stored=excluded.stored,"
+                " missing=excluded.missing, state=excluded.state, error=excluded.error,"
+                " checked_at=excluded.checked_at",
+                (repo, day, expected, adjustment or 0, stored, missing,
+                 state, error, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
+            )
+
+    def _day_check_row(self, repo, day):
+        with self._db() as conn:
+            row = conn.execute("SELECT * FROM day_checks WHERE repo = ? AND day = ?", (repo, day)).fetchone()
+        return dict(row) if row else None
+
+    def _missing_run_ids(self, ids):
+        """Which of the listed run ids have no row at all, in batches."""
+        missing = []
+        with self._db() as conn:
+            for start in range(0, len(ids), 500):
+                batch = [int(run_id) for run_id in ids[start:start + 500]]
+                marks = ",".join("?" * len(batch))
+                present = {row[0] for row in conn.execute(f"SELECT id FROM jobs WHERE id IN ({marks})", batch)}
+                missing.extend(run_id for run_id in batch if run_id not in present)
+        return missing
+
+    def _list_window_runs(self, repo, since_dt, until_dt):
+        """(ids, dynamic) of the completed runs GitHub lists for
+        [since_dt, until_dt), splitting any window whose total_count would
+        be truncated by GitHub's ~1000-result list cap, so every run of the
+        window is seen. (None, reason) when GitHub did not answer."""
+        since_str = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        until_str = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        probe = self._get(f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
+                          f"?status=completed&per_page=100&created={since_str}..{until_str}")
+        if probe.status_code == 403 and probe.headers.get("X-RateLimit-Remaining") == "0":
+            return None, "the shared GitHub budget ran out during the verification"
+        if not probe.ok:
+            return None, f"HTTP {probe.status_code}: {probe.text[:200]}"
+        total_count = probe.json().get("total_count")
+        if not isinstance(total_count, int):
+            return None, f"HTTP {probe.status_code}: the answer named no total_count"
+        if total_count > self.BACKFILL_SAFE_RESULT_LIMIT and (until_dt - since_dt) > timedelta(hours=1):
+            mid = since_dt + (until_dt - since_dt) / 2
+            first = self._list_window_runs(repo, since_dt, mid)
+            if first[0] is None:
+                return first
+            second = self._list_window_runs(repo, mid, until_dt)
+            if second[0] is None:
+                return second
+            return first[0] + second[0], first[1] + second[1]
+
+        ids = []
+        dynamic = 0
+        for run in probe.json().get("workflow_runs") or []:
+            if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
+                dynamic += 1
+            else:
+                ids.append(run["id"])
+        url = probe.links.get("next", {}).get("url")
+        while url:
+            page = self._get(url)
+            if not page.ok:
+                return None, f"HTTP {page.status_code}: {page.text[:200]}"
+            runs = page.json().get("workflow_runs")
+            if not isinstance(runs, list):
+                return None, f"HTTP {page.status_code}: the answer named no workflow_runs"
+            for run in runs:
+                if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
+                    dynamic += 1
+                else:
+                    ids.append(run["id"])
+            url = page.links.get("next", {}).get("url")
+        return ids, dynamic
+
+    def _verify_day(self, repo, day):
+        """(dynamic, missing_ids) for one day after storing the runs the
+        history lacks, or (None, reason) when GitHub did not answer.
+        dynamic counts the event="dynamic" runs the exporter never stores;
+        missing are listed run ids with no row at all -- a run created at
+        the day's edge and stored under the next day counts as present."""
+        day_start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        result = self._list_window_runs(repo, day_start, day_start + timedelta(days=1))
+        if result[0] is None:
+            return None, result[1]
+        ids, dynamic = result
+        missing = self._missing_run_ids(ids)
+        if missing:
+            self._backfill_range(repo, day_start, day_start + timedelta(days=1), wait=False)
+            missing = self._missing_run_ids(ids)
+        return dynamic, missing
+
+    def _gap_check_if_due(self, repos, now=None):
+        """Once an hour, prove the job history complete over the whole
+        retention window (see GAP_CHECK_INTERVAL). Every fully-past day of
+        every repo is probed with one call; a day whose count does not
+        match is verified run by run, at most GAP_CHECK_VERIFIES_PER_PASS
+        per pass so a first run or a burst of gaps spreads over a few
+        hours. Returns the number of days left unverified, or None when
+        the pass did not run."""
+        now_mono = time.monotonic()
+        if self._gap_checked_at is not None and now_mono - self._gap_checked_at < GAP_CHECK_INTERVAL:
+            return None
+        if self._rate_limit_remaining is not None and self._rate_limit_remaining < GAP_CHECK_MIN_RATE_LIMIT:
+            gap_check_skipped.labels(org=ORG).inc()
+            logger.info("Gap check waits: %d API calls left, below %d",
+                        self._rate_limit_remaining, GAP_CHECK_MIN_RATE_LIMIT)
+            return None
+        self._gap_checked_at = now_mono
+        now = now or datetime.now(timezone.utc)
+        days = self._gap_check_days(now)
+        verified = 0
+        unverified = 0
+        answered_all = True
+        for repo in repos:
+            # Newest day first: a fresh gap is verified before an old one.
+            for day in reversed(days):
+                expected, error = self._probe_day(repo, day)
+                if expected is None:
+                    self._record_day_check(repo, day, state="error", error=error)
+                    answered_all = False
+                    logger.error("Gap check for %s %s could not read GitHub: %s", repo, day, error)
+                    continue
+                stored = self._stored_runs_on_day(repo, day)
+                previous = self._day_check_row(repo, day)
+                adjustment = previous["adjustment"] if previous else 0
+                if expected - adjustment == stored:
+                    self._record_day_check(repo, day, expected=expected, adjustment=adjustment,
+                                           stored=stored, missing=0, state="ok")
+                    continue
+                if verified >= GAP_CHECK_VERIFIES_PER_PASS:
+                    self._record_day_check(repo, day, expected=expected, adjustment=adjustment,
+                                           stored=stored, state="pending")
+                    unverified += 1
+                    continue
+                verified += 1
+                result = self._verify_day(repo, day)
+                if result[0] is None:
+                    self._record_day_check(repo, day, expected=expected, adjustment=adjustment,
+                                           stored=stored, state="error", error=result[1])
+                    answered_all = False
+                    logger.error("Gap check for %s %s could not verify the day: %s", repo, day, result[1])
+                    continue
+                dynamic, missing = result
+                if missing:
+                    self._record_day_check(repo, day, expected=expected, adjustment=adjustment,
+                                           stored=stored, missing=len(missing), state="gapped",
+                                           error=f"{len(missing)} listed run(s) stored nowhere: "
+                                 f"{', '.join(str(m) for m in missing[:10])}")
+                    logger.error("Gap check for %s %s: %d run(s) missing from the job history: %s",
+                                 repo, day, len(missing), ", ".join(str(m) for m in missing[:10]))
+                    continue
+                stored = self._stored_runs_on_day(repo, day)
+                self._record_day_check(repo, day, expected=expected,
+                                       adjustment=max(0, expected - stored), stored=stored,
+                                       missing=0, state="ok")
+        self._export_gap_check_gauges(repos)
+        if answered_all:
+            gap_check_last_success.labels(org=ORG).set(time.time())
+        return unverified
+
+    def _export_gap_check_gauges(self, repos):
+        """Day counts by state and missing-run totals, zeroing states that
+        vanished since the last pass (a healed day must not linger)."""
+        with self._db() as conn:
+            rows_ = conn.execute("SELECT repo, state, COUNT(*) AS days, COALESCE(SUM(missing), 0) AS missing"
+                                 " FROM day_checks GROUP BY repo, state").fetchall()
+        by_repo = {repo: {state: [0, 0] for state in WorkflowExporter.GAP_CHECK_STATES} for repo in repos}
+        for row in rows_:
+            if row["repo"] in by_repo and row["state"] in WorkflowExporter.GAP_CHECK_STATES:
+                by_repo[row["repo"]][row["state"]] = [row["days"], row["missing"]]
+        for repo, states in by_repo.items():
+            for state, (days, missing) in states.items():
+                gap_check_days.labels(org=ORG, repo=repo, state=state).set(days)
+            gap_check_missing.labels(org=ORG, repo=repo).set(
+                sum(missing for _, missing in states.values()))
+
     def backfill(self, days):
         """One-off backfill: fetch completed runs from the last `days` days
         across all monitored repos and upsert them into the DB, bisecting
@@ -3510,6 +3817,14 @@ class WorkflowExporter:
         except Exception:
             logger.exception("Reconciliation failed this cycle")
 
+        # The reconciliation covers the last two days; the gap check proves
+        # the whole retention window once an hour. Its own failures are
+        # recorded per day in day_checks, not silent.
+        try:
+            self._gap_check_if_due(repos)
+        except Exception:
+            logger.exception("Gap check failed this cycle")
+
         # Last, after this cycle's own work: older E2E rows get their job
         # timeline a few at a time. Best-effort; it must never stop a cycle.
         try:
@@ -3528,6 +3843,83 @@ class WorkflowExporter:
             tot_in_progress,
             total_jobs,
         )
+        # Last line of the cycle on purpose: a cycle that raised anywhere
+        # above does not pin the poll's own freshness, so the gauge ages and
+        # the stale alert fires.
+        self._update_store_freshness()
+
+    # -- store freshness -------------------------------------------------------
+
+    def _update_store_freshness(self):
+        """Pin the last success of every ci-observe store, so a stalled
+        pass is an alert, not a quiet gap (see CiObserveStoreStale). A
+        store that cannot be read keeps its last value: the gauge ages and
+        the alert fires. The failure is logged once per distinct reason."""
+        store_last_success.labels(org=ORG, store="jobs").set(time.time())
+        self._pin_store_freshness(
+            "trends", self._read_store_scalar(
+                os.path.join(CACHE_DIR, "trends.db"),
+                "SELECT MAX(finished_at) FROM rollup_passes WHERE job = 'trends'"))
+        self._pin_store_freshness(
+            "spans", self._read_store_scalar(
+                os.path.join(CACHE_DIR, "trends.db"),
+                "SELECT MAX(finished_at) FROM rollup_passes WHERE job = 'spans'"))
+        self._pin_store_freshness(
+            "prs", self._read_store_scalar(
+                os.path.join(CACHE_DIR, "prs.db"),
+                "SELECT MAX(window_to) FROM pr_backfill_runs WHERE listing_complete = 1"))
+        self._pin_store_freshness("audit", self._read_audit_checked_at())
+
+    def _pin_store_freshness(self, store, result):
+        """Set one store's gauge from (value, error). A value that is not a
+        timestamp is logged with the error and leaves the gauge alone."""
+        value, error = result
+        epoch = None
+        if value and not error:
+            try:
+                epoch = datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                error = f"the last-success time of {store} is not a timestamp: {value!r}"
+        if epoch is None:
+            if self._store_freshness_errors.get(store) != error:
+                self._store_freshness_errors[store] = error
+                logger.error("Store freshness of %s could not be read: %s", store, error)
+            return
+        self._store_freshness_errors.pop(store, None)
+        store_last_success.labels(org=ORG, store=store).set(epoch)
+
+    def _read_store_scalar(self, path, sql):
+        """(value, error) of the first column of a read-only query on a
+        sibling store. The error says what could not be read; it is never
+        turned into a value."""
+        if not os.path.exists(path):
+            return None, f"{path} does not exist"
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        except sqlite3.Error as error:
+            return None, f"{path} could not be opened: {error}"
+        try:
+            row = conn.execute(sql).fetchone()
+        except sqlite3.Error as error:
+            return None, f"{path} could not be read: {error}"
+        finally:
+            conn.close()
+        if row is None or row[0] in (None, ""):
+            return None, f"{path} has no row for the query"
+        return row[0], ""
+
+    def _read_audit_checked_at(self):
+        """(checked_at, error) of the daily audit's JSON, which every page
+        also shows under 'Data as of'."""
+        path = os.path.join(CACHE_DIR, "ci-observe-audit.json")
+        try:
+            with open(path, encoding="utf-8") as handle:
+                checked_at = json.load(handle).get("summary", {}).get("checked_at")
+        except (OSError, ValueError) as error:
+            return None, f"{path} could not be read: {error}"
+        if not checked_at:
+            return None, f"{path} names no checked_at"
+        return checked_at, ""
 
     # Maps job_type filter values to GitHub Actions event names
     JOB_TYPE_EVENTS = {

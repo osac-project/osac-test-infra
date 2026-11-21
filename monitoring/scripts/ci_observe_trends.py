@@ -740,6 +740,18 @@ def open_trends_db(path):
     if forgotten:
         logger.info("%d run(s) stored without test results after a 404 from the private artifact repository "
                     "will be read again", forgotten)
+    # The same era's reader also looked for every run's artifact in one
+    # place, so a pull-request or merge-queue run, whose artifact is on the
+    # run, was stored under a reason that named neither the run nor the
+    # place. Those runs are read again too: one whose artifact is truly
+    # absent gets today's reason, which names both.
+    forgotten = conn.execute(
+        "DELETE FROM run_fetches WHERE state = 'no_data' AND reason = ?",
+        ("no osac-logs-[<suite>-]full-install artifact",),
+    ).rowcount
+    if forgotten:
+        logger.info("%d run(s) stored without test results under the pre-2026-11-15 "
+                    "one-place reason will be read again", forgotten)
     conn.commit()
     _fill_test_keys(conn)
     return conn

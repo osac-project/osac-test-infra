@@ -549,7 +549,11 @@ jobs:
         if: always() && !cancelled()
         uses: ./.github/actions/upload-artifacts
         with:
-          artifact-name: osac-logs-${{ github.run_id }}
+          # The VMaaS suite's one artifact name (ci_observe_run_evidence
+          # .SUITE_ARTIFACTS): the test history and the E2E run page read
+          # the JUnit of this workflow's runs through it, like every other
+          # VMaaS suite run.
+          artifact-name: osac-logs-full-install-${{ github.run_id }}
           private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
           private-repo-app-id: ${{ secrets.osac-ci-app-id }}
           private-repo-app-key: ${{ secrets.osac-ci-app-private-key }}
@@ -564,7 +568,7 @@ jobs:
         timeout-minutes: 3
         uses: ./.github/actions/upload-artifacts
         with:
-          artifact-name: osac-logs-${{ github.run_id }}
+          artifact-name: osac-logs-full-install-${{ github.run_id }}
           private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
           private-repo-app-id: ${{ secrets.osac-ci-app-id }}
           private-repo-app-key: ${{ secrets.osac-ci-app-private-key }}

@@ -1182,3 +1182,50 @@ def test_the_archive_keeps_ninety_days():
     assert "Environment=CI_OBSERVE_KEEP_DAYS=90" in quadlet
     service = (MONITORING / "systemd" / "ci-observe-prs.service").read_text()
     assert "/app/ci_observe_prs.py --days 90" in service
+
+
+def test_the_prs_backfill_covers_exactly_the_two_repositories(prs):
+    """The pass must not list the whole organization: a repository this
+    token can see but whose pull requests it may not list stops every pass
+    (osac-ci-artifacts, from 2026-11-16 to 2026-11-21). The page covers
+    osac and osac-test-infra only."""
+    assert prs.PRS_REPOS == ("osac", "osac-test-infra")
+    service = (MONITORING / "systemd" / "ci-observe-prs.service").read_text()
+    assert "--repo" not in service
+
+
+class TestOnePlaceReasonReset:
+    """Rows stored before 2026-11-15 under the one-place reader's reason
+    name neither the run nor the place, so their runs are read again."""
+
+    OLD_REASON = "no osac-logs-[<suite>-]full-install artifact"
+
+    def seed(self, trends, path):
+        conn = trends.open_trends_db(path)
+        conn.executemany(
+            "INSERT INTO run_fetches (run_id, day, state, reason, version, checked_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (1, "2026-11-10", "no_data", self.OLD_REASON, 2, "2026-11-10T01:00:00Z"),
+                (2, "2026-11-11", "no_data",
+                 "no osac-logs-full-install-2 artifact in run 2 of osac-project/osac", 3,
+                 "2026-11-11T01:00:00Z"),
+                (3, "2026-11-12", "no_data", "private artifact lookup in x failed with HTTP 404", 2,
+                 "2026-11-12T01:00:00Z"),
+                (4, "2026-11-13", "parsed", "", 3, "2026-11-13T01:00:00Z"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+    def test_the_old_reason_is_deleted_and_today_reasons_stay(self, trends, tmp_path):
+        path = str(tmp_path / "trends.db")
+        self.seed(trends, path)
+        conn = trends.open_trends_db(path)
+        try:
+            remaining = conn.execute("SELECT run_id, reason FROM run_fetches ORDER BY run_id").fetchall()
+        finally:
+            conn.close()
+        assert [tuple(row) for row in remaining] == [
+            (2, "no osac-logs-full-install-2 artifact in run 2 of osac-project/osac"),
+            (4, ""),
+        ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -477,3 +478,215 @@ class TestInitialLoad:
         exporter.initial_load()
         got = rows(exporter, "SELECT id, failure_reason, failed_step FROM jobs")
         assert got == [{"id": 1, "failure_reason": "infra", "failed_step": "e2e → Checkout"}]
+
+
+class TestGapCheck:
+    """The hourly proof that the whole retention window is complete: one
+    count per repo per day, a run-by-run verification only where the counts
+    differ, and an error recorded for a day GitHub would not answer."""
+
+    NOW = datetime(2026, 11, 21, 12, tzinfo=timezone.utc)
+
+    def days(self, wfe):
+        return wfe.WorkflowExporter._gap_check_days(self.NOW)
+
+    def probe_route(self, wfe, repo, day):
+        next_day = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).date().isoformat()
+        return (f"/repos/{wfe.ORG}/{repo}/actions/runs?status=completed&per_page=1"
+                f"&created={day}T00:00:00Z..{next_day}T00:00:00Z")
+
+    def list_route(self, wfe, repo, day):
+        next_day = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).date().isoformat()
+        return (f"/repos/{wfe.ORG}/{repo}/actions/runs?status=completed&per_page=100"
+                f"&created={day}T00:00:00Z..{next_day}T00:00:00Z")
+
+    def probe_every_day(self, wfe, github, repo, totals):
+        """One probe answer per day of the window, None meaning total 0."""
+        for day in self.days(wfe):
+            github.add(self.probe_route(wfe, repo, day),
+                       FakeResponse(payload={"workflow_runs": [], "total_count": totals.get(day, 0)}))
+
+    def day_rows(self, exporter):
+        return rows(exporter, "SELECT day, state, expected, adjustment, stored, missing, error"
+                              " FROM day_checks ORDER BY day")
+
+    def test_matching_days_are_ok_at_one_call_each(self, exporter, wfe, github):
+        exporter._upsert_job(make_job(id=1, created_at="2026-11-20T10:00:00Z"))
+        self.probe_every_day(wfe, github, "osac", {"2026-11-20": 1})
+        assert exporter._gap_check_if_due(["osac"], now=self.NOW) == 0
+        days = self.days(wfe)
+        assert [row["state"] for row in self.day_rows(exporter)] == ["ok"] * len(days)
+        assert len(github.calls) == len(days)
+        assert wfe.gap_check_days.labels(org=wfe.ORG, repo="osac", state="ok")._value.get() == len(days)
+        assert wfe.gap_check_missing.labels(org=wfe.ORG, repo="osac")._value.get() == 0
+
+    def test_a_day_with_missing_runs_is_verified_stored_and_ok(self, exporter, wfe, github):
+        exporter._upsert_job(make_job(id=1, created_at="2026-11-20T10:00:00Z"))
+        self.probe_every_day(wfe, github, "osac", {"2026-11-20": 2})
+        github.add(self.list_route(wfe, "osac", "2026-11-20"),
+                   runs_page(make_run(id=1, created_at="2026-11-20T10:00:00Z"),
+                             make_run(id=2, created_at="2026-11-20T11:00:00Z")))
+        github.add(f"/repos/{wfe.ORG}/osac/actions/runs/2/jobs?filter=latest&per_page=30",
+                   FakeResponse(payload={"jobs": []}))
+        assert exporter._gap_check_if_due(["osac"], now=self.NOW) == 0
+        matching = [row for row in self.day_rows(exporter) if row["day"] == "2026-11-20"]
+        assert matching == [{"day": "2026-11-20", "state": "ok", "expected": 2, "adjustment": 0,
+                             "stored": 2, "missing": 0, "error": ""}]
+        assert [row["id"] for row in rows(exporter, "SELECT id FROM jobs ORDER BY id")] == [1, 2]
+
+    def test_dynamic_and_edge_runs_become_the_adjustment(self, exporter, wfe, github, monkeypatch):
+        clock = [0.0]
+        monkeypatch.setattr(wfe.time, "monotonic", lambda: clock[0])
+        exporter._upsert_job(make_job(id=1, created_at="2026-11-20T10:00:00Z"))
+        self.probe_every_day(wfe, github, "osac", {"2026-11-20": 3})
+        # A dynamic run GitHub counts but the exporter never stores, and a
+        # run created at the next day's midnight, which GitHub's created
+        # filter counts on both days that touch it.
+        github.add(self.list_route(wfe, "osac", "2026-11-20"),
+                   runs_page(make_run(id=1, created_at="2026-11-20T10:00:00Z"),
+                             make_run(id=2, event="dynamic"),
+                             make_run(id=3, created_at="2026-11-21T00:00:00Z")))
+        github.add(f"/repos/{wfe.ORG}/osac/actions/runs/3/jobs?filter=latest&per_page=30",
+                   FakeResponse(payload={"jobs": []}))
+        assert exporter._gap_check_if_due(["osac"], now=self.NOW) == 0
+        matching = [row for row in self.day_rows(exporter) if row["day"] == "2026-11-20"][0]
+        assert (matching["state"], matching["adjustment"], matching["stored"]) == ("ok", 2, 1)
+        # The next pass trusts the adjustment: no listing, only the probe.
+        listing_calls = github.count(self.list_route(wfe, "osac", "2026-11-20"))
+        clock[0] += wfe.GAP_CHECK_INTERVAL
+        assert exporter._gap_check_if_due(["osac"], now=self.NOW) == 0
+        assert github.count(self.list_route(wfe, "osac", "2026-11-20")) == listing_calls
+
+    def test_a_failed_probe_is_an_error_never_an_ok(self, exporter, wfe, github, caplog):
+        for day in self.days(wfe):
+            status = 500 if day == "2026-11-20" else 200
+            payload = {"workflow_runs": [], "total_count": 0} if status == 200 else {"message": "boom"}
+            github.add(self.probe_route(wfe, "osac", day), FakeResponse(status, payload=payload, text="boom"))
+        before = wfe.gap_check_last_success.labels(org=wfe.ORG)._value.get()
+        with caplog.at_level("ERROR"):
+            assert exporter._gap_check_if_due(["osac"], now=self.NOW) == 0
+        matching = [row for row in self.day_rows(exporter) if row["day"] == "2026-11-20"][0]
+        assert matching["state"] == "error"
+        assert "HTTP 500" in matching["error"]
+        assert any("could not read GitHub" in record.getMessage() for record in caplog.records)
+        assert wfe.gap_check_last_success.labels(org=wfe.ORG)._value.get() == before
+        assert wfe.gap_check_days.labels(org=wfe.ORG, repo="osac", state="error")._value.get() == 1
+
+    def test_verification_is_bounded_per_pass(self, exporter, wfe, github, monkeypatch):
+        monkeypatch.setattr(wfe, "GAP_CHECK_VERIFIES_PER_PASS", 1)
+        exporter._upsert_job(make_job(id=1, created_at="2026-11-19T10:00:00Z"))
+        exporter._upsert_job(make_job(id=2, created_at="2026-11-20T10:00:00Z"))
+        self.probe_every_day(wfe, github, "osac", {"2026-11-19": 2, "2026-11-20": 2})
+        github.add(self.list_route(wfe, "osac", "2026-11-20"),
+                   runs_page(make_run(id=2, created_at="2026-11-20T10:00:00Z")))
+        github.add(self.list_route(wfe, "osac", "2026-11-19"),
+                   runs_page(make_run(id=1, created_at="2026-11-19T10:00:00Z"),
+                             make_run(id=5, created_at="2026-11-19T11:00:00Z")))
+        github.add(f"/repos/{wfe.ORG}/osac/actions/runs/5/jobs?filter=latest&per_page=30",
+                   FakeResponse(payload={"jobs": []}))
+        clock = [0.0]
+        monkeypatch.setattr(wfe.time, "monotonic", lambda: clock[0])
+        # One verification per pass, and the newest mismatching day gets it.
+        assert exporter._gap_check_if_due(["osac"], now=self.NOW) == 1
+        states = {row["day"]: row["state"] for row in self.day_rows(exporter)}
+        assert states["2026-11-19"] == "pending"
+        assert states["2026-11-20"] == "ok"
+        clock[0] += wfe.GAP_CHECK_INTERVAL
+        assert exporter._gap_check_if_due(["osac"], now=self.NOW) == 0
+        states = {row["day"]: row["state"] for row in self.day_rows(exporter)}
+        assert states["2026-11-19"] == "ok"
+
+    def test_the_rate_limit_gate_skips_the_pass(self, exporter, wfe, github):
+        exporter._rate_limit_remaining = wfe.GAP_CHECK_MIN_RATE_LIMIT - 1
+        before = wfe.gap_check_skipped.labels(org=wfe.ORG)._value.get()
+        assert exporter._gap_check_if_due(["osac"], now=self.NOW) is None
+        assert github.calls == []
+        assert wfe.gap_check_skipped.labels(org=wfe.ORG)._value.get() == before + 1
+
+    def test_a_run_the_backfill_cannot_store_stays_gapped(self, exporter, wfe, github):
+        exporter._upsert_job(make_job(id=1, created_at="2026-11-20T10:00:00Z"))
+        self.probe_every_day(wfe, github, "osac", {"2026-11-20": 2})
+        github.add(self.list_route(wfe, "osac", "2026-11-20"),
+                   runs_page(make_run(id=1, created_at="2026-11-20T10:00:00Z"),
+                             make_run(id=2, created_at="2026-11-20T11:00:00Z")))
+        github.add(f"/repos/{wfe.ORG}/osac/actions/runs/2/jobs?filter=latest&per_page=30",
+                   FakeResponse(500, text="jobs listing broke"))
+        assert exporter._gap_check_if_due(["osac"], now=self.NOW) == 0
+        matching = [row for row in self.day_rows(exporter) if row["day"] == "2026-11-20"][0]
+        assert matching["state"] == "gapped"
+        assert matching["missing"] == 1
+        assert "2" in matching["error"]
+        assert wfe.gap_check_missing.labels(org=wfe.ORG, repo="osac")._value.get() == 1
+        assert wfe.gap_check_days.labels(org=wfe.ORG, repo="osac", state="gapped")._value.get() == 1
+
+    def test_windows_over_the_list_cap_are_bisected(self, exporter, wfe, github):
+        since = datetime(2026, 11, 20, tzinfo=timezone.utc)
+        until = since + timedelta(days=1)
+        mid = since + timedelta(hours=12)
+
+        def route(a, b):
+            return (f"/repos/{wfe.ORG}/osac/actions/runs?status=completed&per_page=100"
+                    f"&created={iso(a)}..{iso(b)}")
+
+        github.add(route(since, until), runs_page(total=5000))
+        github.add(route(since, mid), runs_page(make_run(id=1)))
+        github.add(route(mid, until), runs_page(make_run(id=2)))
+        ids, dynamic = exporter._list_window_runs("osac", since, until)
+        assert (ids, dynamic) == ([1, 2], 0)
+        assert github.count(route(since, mid)) == 1
+        assert github.count(route(mid, until)) == 1
+
+    def test_suite_rows_do_not_inflate_the_stored_count(self, exporter):
+        exporter._upsert_job(make_job(id=1, created_at="2026-11-20T10:00:00Z"))
+        exporter._upsert_job(make_job(id=2, run_id="1", created_at="2026-11-20T10:05:00Z"))
+        exporter._upsert_job(make_job(id=3, run_id="1", created_at="2026-11-20T10:06:00Z"))
+        assert exporter._stored_runs_on_day("osac", "2026-11-20") == 1
+
+
+class TestStoreFreshness:
+    """The last success of every ci-observe store, so a stalled pass is an
+    alert, not a quiet gap."""
+
+    def build_stores(self, wfe, tmp_path):
+        trends_db = sqlite3.connect(tmp_path / "trends.db")
+        trends_db.execute("CREATE TABLE rollup_passes (job TEXT, finished_at TEXT, summary TEXT)")
+        trends_db.executemany(
+            "INSERT INTO rollup_passes VALUES (?, ?, '')",
+            [("trends", "2026-11-21T15:26:02Z", ), ("spans", "2026-11-21T15:50:00Z")])
+        trends_db.commit()
+        trends_db.close()
+        prs_db = sqlite3.connect(tmp_path / "prs.db")
+        prs_db.execute("CREATE TABLE pr_backfill_runs (id INTEGER, ran_at TEXT, window_to TEXT,"
+                       " listing_complete INTEGER)")
+        prs_db.execute("INSERT INTO pr_backfill_runs VALUES (1, '2026-11-21T15:05:49Z',"
+                       " '2026-11-21T15:05:49Z', 1)")
+        prs_db.execute("INSERT INTO pr_backfill_runs VALUES (2, '2026-11-21T16:05:49Z',"
+                       " '2026-11-16T12:09:03Z', 0)")
+        prs_db.commit()
+        prs_db.close()
+        (tmp_path / "ci-observe-audit.json").write_text(
+            '{"summary": {"checked_at": "2026-11-20T03:37:10Z"}}', encoding="utf-8")
+
+    def test_every_store_pins_its_last_success(self, exporter, wfe, tmp_path):
+        self.build_stores(wfe, tmp_path)
+        exporter._update_store_freshness()
+
+        def value(store):
+            return wfe.store_last_success.labels(org=wfe.ORG, store=store)._value.get()
+
+        assert value("jobs") > 0
+        assert value("trends") == datetime(2026, 11, 21, 15, 26, 2, tzinfo=timezone.utc).timestamp()
+        assert value("spans") == datetime(2026, 11, 21, 15, 50, tzinfo=timezone.utc).timestamp()
+        # The pass that stopped early does not count: its window was not covered.
+        assert value("prs") == datetime(2026, 11, 21, 15, 5, 49, tzinfo=timezone.utc).timestamp()
+        assert value("audit") == datetime(2026, 11, 20, 3, 37, 10, tzinfo=timezone.utc).timestamp()
+
+    def test_an_unreadable_store_is_logged_and_left_to_age(self, exporter, wfe, tmp_path, caplog):
+        self.build_stores(wfe, tmp_path)
+        (tmp_path / "ci-observe-audit.json").unlink()
+        before = wfe.store_last_success.labels(org=wfe.ORG, store="audit")._value.get()
+        with caplog.at_level("ERROR"):
+            exporter._update_store_freshness()
+        assert any("audit" in record.getMessage() and "could not be read" in record.getMessage()
+                   for record in caplog.records)
+        assert wfe.store_last_success.labels(org=wfe.ORG, store="audit")._value.get() == before

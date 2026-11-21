@@ -120,6 +120,10 @@ PRS_DB_FILE = os.path.join(CACHE_DIR, "prs.db")
 # the 30-day job history when the backfill stores it, so a stored row keeps
 # them after the jobs are gone; 90 days matches the trends.db archive.
 PRS_HISTORY_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
+# The repositories whose pull requests the store covers: the two the Pull
+# requests page shows. The backfill never lists the organization (see
+# Backfill._list_repos).
+PRS_REPOS = ("osac", "osac-test-infra")
 DEFAULT_INDEX_DAYS = 30
 # The record format. A row stored by an older format is refetched once so
 # the new counts fill in, a bounded number per pass so the shared GitHub
@@ -1725,19 +1729,18 @@ class CIObservePRs:
         return graph
 
     def _list_repos(self):
-        """Repository names, or None when the org listing failed. A failed
-        listing is not an org with no repositories: the caller must not
-        record coverage over it."""
+        """The repositories whose pull requests the store covers: exactly
+        the two the Pull requests page shows (its Repository filter names
+        osac and osac-test-infra), or the subset a --repo run asked for.
+
+        The store never lists the whole organization: a repository this
+        token can see but whose pull requests it may not list
+        (osac-ci-artifacts, whose Actions artifacts it reads and nothing
+        more) would stop every pass with "coverage did not advance" --
+        exactly the five-day stall of 2026-11-16 to 2026-11-21."""
         if self.repos_filter:
             return self.repos_filter
-        url = f"{API_URL}/orgs/{ORG}/repos?per_page={PAGE_SIZE}&type=all"
-        repos = []
-        while url:
-            page, url = self._get_page(url)
-            if page is None:
-                return None
-            repos.extend(r["name"] for r in page if not r.get("archived"))
-        return repos
+        return list(PRS_REPOS)
 
     # -- backfill -----------------------------------------------------------
 
@@ -1798,10 +1801,6 @@ class CIObservePRs:
         }
 
         repos = self._list_repos()
-        if repos is None:
-            summary["listing_complete"] = False
-            summary["stopped_early"] = "the repository listing failed; coverage did not advance."
-            repos = []
         for repo in repos:
             repo_summary = {"repo": repo, "prs_stored": 0, "prs_skipped": 0, "prs_failed": 0, "attempts_stored": 0}
             prs = self._fetch_closed_prs(repo, cutoff, since)

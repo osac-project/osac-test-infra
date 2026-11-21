@@ -88,6 +88,58 @@ groups:
           summary: "Exporter {{ $labels.job }} is down on {{ $labels.instance }}"
           description: "The {{ $labels.job }} exporter on {{ $labels.instance }} has been unreachable for more than 5 minutes."
 
+  - name: ci-observe
+    rules:
+      # CiObservePollStalled -- the workflow exporter's poll cycle has not
+      # finished in 15 minutes (it normally runs every 90 seconds; the gauge
+      # is pinned at the end of a cycle, so a cycle that raised anywhere
+      # leaves it aging).
+      - alert: CiObservePollStalled
+        expr: time() - ci_observe_store_last_success{store="jobs"} > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The workflow exporter poll has not finished in 15 minutes"
+          description: "The exporter's collect cycle last completed at {{ $value | printf \"%.0f\" }} seconds ago. Check `podman logs workflow-exporter` and the journal of workflow-exporter.service."
+
+      # CiObserveJobHistoryGap -- the hourly gap check proved runs missing
+      # from the 30-day job history, or could not get an answer for a day.
+      - alert: CiObserveJobHistoryGap
+        expr: |
+          max(github_actions_gap_check_missing_runs) > 0
+          or max(github_actions_gap_check_days{state=~"gapped|error"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The ci-observe job history has a gap the reconciliation did not heal"
+          description: "The gap check found days with runs verified missing (github_actions_gap_check_missing_runs) or days GitHub would not answer (github_actions_gap_check_days{state=\"gapped|error\"}). See the day_checks table in workflow-exporter.db."
+
+      # CiObserveHourlyStoreStale -- an hourly store (test results, span
+      # rollup, pull requests) has not completed a pass in 90 minutes.
+      # The 2026-11-16 to 2026-11-21 pull-request stall looked like this.
+      - alert: CiObserveHourlyStoreStale
+        expr: time() - ci_observe_store_last_success{store=~"trends|spans|prs"} > 5400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The ci-observe {{ $labels.store }} store has not advanced in 90 minutes"
+          description: "The last completed {{ $labels.store }} pass is older than 90 minutes. Check the matching ci-observe-{{ $labels.store }} service in `systemctl --user` and its journal."
+
+      # CiObserveAuditStale -- the daily check against GitHub has not
+      # written its JSON in 26 hours (timer runs 03:35 UTC; the unit exits
+      # non-zero when the check itself crashes, which leaves the old file).
+      - alert: CiObserveAuditStale
+        expr: time() - ci_observe_store_last_success{store="audit"} > 93600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The ci-observe daily audit has not completed in 26 hours"
+          description: "ci-observe-audit.json is older than 26 hours. Run `podman exec workflow-exporter python3 /app/ci_observe_audit.py --days 30 --sample 60 --e2e-sample 30 --out /data/ci-observe-audit.json` by hand and read its output; every page is showing a stale audit line."
+
   - name: service-health
     rules:
       # ServiceDown -- a machine-level service (GitHub Actions runner agent,

@@ -187,10 +187,13 @@ def fixed_clock(prs, monkeypatch):
 
 
 @pytest.fixture
-def service(prs, github, tmp_path):
+def service(prs, github, tmp_path, monkeypatch):
     # The live lookup cache is module-level so the exporter's per-request
     # CIObservePRs shares it. Start every test from a cold cache.
     prs._LIVE_PR_CACHE.clear()
+    # The store's world is the two repositories the page shows; the tests
+    # work with one.
+    monkeypatch.setattr(prs, "PRS_REPOS", (REPO,))
     return prs.CIObservePRs(db_file=str(tmp_path / "prs.db"), api=FakeAPI(github))
 
 
@@ -431,9 +434,10 @@ class TestParser:
 class TestBackfill:
     def test_api_cost_is_one_pass_per_pull_request(self, service, github):
         summary = run_backfill(service)
-        # 1 org repos + 1 closed-PR page + 1 merge_group runs page, then
-        # timeline + reviews + commits for each of the three pull requests.
-        assert summary["api_calls"] == 12
+        # 1 closed-PR page + 1 merge_group runs page, then timeline +
+        # reviews + commits for each of the three pull requests. The org
+        # listing is gone: the world is PRS_REPOS, no call.
+        assert summary["api_calls"] == 11
         assert github.count(merge_runs_path()) == 1
 
     def test_second_run_stores_nothing(self, service, github):
@@ -448,9 +452,9 @@ class TestBackfill:
         assert summary["prs_skipped"] == 3
         assert rows(service, "SELECT * FROM pr_events ORDER BY number") == before
         assert rows(service, "SELECT * FROM pr_queue_attempts ORDER BY run_id") == attempts_before
-        # Org repos plus the one closed-PR listing: no per-PR fetch and no
+        # The one closed-PR listing only: no per-PR fetch and no
         # merge_group query, because nothing new is going to be stored.
-        assert len(github.calls) - calls_before == 2
+        assert len(github.calls) - calls_before == 1
 
     def test_force_rewrites_in_place(self, service):
         run_backfill(service)
@@ -631,8 +635,8 @@ class TestHourly:
 
         assert summary["api_calls"] == len(github.calls) - calls_before
         assert summary["api_calls"] <= 30
-        # One org listing and one PR listing; no merge_group window.
-        assert summary["api_calls"] == 2
+        # One PR listing; no merge_group window and no org listing.
+        assert summary["api_calls"] == 1
         assert sum(1 for call in github.calls if "event=merge_group" in call) == 1
 
     def test_force_still_lists_the_full_window(self, service, github):
@@ -661,7 +665,7 @@ class TestHourly:
         assert summary["prs_stored"] == 0
         assert summary["prs_skipped"] == 3
         # No per-PR pages and no merge_group window for already stored rows.
-        assert len(github.calls) - calls_before == 2
+        assert len(github.calls) - calls_before == 1
 
     def test_a_failed_listing_does_not_advance_coverage(self, service, github):
         run_backfill(service, mode="auto")
@@ -673,16 +677,18 @@ class TestHourly:
         assert summary["listing_complete"] is False
         assert service._coverage_until() == iso(NOW)
 
-    def test_a_failed_repository_listing_does_not_advance_coverage(self, service, github):
-        """An org listing that fails is not an org with no repositories."""
-        github.add(REPOS_PATH, FakeResponse(500, text="boom"))
-
+    def test_the_backfill_covers_exactly_the_page_repositories_and_lists_no_org(self, service, github):
+        """The store's world is the two repositories the Pull requests page
+        shows; the organization is never listed. Listing it walked into
+        osac-ci-artifacts, whose pull requests this token may not list, and
+        stalled every pass from 2026-11-16 to 2026-11-21."""
         summary = run_backfill(service, mode="auto")
 
-        assert summary["listing_complete"] is False
-        assert summary["ok"] is False
-        assert "repository listing failed" in summary["stopped_early"]
-        assert service.get_json({}, now=NOW)["coverage_until"] is None
+        assert summary["listing_complete"] is True
+        assert summary["ok"] is True
+        assert summary["stopped_early"] == ""
+        assert service._coverage_until() == iso(NOW)
+        assert all("/orgs/" not in call for call in github.calls)
 
 
 # ---------------------------------------------------------------------------
@@ -698,7 +704,7 @@ class TestBackfillRuns:
         assert run["window_from"] == iso(RETENTION_START)
         assert run["window_to"] == iso(NOW)
         assert (run["stored"], run["skipped"], run["failed"]) == (3, 0, 0)
-        assert run["api_calls"] == 12
+        assert run["api_calls"] == 11
         assert run["rate_limit_remaining"] is None
         assert run["stopped_early"] == ""
         assert run["listing_complete"] == 1

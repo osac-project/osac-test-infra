@@ -7,6 +7,12 @@
 # the prune once a day, so a stored pull request is not refetched every hour
 # and the file still covers the retention window: 90 days, as long as the
 # run archive the Overview and the Pull requests page compare against.
+#
+# The pass covers exactly osac and osac-test-infra (PRS_REPOS in
+# ci_observe_prs.py): the two repositories the Pull requests page shows.
+# It never lists the whole organization -- doing that walked into
+# osac-ci-artifacts, whose pull requests this token may not list, and
+# stalled every pass from 2026-11-16 to 2026-11-21.
 
 [Unit]
 Description=ci-observe pull-request backfill
