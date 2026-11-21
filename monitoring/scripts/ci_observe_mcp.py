@@ -1045,6 +1045,12 @@ class McpHandler(BaseHTTPRequestHandler):
 
     def _mcp(self, now: float) -> None:
         config = self.state.config
+        # Read the whole body before any answer, the 401 included: on a
+        # keep-alive connection an unread body becomes the next request's
+        # request line, and the client's retry arrives as garbage (a 501
+        # quoting the body). No body on GET.
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
         header = self.headers.get("Authorization") or ""
         login = None
         if header.startswith("Bearer "):
@@ -1058,9 +1064,8 @@ class McpHandler(BaseHTTPRequestHandler):
         if self.command != "POST":
             self._send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "the MCP endpoint answers POST"})
             return
-        length = int(self.headers.get("Content-Length") or 0)
         try:
-            payload = json.loads(self.rfile.read(length) or b"")
+            payload = json.loads(raw or b"")
         except ValueError:
             self._send_json(HTTPStatus.BAD_REQUEST, {"jsonrpc": "2.0", "id": None,
                                                      "error": {"code": -32700, "message": "no JSON"}})
