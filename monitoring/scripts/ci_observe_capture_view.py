@@ -384,7 +384,10 @@ class CIObserveCaptureView:
         if run_attempt is None and registry:
             run_attempt = _as_int(registry.get("run_attempt"))
 
-        job_rows, _ = self._job_rows(run_id, run_attempt)
+        job_rows, job_source = self._job_rows(run_id, run_attempt)
+        if job_rows is None:
+            notes.append(job_source)
+            job_rows = []
         repo = next((str(row.get("repo") or "") for row in job_rows if row.get("repo")), "")
         identity["repo"] = repo
         identity["run_url"] = ""
@@ -506,9 +509,22 @@ class CIObserveCaptureView:
                 "as a test result"
             )
 
+        outcome, outcome_source = self._github_outcome(run_id, run_attempt)
+        if outcome == "unknown":
+            # The history could not be read: the summary says so instead of
+            # letting the trace's own status stand in for GitHub's verdict.
+            notes.append("the GitHub outcome is unavailable: the job history could not be read")
+            status = None
+        else:
+            status = outcome or session.get("status")
+            if outcome is None and session.get("status"):
+                notes.append(
+                    "the job history holds no completed row yet, so the trace's own"
+                    " status is shown; GitHub owns the verdict once it lands"
+                )
         document["summary"] = [
             {
-                "status": self._github_outcome(run_id, run_attempt) or session.get("status"),
+                "status": status,
                 "tests": session.get("tests"),
                 "duration_seconds": session.get("duration_seconds"),
             }
@@ -530,21 +546,25 @@ class CIObserveCaptureView:
         """The run's GitHub conclusion, normalized, or None while it runs.
 
         GitHub owns pass or fail: a setup or teardown error can fail the job
-        without marking the pytest session span as an error.
+        without marking the pytest session span as an error. A history that
+        cannot be read returns ("unknown", reason): the caller must show the
+        gap, never let the trace's own status stand in for GitHub's.
         """
-        rows, _ = self._job_rows(run_id, run_attempt)
+        rows, source = self._job_rows(run_id, run_attempt)
+        if rows is None:
+            return "unknown", source
         conclusions = {
             str(row.get("conclusion") or "").lower()
             for row in rows
             if str(row.get("status") or "").lower() == "completed"
         }
         if conclusions & {"failure", "timed_out", "action_required"}:
-            return "error"
+            return "error", source
         if "cancelled" in conclusions:
-            return "cancelled"
+            return "cancelled", source
         if "success" in conclusions:
-            return "ok"
-        return None
+            return "ok", source
+        return None, source
 
     def _recently_active(self, session) -> bool:
         """True when the trace's last span is recent enough to be a live run."""
@@ -632,6 +652,16 @@ class CIObserveCaptureView:
         connection = self._connection()
         if connection is None:
             return [], ""
+    def _job_rows(self, run_id, run_attempt):
+        """The run's stored job rows and where they came from: ([], "") when
+        the history holds none, (None, reason) when it could not be read.
+        Callers must not treat a failed read as "no rows": that is what let
+        a trace's own status stand in for GitHub's verdict."""
+        if run_id is None:
+            return [], ""
+        connection = self._connection()
+        if connection is None:
+            return [], ""
         rows = []
         source = ""
         try:
@@ -650,8 +680,8 @@ class CIObserveCaptureView:
                 if rows:
                     source = "jobs.url"
         except sqlite3.Error as error:
-            logger.debug("job history read failed for run %s: %s", run_id, error)
-            return [], ""
+            logger.error("the job history read of run %s failed: %s", run_id, error)
+            return None, f"the job history could not be read: {error}"
         finally:
             connection.close()
         by_id = {}
@@ -678,6 +708,10 @@ class CIObserveCaptureView:
         as such.
         """
         rows, source = self._job_rows(run_id, run_attempt)
+        if rows is None:
+            # A failed read is not "no rows": say the window is unknown
+            # instead of searching a window inferred from nothing.
+            return None
         attempt = None if run_attempt is None else str(run_attempt)
         starts = []
         for record in rows:

@@ -150,12 +150,20 @@ def time_parts(row):
 
     Waits are every poll_until wait the test made, in any phase; setup,
     actions (the call phase) and teardown are each phase minus its waits. The
-    four add up to the test's setup + call + teardown time.
+    four add up to the test's setup + call + teardown time. A phase the
+    trace did not measure is None, never 0: "not measured" must not read
+    as "took no time".
     """
-    setup = max(0.0, (row.get("setup_s") or 0) - (row.get("wait_setup_s") or 0))
-    actions = max(0.0, (row.get("call_s") or 0) - (row.get("wait_call_s") or 0))
-    teardown = max(0.0, (row.get("teardown_s") or 0) - (row.get("wait_teardown_s") or 0))
-    return setup, row.get("wait_s") or 0.0, actions, teardown
+
+    def phase(total, wait):
+        if total is None:
+            return None
+        return max(0.0, total - (wait or 0.0))
+
+    setup = phase(row.get("setup_s"), row.get("wait_setup_s"))
+    actions = phase(row.get("call_s"), row.get("wait_call_s"))
+    teardown = phase(row.get("teardown_s"), row.get("wait_teardown_s"))
+    return setup, row.get("wait_s"), actions, teardown
 
 
 def test_url(test_key, days, suite="all"):
@@ -800,8 +808,15 @@ class CIObserveInsights:
             failing = len(failing_keys)
         else:
             notes.append("no per-test rollup is stored yet, so flaky and failing test counts are not measured")
-        runner_seconds = sum(fact["total_s"] or 0 for fact in finished)
-        failed_seconds = sum(fact["total_s"] or 0 for fact in failed)
+        # Runner hours sum only the runs that have a duration: a run with
+        # none is excluded (missing, never zero) and the tile says how many.
+        durations = [fact["total_s"] for fact in finished if fact["total_s"] is not None]
+        unmeasured = sum(1 for fact in finished if fact["total_s"] is None)
+        failed_durations = [fact["total_s"] for fact in failed if fact["total_s"] is not None]
+        if unmeasured:
+            notes.append(f"{unmeasured} run(s) have no duration and are not in the runner hours")
+        runner_seconds = sum(durations)
+        failed_seconds = sum(failed_durations)
         tile = {
             **rates,
             "pass_rate_prev": previous_rates.get("pass_rate"),
@@ -1012,14 +1027,22 @@ class CIObserveInsights:
                 "p90_s": percentile(by_day[day], 0.9),
                 "runs": len(by_day[day]),
             })
-        total_seconds = sum(fact["total_s"] or 0 for fact in finished)
+        # Hours sum only runs with a duration; a run without one is
+        # excluded (missing, never zero) and the totals say so.
+        known = [fact["total_s"] for fact in finished if fact["total_s"] is not None]
+        unmeasured = len(finished) - len(known)
+        if unmeasured:
+            notes.append(f"{unmeasured} run(s) have no duration and are not in the hours")
+        total_seconds = sum(known)
         totals = {
             "runs": len(finished),
             "passing_runs": len(passed),
             "runner_hours": round(total_seconds / 3600, 1),
-            "failed_hours": round(sum(f["total_s"] or 0 for f in finished if f["result"] == "failed") / 3600, 1),
+            "failed_hours": round(sum(f["total_s"] for f in finished
+                                      if f["result"] == "failed" and f["total_s"] is not None) / 3600, 1),
             "cancelled_hours": round(
-                sum(f["total_s"] or 0 for f in finished if f["result"] == "cancelled") / 3600, 1),
+                sum(f["total_s"] for f in finished
+                    if f["result"] == "cancelled" and f["total_s"] is not None) / 3600, 1),
             "mean_result_s": total_mean,
             "median_result_s": percentile([fact["total_s"] for fact in passed], 0.5),
             "p90_result_s": percentile([fact["total_s"] for fact in passed], 0.9),
@@ -1454,7 +1477,7 @@ class CIObserveInsights:
         grouped = defaultdict(list)
         for row in waits:
             grouped[(wait_group(row), row["resource_kind"])].append(row)
-        test_time = sum(row.get("duration_s") or 0 for row in tests)
+        test_time = sum(row["duration_s"] for row in tests if row["duration_s"] is not None)
         for (signature, kind), group in grouped.items():
             durations = [row["duration_s"] for row in group]
             out["waits"].append({
@@ -1519,7 +1542,7 @@ class CIObserveInsights:
         current_runs = {row["capture_id"] for row in runs if row["day"] >= window_day and row["state"] == "ok"}
         tests = self.stores.trends_rows("test_spans", "day >= ?", [window_day]) or []
         tests = [row for row in tests if row["capture_id"] in current_runs]
-        test_time = sum(row.get("duration_s") or 0 for row in tests)
+        test_time = sum(row["duration_s"] for row in tests if row["duration_s"] is not None)
         waits = [row for row in waits if row["capture_id"] in complete]
         current = [row for row in waits if row["day"] >= window_day]
         previous = [row for row in waits if row["day"] < window_day]

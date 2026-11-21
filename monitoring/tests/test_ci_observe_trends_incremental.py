@@ -310,7 +310,9 @@ class TestArchive:
     def test_an_unreadable_exporter_db_archives_nothing(self, trends, tmp_path):
         conn = trends.open_trends_db(str(tmp_path / "trends.db"))
         try:
-            assert trends.archive_suite_runs(conn, str(tmp_path / "missing" / "nope.db")) == 0
+            # An unreadable exporter DB is a refused archive, not "zero
+            # rows copied": the caller must not record a fresh pass.
+            assert trends.archive_suite_runs(conn, str(tmp_path / "missing" / "nope.db")) is None
         finally:
             conn.close()
 

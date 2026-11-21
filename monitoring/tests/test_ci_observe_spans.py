@@ -310,6 +310,8 @@ class TestPass:
         sqlite3.connect(empty).close()
         conn = spans.open_db(str(tmp_path / "t.db"))
         try:
-            assert spans.captures_to_read(str(empty), conn, NOW, 10) == []
+            # A registry with no tables is not "no captures": it is a
+            # refused read, so the pass does not stamp itself fresh.
+            assert spans.captures_to_read(str(empty), conn, NOW, 10) is None
         finally:
             conn.close()

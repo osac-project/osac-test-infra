@@ -69,6 +69,9 @@ class TestCollect:
         org = wfe.ORG
         github.add(R("osac/actions/runs?status=queued&per_page=1"), FakeResponse(payload={"total_count": 2}))
         github.add(R("osac/actions/runs?status=in_progress&per_page=1"), FakeResponse(payload={"total_count": 1}))
+        # A quiet repo answers a real zero, which is published as zero.
+        github.add(R("quiet/actions/runs?status=queued&per_page=1"), FakeResponse(payload={"total_count": 0}))
+        github.add(R("quiet/actions/runs?status=in_progress&per_page=1"), FakeResponse(payload={"total_count": 0}))
         queued = [
             make_run(id=1, name="E2E VMaaS", status="queued", conclusion=None),
             make_run(id=2, name="pre-commit", status="queued", conclusion=None),
@@ -123,6 +126,11 @@ class TestCollect:
         org = wfe.ORG
         wfe.queued_by_category.labels(org=org, category="release").set(7)
         github.add(R("osac/actions/runs?status=queued&per_page=1"), FakeResponse(payload={"total_count": 3}))
+        github.add(R("osac/actions/runs?status=in_progress&per_page=1"), FakeResponse(payload={"total_count": 1}))
+        # Every repo answers its counts, so the per-repo gauges publish; the
+        # active fetch itself fails, so the by-category gauges keep their
+        # previous values instead of an undercount that looks like a drop.
+        github.add(R("quiet/actions/runs?status=queued&per_page=1"), FakeResponse(payload={"total_count": 0}))
         github.add(R("quiet/actions/runs?status=in_progress&per_page=1"), FakeResponse(payload={"total_count": 1}))
         exporter.active_runs = [{"id": 99, "repo": "osac"}]
 

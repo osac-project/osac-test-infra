@@ -1039,8 +1039,8 @@ def archive_suite_runs(conn, exporter_db):
     try:
         source = sqlite3.connect(f"file:{exporter_db}?mode=ro", uri=True, timeout=5)
     except sqlite3.Error as exc:
-        logger.warning("the exporter DB could not be opened for the archive: %s", exc)
-        return 0
+        logger.error("the exporter DB could not be opened for the archive: %s", exc)
+        return None
     try:
         source.row_factory = sqlite3.Row
         columns = {row["name"] for row in source.execute("PRAGMA table_info(jobs)")}
@@ -1049,8 +1049,8 @@ def archive_suite_runs(conn, exporter_db):
         )
         rows = [dict(row) for row in source.execute(f"SELECT {select} FROM jobs WHERE category = 'e2e'")]
     except sqlite3.Error as exc:
-        logger.warning("the exporter DB could not be read for the archive: %s", exc)
-        return 0
+        logger.error("the exporter DB could not be read for the archive: %s", exc)
+        return None
     finally:
         source.close()
     for row in rows:
@@ -1204,6 +1204,12 @@ def main(argv=None):
     try:
         prune_old_days(conn, keep_start.isoformat())
         archived = archive_suite_runs(conn, exporter_db)
+        if archived is None:
+            # The archive could not read the exporter DB: recording a pass
+            # now would stamp the pages fresh while suite_runs stopped
+            # advancing. Leave the last pass's time so they say it is stale.
+            logger.error("the test history pass stopped: the exporter DB could not be archived")
+            return 1
         logger.info("archived %d E2E job row(s) into suite_runs", archived)
         if not runs:
             logger.info("no stored e2e runs on or after %s: nothing to roll up", start)

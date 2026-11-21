@@ -375,12 +375,12 @@ def captures_to_read(exporter_db, trends_conn, now, limit, capture=None, force=F
         conn = sqlite3.connect(f"file:{exporter_db}?mode=ro", uri=True, timeout=5)
     except sqlite3.Error as exc:
         logger.error("the exporter DB could not be opened: %s", exc)
-        return []
+        return None
     conn.row_factory = sqlite3.Row
     try:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if "captures" not in tables or "jobs" not in tables:
-            return []
+            return None
         args = []
         where = "c.run_id != ''"
         if capture:
@@ -401,7 +401,7 @@ def captures_to_read(exporter_db, trends_conn, now, limit, capture=None, force=F
         ).fetchall()
     except sqlite3.Error as exc:
         logger.error("the exporter DB could not be read: %s", exc)
-        return []
+        return None
     finally:
         conn.close()
     done = {
@@ -568,6 +568,12 @@ def main(argv=None, now=None):
     try:
         prune(conn, (now - timedelta(days=KEEP_DAYS)).date().isoformat())
         rows = captures_to_read(exporter_db, conn, now, max(1, args.limit), args.capture, args.force)
+        if rows is None:
+            # The exporter DB could not be read: recording a pass now would
+            # stamp "Inside the tests: updated just now" on data that was
+            # not. Leave the last pass's time so the pages say it is stale.
+            logger.error("the span rollup read nothing: the exporter DB could not be read")
+            return 1
         view = CIObserveCaptureView(_ReadOnlyExporter(exporter_db), tempo_url=args.tempo_url)
         states = {}
         for row in rows:

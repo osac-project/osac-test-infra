@@ -43,8 +43,17 @@ def test_get_repos_paginates_and_caches(exporter, wfe, github):
 
 
 def test_get_repos_failure_keeps_cache(exporter, wfe, github):
-    github.add(f"/orgs/{wfe.ORG}/repos?per_page=100&type=all", FakeResponse(500, text="boom"))
-    assert exporter.get_repos() == []
+    route = f"/orgs/{wfe.ORG}/repos?per_page=100&type=all"
+    # With a previous answer cached, a failed listing keeps it.
+    exporter._repos_cache = ["osac"]
+    exporter._repos_cache_ts = 1e18
+    github.add(route, FakeResponse(500, text="boom"))
+    assert exporter.get_repos() == ["osac"]
+    # With nothing cached, a failed listing refuses: an empty answer here
+    # would be cached as "no repos" for 30 minutes of fabricated calm.
+    exporter._repos_cache = []
+    with pytest.raises(RuntimeError, match="refuses to publish empty repos"):
+        exporter.get_repos()
 
 
 def test_get_active_repos(exporter, wfe, github, R):
@@ -56,6 +65,26 @@ def test_get_active_repos(exporter, wfe, github, R):
     assert exporter.get_active_repos() == ["a"]
     assert exporter.get_active_repos() == ["a"]
     assert github.count(R("a/actions/runs?per_page=1")) == 1
+
+
+def test_a_failed_activity_probe_keeps_previous_membership(exporter, wfe, github, R):
+    """A repo whose probe fails is not proven inactive: dropping it would
+    blind every gauge -- and the gap check -- for 30 minutes."""
+    exporter._repos_cache = ["a", "b"]
+    exporter._repos_cache_ts = 1e18
+    exporter._active_repos = ["a", "b"]
+    exporter._active_repos_ts = 0
+    github.add(R("a/actions/runs?per_page=1"), FakeResponse(payload={"total_count": 3}))
+    github.add(R("b/actions/runs?per_page=1"), FakeResponse(500, text="boom"))
+    assert exporter.get_active_repos() == ["a", "b"]
+
+
+def test_a_malformed_jobs_answer_is_a_failed_fetch(exporter, wfe, github, R):
+    """A 200 without a jobs list is not a jobless run: [] would be stored
+    forever as a complete-looking run with no steps and an infra cause."""
+    github.add(R("osac/actions/runs/100/jobs?filter=latest&per_page=30"),
+               FakeResponse(payload={"message": "not a listing"}))
+    assert exporter._fetch_run_jobs("osac", 100) is None
 
 
 def test_refresh_pr_map(exporter, wfe, github, R, monkeypatch):
@@ -190,7 +219,9 @@ def test_make_job_record(exporter, wfe):
 def test_run_count(exporter, github, R):
     github.add(R("osac/actions/runs?status=queued&per_page=1"), FakeResponse(payload={"total_count": 4}))
     assert exporter._run_count("osac", "queued") == 4
-    assert exporter._run_count("osac", "in_progress") == 0
+    # A failed count is unknown (None), not a backlog of zero: a repo
+    # GitHub did not answer about must not publish calm.
+    assert exporter._run_count("osac", "in_progress") is None
 
 
 def test_fetch_run_jobs(exporter, github, R):

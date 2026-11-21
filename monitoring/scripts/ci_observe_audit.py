@@ -855,17 +855,19 @@ def row_run_id(row):
 
 
 def test_step(row):
-    """(ran, failed) for a stored row's test step, from its stored steps and
-    its failed-step text ("job → step; ...")."""
+    """(ran, failed, unreadable) for a stored row's test step, from its
+    stored steps and its failed-step text ("job → step; ..."). Unreadable
+    steps are not 'did not run tests': the run escapes both test checks
+    while looking checked, so the caller records a problem."""
     try:
         steps = json.loads(row.get("steps_json") or "[]")
     except ValueError:
-        steps = []
+        return False, False, True
     ran = any("e2e tests" in (step.get("name") or "").lower() and (step.get("duration_s") or 0) > 0
               for step in steps if isinstance(step, dict))
     failed = any("e2e tests" in entry.rsplit(" → ", 1)[-1].lower()
                  for entry in (row.get("failed_step") or "").split("; ") if entry.strip())
-    return ran or failed, failed
+    return ran or failed, failed, False
 
 
 def private_access(github):
@@ -1015,8 +1017,11 @@ def stored_captures(jobs_db):
     try:
         rows = conn.execute("SELECT capture_id, run_id, run_attempt FROM captures"
                             " ORDER BY run_id, CAST(run_attempt AS INTEGER)").fetchall()
-    except sqlite3.Error:
-        rows = []
+    except sqlite3.Error as error:
+        # An unreadable registry is not an empty one: returning {} here would
+        # silently delete the failed-runs check and the audit would pass
+        # while run pages could be lying. The audit must fail loud.
+        raise RuntimeError(f"the capture registry could not be read: {error}") from error
     finally:
         conn.close()
     captures = {}
@@ -1030,18 +1035,26 @@ def results_coverage(rows, trends_db, now):
     """Every finished suite run that ran its tests has test results in the
     test history, or the reason it has none."""
     expected = {}
+    unreadable_steps = {}
     for row in rows:
         suite = documented_suite(row.get("workflow"))
         if not suite or is_gate(row):
             continue
-        ran, _ = test_step(row)
+        ran, _, unreadable = test_step(row)
+        if unreadable:
+            # A row whose steps cannot be read escapes both test checks
+            # while looking checked: record it as a problem instead.
+            unreadable_steps[(row_run_id(row), suite)] = (
+                "", f"steps_json of run {row_run_id(row)} is unreadable")
+            continue
         finished = ts(row.get("updated_at")) or ts(row.get("created_at"))
         if not ran or finished is None or finished > now - RESULTS_GRACE:
             continue
         expected.setdefault((row_run_id(row), suite), row)
     results, fetches = stored_test_results(trends_db, sorted({run_id for run_id, _ in expected}))
-    missing = {key: fetches.get(key[0], ("", "not read yet")) for key in expected
-               if suite_results(results.get(key[0]), key[1]) is None}
+    missing = dict(unreadable_steps)
+    missing.update({key: fetches.get(key[0], ("", "not read yet")) for key in expected
+                    if suite_results(results.get(key[0]), key[1]) is None})
     reasons = Counter(reason or state for state, reason in missing.values())
     first = min((expected[key].get("created_at") or "" for key in missing), default="")
     return {
@@ -1065,8 +1078,7 @@ def failed_runs_check(github, rows, args, api_get, now):
         if finished is None or finished > now - RESULTS_GRACE:
             continue
         if RESULTS.get((row.get("conclusion") or "").lower()) != "failed" or not test_step(row)[1]:
-            continue
-        # The capture of the row's suite; a run outside the suites (an
+            continue        # The capture of the row's suite; a run outside the suites (an
         # install run) has one capture.
         run_captures = captures.get(run_id) or {}
         suite = documented_suite(row.get("workflow"))
@@ -1184,7 +1196,7 @@ def summarize(result):
     tests = summary["tests"]
     if tests:
         summary["ok"] = summary["ok"] and (
-            tests["private_readable"] is not False and not tests["runs_missing"] and not tests["pages_claim_none"]
+            tests["private_readable"] is True and not tests["runs_missing"] and not tests["pages_claim_none"]
             and not tests["pages_error"] and not tests["pages_differ"] and not tests["history_differ"]
         )
     return summary
@@ -1256,11 +1268,14 @@ def main(argv=None, github=None, now=None, api_get=read_api):
         print(report(result))
     e2e = result["e2e"] or {}
     tests = e2e.get("tests") or {}
+    private_readable = (tests.get("private") or {}).get("readable")
     failed = (any(not check["ok"] for check in result["window"])
               or any(a["problems"] for a in result["pull_requests"])
               or any(not check["ok"] for check in e2e.get("recount", []) + e2e.get("completeness", []))
               or any(a["problems"] for a in e2e.get("sample", []))
-              or (tests.get("private") or {}).get("readable") is False
+              # The tests part ran (a private answer exists) but is not a
+              # verified yes: "GitHub did not answer" is not a pass.
+              or (private_readable is not None and private_readable is not True)
               or not (tests.get("coverage") or {}).get("ok", True)
               or any(a["problems"] for a in tests.get("failed_runs", [])))
     return 1 if failed and not args.out else 0
