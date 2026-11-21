@@ -875,7 +875,7 @@ def test_the_waits_page_answers_when_a_phase_was_not_measured(stores):
 
     document = get(stores.api(), "waits")
     row = next(row for row in document["test_time"] if row["tests"])
-    assert row["setup"] == 0.0, "the unmeasured phase contributes nothing"
+    assert row["setup"] is None, "the unmeasured phase is unknown, not 0 hours"
     assert row["actions"] == round(70.0 / 3600, 2)
     row = {"setup_s": 10.0, "call_s": 50.0, "teardown_s": 5.0, "wait_s": 35.0, "wait_setup_s": 5.0,
            "wait_call_s": 30.0, "wait_teardown_s": 0.0}

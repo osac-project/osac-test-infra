@@ -1036,6 +1036,7 @@ def results_coverage(rows, trends_db, now):
     test history, or the reason it has none."""
     expected = {}
     unreadable_steps = {}
+    unreadable_steps_meta = {}
     for row in rows:
         suite = documented_suite(row.get("workflow"))
         if not suite or is_gate(row):
@@ -1046,6 +1047,7 @@ def results_coverage(rows, trends_db, now):
             # while looking checked: record it as a problem instead.
             unreadable_steps[(row_run_id(row), suite)] = (
                 "", f"steps_json of run {row_run_id(row)} is unreadable")
+            unreadable_steps_meta[(row_run_id(row), suite)] = row
             continue
         finished = ts(row.get("updated_at")) or ts(row.get("created_at"))
         if not ran or finished is None or finished > now - RESULTS_GRACE:
@@ -1056,12 +1058,17 @@ def results_coverage(rows, trends_db, now):
     missing.update({key: fetches.get(key[0], ("", "not read yet")) for key in expected
                     if suite_results(results.get(key[0]), key[1]) is None})
     reasons = Counter(reason or state for state, reason in missing.values())
-    first = min((expected[key].get("created_at") or "" for key in missing), default="")
+    # Unreadable rows are not in `expected` (they were skipped before it),
+    # so their metadata comes from the row captured when they were found.
+    first = min((expected[key].get("created_at") or "" for key in missing if key in expected), default="")
     return {
         "check": "suite runs that ran their tests: test results in the test history",
-        "runs": len(expected), "with_results": len(expected) - len(missing), "missing": len(missing),
+        "runs": len(expected) + len(unreadable_steps),
+        "with_results": len(expected) - (len(missing) - len(unreadable_steps)),
+        "missing": len(missing),
         "missing_since": first, "reasons": reasons.most_common(5), "ok": not missing,
-        "examples": [f"{expected[key].get('url')} ({key[1]}): {reason or state}"
+        "examples": [f"{(expected.get(key, unreadable_steps_meta.get(key, {}))).get('url', key[0])}"
+                     f" ({key[1]}): {reason or state}"
                      for key, (state, reason) in sorted(missing.items())[:5]],
     }
 
@@ -1278,8 +1285,10 @@ def main(argv=None, github=None, now=None, api_get=read_api):
               or any(not check["ok"] for check in e2e.get("recount", []) + e2e.get("completeness", []))
               or any(a["problems"] for a in e2e.get("sample", []))
               # The tests part ran (a private answer exists) but is not a
-              # verified yes: "GitHub did not answer" is not a pass.
-              or (private_readable is not None and private_readable is not True)
+              # verified yes: "GitHub did not answer" is not a pass. When
+              # the tests part did not run (--part prs), tests is empty and
+              # the guard stays silent.
+              or ("private" in tests and private_readable is not True)
               or not (tests.get("coverage") or {}).get("ok", True)
               # A run whose JUnit could not be downloaded was never checked.
               or any(a.get("junit") is None for a in tests.get("failed_runs", []))

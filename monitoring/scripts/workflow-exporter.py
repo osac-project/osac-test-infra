@@ -2184,8 +2184,19 @@ class WorkflowExporter:
             )
             if resp.ok:
                 total = resp.json().get("total_count")
-                if isinstance(total, int) and total > 0:
-                    active.append(repo)
+                if isinstance(total, int):
+                    if total > 0:
+                        active.append(repo)
+                else:
+                    # A malformed 200 is a failed probe, not proof of
+                    # inactivity: keep the previous membership.
+                    was_active = bool(self._active_repos) and repo in self._active_repos
+                    logger.error(
+                        "The activity probe of %s named no total_count; keeping its"
+                        " previous membership (%s)", repo,
+                        "active" if was_active else "not active")
+                    if was_active:
+                        active.append(repo)
             elif resp.status_code == 409:
                 continue
             else:
@@ -2246,15 +2257,14 @@ class WorkflowExporter:
                     # A failed listing permanently loses PR attribution for
                     # every run completed this cycle (the row is stored with
                     # an empty pr_display and never revisited), so it is an
-                    # ERROR, and the previous mapping is kept: an empty one
-                    # would silently drop the PR columns and retest counts.
+                    # ERROR. Entries already read this cycle stay (they are
+                    # fresher than the cache); the cached ones fill the rest.
                     logger.error(
                         "The %s pull request listing of %s failed (%s); keeping the"
-                        " previous mapping", state, repo, error,
+                        " freshest mapping available", state, repo, error,
                     )
-                    previous = (self._pr_map or {}).get(repo)
-                    if previous:
-                        mapping = previous
+                    previous = (self._pr_map or {}).get(repo) or {}
+                    mapping = {**previous, **mapping}
             pr_map[repo] = mapping
         self._pr_map = pr_map
         self._pr_map_ts = now
@@ -3734,6 +3744,10 @@ class WorkflowExporter:
         tot_queued = 0
         tot_zombies = 0
         tot_in_progress = 0
+        # False when any repo's counts failed: the org-wide totals derived
+        # from them must keep their previous values, not publish a smaller
+        # number that reads as a real drop.
+        counts_complete = True
         current_active = []
         # False if any repo's active-runs fetch was partial/failed this
         # cycle -- gates the by-category gauge update below (see
@@ -3759,7 +3773,17 @@ class WorkflowExporter:
                     # A failed count is not a backlog of zero: leave this
                     # repo's gauges at their last values and mark the
                     # active picture incomplete, rather than publish calm.
+                    # Completed-run ingestion continues: it does not depend
+                    # on the count, and skipping it here would store new
+                    # completions without their Prometheus counters (the
+                    # reconcile later upserts them as already-seen).
                     active_runs_complete = False
+                    counts_complete = False
+                    for run in self._recent_completed(repo):
+                        try:
+                            self._process_completed_run(repo, run)
+                        except Exception:
+                            logger.exception("Error processing completed run in %s", repo)
                     continue
 
                 # Collect active (queued/in_progress) runs for the active list
@@ -3806,9 +3830,15 @@ class WorkflowExporter:
                 # drop.
                 active_runs_complete = False
 
-        queued_total.labels(org=ORG).set(tot_queued)
-        zombie_total.labels(org=ORG).set(tot_zombies)
-        in_progress_total.labels(org=ORG).set(tot_in_progress)
+        if counts_complete:
+            queued_total.labels(org=ORG).set(tot_queued)
+            zombie_total.labels(org=ORG).set(tot_zombies)
+            in_progress_total.labels(org=ORG).set(tot_in_progress)
+        else:
+            # A repo's count failed: the sums are undercounts, not answers.
+            # The per-repo gauges already keep their last values; the org
+            # totals must too, or a partial failure reads as a real drop.
+            logger.warning("Org-wide queue totals keep their previous values: a repo's count failed")
 
         # By-category breakdown of the same org-wide totals above -- e2e
         # runs on self-hosted runners, a completely different resource
@@ -6327,7 +6357,15 @@ def main():
     # HTTP server is already running so /metrics and /api/jobs are available
     # (they'll return empty data until this finishes).
     logger.info("Loading recent job history...")
-    exporter.initial_load()
+    # A failed initial load must not kill the service before the polling
+    # loop can retry it: the reconcile and the gap check recover what a
+    # failed startup load missed, and the store-freshness alert fires
+    # while it keeps failing.
+    try:
+        exporter.initial_load()
+    except Exception:
+        logger.exception("Initial history load failed; the polling loop retries and the"
+                         " reconciliation covers the gap")
 
     while True:
         try:

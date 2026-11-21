@@ -513,8 +513,11 @@ class CIObserveCaptureView:
         if outcome == "unknown":
             # The history could not be read: the summary says so instead of
             # letting the trace's own status stand in for GitHub's verdict.
+            # transient: the 600 s success cache must not hold the missing
+            # verdict while the database recovers.
             notes.append("the GitHub outcome is unavailable: the job history could not be read")
             status = None
+            document["transient"] = True
         else:
             status = outcome or session.get("status")
             if outcome is None and session.get("status"):
@@ -709,9 +712,11 @@ class CIObserveCaptureView:
         """
         rows, source = self._job_rows(run_id, run_attempt)
         if rows is None:
-            # A failed read is not "no rows": say the window is unknown
-            # instead of searching a window inferred from nothing.
-            return None
+            # A failed read is not "no window": returning None here would
+            # let the spans pass record the capture as permanently missing
+            # (complete=1) over a transient database error. Raise so the
+            # caller can retry.
+            raise RuntimeError(f"the run window of run {run_id} could not be read: {source}")
         attempt = None if run_attempt is None else str(run_attempt)
         starts = []
         for record in rows:

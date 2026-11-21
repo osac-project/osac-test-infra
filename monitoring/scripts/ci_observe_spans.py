@@ -460,7 +460,13 @@ def read_capture(view, row, now):
     identity, registry = view._registry(capture_id)
     trace_id = str((registry or {}).get("session_trace_id") or "").strip()
     if not trace_id:
-        window = view._run_window(summary["run_id"], summary["run_attempt"], registry)
+        try:
+            window = view._run_window(summary["run_id"], summary["run_attempt"], registry)
+        except RuntimeError as error:
+            # A failed window read is transient: the capture stays
+            # retryable (complete=0), never permanently missing.
+            summary.update(state="unavailable", complete=0, notes=str(error)[:500])
+            return summary, [], [], []
         if window is None:
             summary.update(state="missing", complete=1, notes="no run window to search Tempo in")
             return summary, [], [], []

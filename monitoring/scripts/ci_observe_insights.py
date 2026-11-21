@@ -1658,6 +1658,12 @@ class CIObserveInsights:
         def known(part_index):
             return [value for parts in split for value in [parts[part_index]] if value is not None]
 
+        def known_sum(part_index):
+            """The phase's measured hours, or None when nothing was
+            measured: an unmeasured phase is not 0 hours."""
+            values = known(part_index)
+            return round(sum(values) / 3600, 2) if values else None
+
         rows = []
         for suite in (*filters.suites, "all") if filters.suite == "all" else filters.suites:
             group = [row for row in tests if suite == "all" or row.get("suite") == suite]
@@ -1668,10 +1674,10 @@ class CIObserveInsights:
                 "suite": suite,
                 "tests": len(group),
                 "recorded_runs": len({row["capture_id"] for row in group}),
-                "setup": round(sum(known(0)) / 3600, 2) if group else None,
-                "waits": round(sum(known(1)) / 3600, 2) if group else None,
-                "actions": round(sum(known(2)) / 3600, 2) if group else None,
-                "teardown": round(sum(known(3)) / 3600, 2) if group else None,
+                "setup": known_sum(0) if group else None,
+                "waits": known_sum(1) if group else None,
+                "actions": known_sum(2) if group else None,
+                "teardown": known_sum(3) if group else None,
                 "wait_share": ratio(sum(known(1)), total),
             })
             for index, part in enumerate(("setup", "waits", "actions", "teardown")):
