@@ -21,6 +21,7 @@
     - osac-compact-boot-diagnostics
     - osac-compact-kubeconfig
     - osac-install-cluster-tool
+    - osac-hypervisor-sosreport
 
 - name: Run machine-init.sh runner-user
   ansible.builtin.script: "{{ playbook_dir }}/../../scripts/machine-init.sh runner-user"
