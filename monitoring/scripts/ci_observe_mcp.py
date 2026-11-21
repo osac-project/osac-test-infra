@@ -900,10 +900,10 @@ class McpHandler(BaseHTTPRequestHandler):
             "authorization_endpoint": self._external("/authorize"),
             "token_endpoint": self._external("/token"),
             "registration_endpoint": self._external("/register"),
-            "response_types": ["code"],
-            "grant_types": ["authorization_code"],
-            "token_endpoint_auth_methods": ["none"],
-            "code_challenge_methods": ["S256"],
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "token_endpoint_auth_methods_supported": ["none"],
+            "code_challenge_methods_supported": ["S256"],
         })
 
     def _register(self) -> None:

@@ -342,7 +342,11 @@ def test_the_well_known_documents_name_the_endpoints(server):
     assert answer.status == 200
     assert document["issuer"] == "https://outside"
     assert document["authorization_endpoint"] == "https://outside/authorize"
-    assert document["code_challenge_methods"] == ["S256"]
+    # RFC 8414 names: a client's schema rejects the document without them.
+    assert document["response_types_supported"] == ["code"]
+    assert document["grant_types_supported"] == ["authorization_code"]
+    assert document["token_endpoint_auth_methods_supported"] == ["none"]
+    assert document["code_challenge_methods_supported"] == ["S256"]
 
 
 def test_registration_accepts_only_loopback_redirects(server):
