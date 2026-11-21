@@ -193,6 +193,7 @@ def github_login(config: Config, code: str) -> str:
             "client_id": config.github_client_id,
             "client_secret": config.github_client_secret,
             "code": code,
+            "redirect_uri": f"{config.external_url}/oauth/callback",
         },
         headers={"Accept": "application/json"},
         timeout=15,
@@ -999,6 +1000,7 @@ class McpHandler(BaseHTTPRequestHandler):
         try:
             login = github_login(config, code)
         except AuthError as error:
+            logger.error("the GitHub login of the OAuth callback was refused: %s", error)
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
         try:
@@ -1009,6 +1011,7 @@ class McpHandler(BaseHTTPRequestHandler):
                 })
                 return
         except AuthError as error:
+            logger.error("the Grafana check of the OAuth callback failed: %s", error)
             self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
             return
         token = mint_token(config.session_secret, login, now)
