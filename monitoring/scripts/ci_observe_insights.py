@@ -173,6 +173,17 @@ def _param(params, name, default=""):
     return values or default
 
 
+def _parse_end(value):
+    """A UTC date (2026-11-01) or a UTC second-precision time
+    (2026-11-01T12:00:00Z), or None when the value is neither."""
+    for pattern in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(value, pattern).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    return None
+
+
 # -- filters -------------------------------------------------------------------
 
 class Filters:
@@ -209,9 +220,26 @@ class Filters:
             trigger = "all"
         self.trigger = trigger
         self.now = now
-        self.window_to = now
-        self.window_from = now - timedelta(days=self.days)
-        self.previous_from = now - timedelta(days=2 * self.days)
+        # The end of the window. Without `end` it is now, so the dashboards'
+        # fixed windows are unchanged; with it, the window is the `days`
+        # before that moment. A value in the future is clamped to now with a
+        # note: the stores hold nothing beyond the present.
+        end = _param(params, "end", "").strip()
+        window_to = now
+        self.end = ""
+        if end:
+            parsed = _parse_end(end)
+            if parsed is None:
+                self.notes.append(f"end {end!r} is neither a date (2026-11-01) nor a UTC time"
+                                  " (2026-11-01T12:00:00Z); the window ends now")
+            elif parsed > now:
+                self.notes.append(f"end {end!r} is in the future; the window ends now")
+            else:
+                window_to = parsed
+                self.end = iso(parsed)
+        self.window_to = window_to
+        self.window_from = window_to - timedelta(days=self.days)
+        self.previous_from = window_to - timedelta(days=2 * self.days)
         self.has_previous = 2 * self.days <= KEEP_DAYS
 
     @property
@@ -219,7 +247,7 @@ class Filters:
         return phases.SUITES if self.suite == "all" else (self.suite,)
 
     def key(self):
-        return (self.days, self.suite, self.repo, self.trigger)
+        return (self.days, self.suite, self.repo, self.trigger, self.end)
 
     def matches(self, fact):
         if fact["suite"] not in self.suites:
@@ -234,6 +262,7 @@ class Filters:
             "suite": self.suite,
             "repo": self.repo or "all",
             "trigger": self.trigger,
+            "end": self.end,
             "window_from": iso(self.window_from),
             "window_to": iso(self.window_to),
             "previous_from": iso(self.previous_from) if self.has_previous else "",

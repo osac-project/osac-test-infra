@@ -334,6 +334,49 @@ def test_the_previous_window_exists_only_inside_the_archive():
     assert insights.Filters({"days": ["90"]}, NOW).has_previous is False
 
 
+def test_an_end_moves_the_window_and_the_cache_key():
+    filters = insights.Filters({"days": ["7"], "end": ["2026-11-01"]}, NOW)
+    assert filters.window_to == datetime(2026, 11, 1, tzinfo=UTC)
+    assert filters.window_from == datetime(2026, 10, 25, tzinfo=UTC)
+    assert filters.key() == (7, "all", "", "all", "2026-11-01T00:00:00Z")
+    assert filters.window()["end"] == "2026-11-01T00:00:00Z"
+    # Without end the window ends now, as the dashboards' fixed windows do.
+    assert insights.Filters({"days": ["7"]}, NOW).key() == (7, "all", "", "all", "")
+
+
+@pytest.mark.parametrize(("end", "note_wants"), [
+    ("2026-11-01T12:00:00Z", None),  # a full UTC time is accepted too
+    ("2026-12-01", "in the future"),
+    ("yesterday", "neither a date"),
+])
+def test_an_end_that_is_not_a_past_moment_is_a_note_and_ends_now(end, note_wants):
+    filters = insights.Filters({"days": ["7"], "end": [end]}, NOW)
+    if note_wants:
+        assert filters.window_to == NOW
+        assert len(filters.notes) == 1 and note_wants in filters.notes[0]
+    else:
+        assert filters.window_to == datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+        assert filters.notes == []
+
+
+def test_an_end_window_counts_only_the_runs_before_it(stores):
+    stores.run(NOW - timedelta(days=1), suite="vmaas")
+    stores.run(NOW - timedelta(days=4), suite="caas")
+    stores.run(NOW - timedelta(days=9), suite="bmaas")
+    api = stores.api()
+
+    # The default 7-day window holds the runs of Nov 6 and Nov 3, not Oct 29.
+    assert get(api, "health")["tiles"][0]["runs"] == 2
+    # The window [2026-11-02, 2026-11-04]: only the run of Nov 3 is inside.
+    ended = get(api, "health", days="2", end="2026-11-04")
+    assert ended["tiles"][0]["runs"] == 1
+    assert ended["window"][0]["end"] == "2026-11-04T00:00:00Z"
+    assert ended["about"][0]["window"] == "2026-11-02 00:00 to 2026-11-04 00:00 UTC"
+    # Two different ends are two different documents, not one cache entry.
+    assert get(api, "health", days="2", end="2026-11-05")["tiles"][0]["runs"] == 1
+    assert get(api, "health", days="2", end="2026-11-04")["tiles"][0]["runs"] == 1
+
+
 def test_the_suite_trigger_and_repository_filters_narrow_the_runs(stores):
     stores.run(NOW - timedelta(hours=2), suite="vmaas", event="schedule")
     stores.run(NOW - timedelta(hours=3), suite="caas", event="merge_group", workflow="E2E caas (merge queue)")
