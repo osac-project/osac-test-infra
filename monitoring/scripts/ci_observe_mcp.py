@@ -843,6 +843,33 @@ def mint_code(login: str, challenge: str, redirect_uri: str, now: float) -> str:
     return code
 
 
+# The logins in flight: /authorize sends GitHub a short random state and
+# keeps the client's parameters (its id, redirect URI, PKCE challenge and
+# state) here instead. Carrying them through GitHub's state -- a ~300
+# character blob -- made GitHub mint codes it then refused at exchange
+# (bad_verification_code, isolated by a controlled experiment: the same
+# authorize with a short state exchanges fine), so the blob never leaves
+# this process. Fifteen minutes of life; a restart forces a new login.
+AUTHORIZES: dict[str, dict] = {}
+AUTHORIZE_SECONDS = 15 * 60
+
+
+def mint_authorize(redirect_uri: str, challenge: str, state: str, now: float) -> str:
+    nonce = secrets.token_urlsafe(16)
+    AUTHORIZES[nonce] = {"redirect_uri": redirect_uri, "challenge": challenge,
+                         "state": state, "expires": now + AUTHORIZE_SECONDS}
+    for key in [key for key, entry in AUTHORIZES.items() if entry["expires"] < now]:
+        AUTHORIZES.pop(key, None)
+    return nonce
+
+
+def take_authorize(nonce: str, now: float) -> dict | None:
+    entry = AUTHORIZES.pop(nonce, None)
+    if entry is None or entry["expires"] < now:
+        return None
+    return entry
+
+
 # -- the HTTP server ----------------------------------------------------------------
 
 
@@ -960,8 +987,6 @@ class McpHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_request",
                                                      "error_description": "PKCE with S256 is required"})
             return
-        carry = urllib.parse.urlencode({"client_id": client_id, "redirect_uri": redirect_uri,
-                                        "code_challenge": challenge, "state": state})
         cookies = SimpleCookie()
         cookies.load(self.headers.get("Cookie") or "")
         morsel = cookies.get(SESSION_COOKIE)
@@ -973,12 +998,15 @@ class McpHandler(BaseHTTPRequestHandler):
                 target += f"&state={urllib.parse.quote(state)}"
             self._redirect(target)
             return
+        # The client's parameters stay here (see AUTHORIZES); GitHub gets a
+        # short nonce as the state.
+        nonce = mint_authorize(redirect_uri, challenge, state, now)
         github = ("https://github.com/login/oauth/authorize?"
                   + urllib.parse.urlencode({
                       "client_id": config.github_client_id,
                       "redirect_uri": self._external("/oauth/callback"),
                       "scope": "read:user",
-                      "state": carry,
+                      "state": nonce,
                   }))
         self._redirect(github)
 
@@ -986,17 +1014,17 @@ class McpHandler(BaseHTTPRequestHandler):
         config = self.state.config
         query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
         code = (query.get("code") or [""])[0]
-        carry = (query.get("state") or [""])[0]
-        if not code or not carry:
+        nonce = (query.get("state") or [""])[0]
+        if not code or not nonce:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "the login was refused"})
             return
-        client = urllib.parse.parse_qs(carry)
-        redirect_uri = (client.get("redirect_uri") or [""])[0]
-        challenge = (client.get("code_challenge") or [""])[0]
-        state = (client.get("state") or [""])[0]
-        if not redirect_uri or not challenge:
+        entry = take_authorize(nonce, now)
+        if entry is None:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "the login state was broken"})
             return
+        redirect_uri = entry["redirect_uri"]
+        challenge = entry["challenge"]
+        state = entry["state"]
         try:
             login = github_login(config, code)
         except AuthError as error:

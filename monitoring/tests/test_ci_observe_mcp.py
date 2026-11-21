@@ -336,6 +336,21 @@ def request(server, method, path, body=None, headers=None):
     return answer, payload
 
 
+def start_login(server, client_id, redirect_uri="http://localhost:41111/callback",
+                challenge=None, state="st"):
+    """Run /authorize the way a client does and return the nonce GitHub
+    will echo back as the state (the client's parameters stay server-side)."""
+    challenge = challenge or mcp._sha256_b64("the-verifier-the-client-made-up")
+    query = urllib.parse.urlencode({
+        "response_type": "code", "client_id": client_id, "redirect_uri": redirect_uri,
+        "code_challenge": challenge, "code_challenge_method": "S256", "state": state})
+    answer, _ = request(server, "GET", f"/authorize?{query}")
+    assert answer.status == 302
+    location = answer.getheader("Location")
+    assert location.startswith("https://github.com/login/oauth/authorize")
+    return urllib.parse.parse_qs(urllib.parse.urlparse(location).query)["state"][0]
+
+
 def test_the_well_known_documents_name_the_endpoints(server):
     answer, payload = request(server, "GET", "/.well-known/oauth-authorization-server")
     document = json.loads(payload)
@@ -404,23 +419,12 @@ def test_the_full_login_ends_in_a_working_token(server, config, monkeypatch):
                          headers={"Content-Type": "application/json"})
     client_id = json.loads(payload)["client_id"]
     verifier = "the-verifier-the-client-made-up"
-    challenge = mcp._sha256_b64(verifier)
-    query = urllib.parse.urlencode({
-        "response_type": "code", "client_id": client_id,
-        "redirect_uri": "http://localhost:41111/callback",
-        "code_challenge": challenge, "code_challenge_method": "S256", "state": "st",
-    })
-    answer, _ = request(server, "GET", f"/authorize?{query}")
-    assert answer.status == 302
-    assert answer.getheader("Location").startswith("https://github.com/login/oauth/authorize")
+    nonce = start_login(server, client_id, challenge=mcp._sha256_b64(verifier))
 
     # 2. GitHub calls back; the login is checked and the client's redirect
     #    receives a code.
-    carry = urllib.parse.urlencode({"client_id": client_id,
-                                    "redirect_uri": "http://localhost:41111/callback",
-                                    "code_challenge": challenge, "state": "st"})
     answer, _ = request(server, "GET",
-                        f"/oauth/callback?code=gh-code&state={urllib.parse.quote(carry)}")
+                        f"/oauth/callback?code=gh-code&state={urllib.parse.quote(nonce)}")
     assert answer.status == 302
     back = urllib.parse.urlparse(answer.getheader("Location"))
     assert back.scheme == "http" and back.hostname == "localhost"
@@ -447,6 +451,19 @@ def test_the_full_login_ends_in_a_working_token(server, config, monkeypatch):
     assert json.loads(payload)["result"]["tools"]
 
 
+def test_the_state_github_receives_is_a_short_nonce(server, monkeypatch):
+    """The client's parameters must not travel through GitHub's state: a
+    ~300-character state made GitHub mint codes it then refused at
+    exchange (bad_verification_code). GitHub receives a short nonce."""
+    _, payload = request(server, "POST", "/register",
+                         body=json.dumps({"redirect_uris": ["http://localhost:41111/callback"]}),
+                         headers={"Content-Type": "application/json"})
+    client_id = json.loads(payload)["client_id"]
+    nonce = start_login(server, client_id)
+    assert len(nonce) < 64
+    assert "http" not in nonce and "%" not in nonce
+
+
 def test_a_verifier_that_does_not_match_is_refused(server, monkeypatch):
     monkeypatch.setattr(mcp, "github_login", lambda config, code: "dev")
     monkeypatch.setattr(mcp, "grafana_user_exists", lambda config, login: True)
@@ -454,12 +471,10 @@ def test_a_verifier_that_does_not_match_is_refused(server, monkeypatch):
                          body=json.dumps({"redirect_uris": ["http://127.0.0.1:41111/callback"]}),
                          headers={"Content-Type": "application/json"})
     client_id = json.loads(payload)["client_id"]
-    carry = urllib.parse.urlencode({"client_id": client_id,
-                                    "redirect_uri": "http://127.0.0.1:41111/callback",
-                                    "code_challenge": mcp._sha256_b64("right"),
-                                    "state": ""})
+    nonce = start_login(server, client_id, redirect_uri="http://127.0.0.1:41111/callback",
+                        challenge=mcp._sha256_b64("right"))
     answer, _ = request(server, "GET",
-                        f"/oauth/callback?code=x&state={urllib.parse.quote(carry)}")
+                        f"/oauth/callback?code=x&state={urllib.parse.quote(nonce)}")
     code = urllib.parse.parse_qs(urllib.parse.urlparse(answer.getheader("Location")).query)["code"][0]
     answer, _ = request(server, "POST", "/token",
                         body=urllib.parse.urlencode({"grant_type": "authorization_code", "code": code,
@@ -515,9 +530,12 @@ def test_a_login_without_a_grafana_user_is_refused(server, monkeypatch):
 def test_a_github_login_without_a_grafana_user_is_refused(server, monkeypatch):
     monkeypatch.setattr(mcp, "github_login", lambda config, code: "stranger")
     monkeypatch.setattr(mcp, "grafana_user_exists", lambda config, login: False)
-    carry = urllib.parse.urlencode({"client_id": "c", "redirect_uri": "http://localhost:1/cb",
-                                    "code_challenge": "ch", "state": ""})
+    _, payload = request(server, "POST", "/register",
+                         body=json.dumps({"redirect_uris": ["http://localhost:1/cb"]}),
+                         headers={"Content-Type": "application/json"})
+    client_id = json.loads(payload)["client_id"]
+    nonce = start_login(server, client_id, redirect_uri="http://localhost:1/cb")
     answer, payload = request(server, "GET",
-                              f"/oauth/callback?code=gh&state={urllib.parse.quote(carry)}")
+                              f"/oauth/callback?code=gh&state={urllib.parse.quote(nonce)}")
     assert answer.status == 403
     assert "no Grafana user" in json.loads(payload)["error"]
