@@ -274,6 +274,77 @@ For stretched tests against a full-ci deployment, use
 
 The Netris VMaaS and full paths use the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `DEPLOY_SUITE=vmaas` or `DEPLOY_SUITE=full`, `deploy-infra` reuses h00's Netris-managed leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay and enables underlay on that link; leaf-0's `eth9` link remains the `br-ex` data path. h00's Linux interface names are resolved from the MAC addresses correlated across Netris, the leaf interface, and the libvirt tunnel, so the guest NIC enumeration may change without changing which path carries data or underlay. It sets h00's server ASN and EVPN-VTEP inventory role so Netris can generate the leaf-side peer from the managed link. `deploy-ocp` validates the OpenShift inputs and writes an ignored, site-specific `infra/netris/.evpn-values.yaml`; the fresh `deploy-osac` path passes those values to `osac-installer` `install-infra`, which configures OVN route advertisements, NMState, the unmanaged VTEP, node uplink addresses, and OCP-side FRR. The separate Netris deployment configures the fabric side; this flow does not install or rely on the Netris host agent. No standalone VLAN-backed BGP object is created for the routed `/31`. `vmaas-ci` enables VMaaS only; `full-ci` enables every service, so VM and bare-metal instances can attach to one subnet. BMaaS continues to use the Netris server-port names and its separate per-BMH MAC mapping for `eth9`/`eth10`; assigning h00's `eth10` to the underlay does not change h01–h03 provisioning NIC selection. `setup-bmaas` publishes the configured BMI guest interface name as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched networking tests consume that value instead of embedding a server-port name in the test code.
 
+These optional EVPN BGP modes require an `osac-infra` chart revision that
+accepts the matching `evpn.bgp` keys (`activeActive`, `activeBackup`,
+`bfdProfile`) and uplink keys (`unnumbered`, `role`). The chart validates its
+values against `values.schema.json`, so an older `osac` checkout rejects the
+generated `.evpn-values.yaml` during `install-infra`. Merge or pin an installer
+revision with that support (for example through `osac_branch`) before enabling
+any of these settings.
+
+BFD for the OCP-to-Netris BGP session is opt-in. Enable BFD on the matching
+Netris E-BGP peer first, then set `ocp_evpn_bfd_profile` to a profile name when
+running `deploy-ocp`; for example,
+`EXTRA_VARS='ocp_evpn_bfd_profile=bfd-fastest'`. The generated
+`.evpn-values.yaml` passes the profile name and timer values to the installer.
+The default timers are 300 ms receive/transmit with a detect multiplier of 3;
+override them only when the Netris switch supports the selected intervals.
+
+Unnumbered BGP is also opt-in. Set `ocp_evpn_bgp_unnumbered=true` when running
+`deploy-ocp` to generate an uplink with `unnumbered: true`; the generated
+`.evpn-values.yaml` then omits `address` and `peerAddress`, and the installer
+configures FRR to peer by the local interface name. The matching fabric port
+must already support unnumbered BGP and provide the required link-local
+underlay. Leave this setting false for the existing numbered `/31` contract.
+For unnumbered neighbors the IPv4 unicast policy comes from the frr-k8s
+generated `<peer>-in`/`<peer>-out` route-maps for the interface, which are the
+only ones FRR keeps attached in `address-family ipv4 unicast`. frr-k8s still
+generates its `<peer>-allowed-ipv6`/`<peer>-inpl-dual` deny prefix-lists;
+leave them in place. They filter IPv6 unicast routes only, so neither the RFC
+5549 IPv4 routes nor their IPv6 link-local next hops are affected by them.
+
+Active/active EVPN is opt-in. Set `ocp_evpn_bgp_active_active=true` when
+running `deploy-ocp`; it is mutually exclusive with active-backup and the role
+rejects enabling both. The generated values set `activeActive: true`, so the
+installer renders `bgp bestpath as-path multipath-relax` and
+`maximum-paths 16` for IPv4 unicast. The setting enables the multipath policy
+only: the fabric must present multiple equal-cost underlay paths, for example
+more than one EVPN leaf peer. The default lab topology keeps a single underlay
+uplink, so with that topology the policy is rendered but no second path is
+installed.
+
+Active/backup EVPN uplinks are opt-in and mutually exclusive with
+`ocp_evpn_bgp_active_active`. Set `ocp_evpn_bgp_active_backup=true` and point
+the backup link at a second underlay-enabled port on a different leaf:
+`ocp_evpn_backup_server_port` (`eth12`), `ocp_evpn_backup_leaf_port` (`swp1s2`),
+`ocp_evpn_backup_leaf_index` (`0`) and `ocp_evpn_backup_p2p_cidr`
+(`192.0.3.0/30`, leaf `.1`, OCP `.2`). The generated
+`.evpn-values.yaml` sets `activeBackup: true` and tags the primary uplink
+`active` and the backup uplink `backup`, so the installer renders
+`local-preference 200` on the active peer and `local-preference 100` plus a
+triple AS-path prepend on the backup peer. frr-k8s attaches its own per-neighbor
+`<peer>-in`/`<peer>-out` maps in `address-family ipv4 unicast` and applies them
+after the chart's raw block, so the installer merges a `permit 1` entry into
+those generated maps: the inbound entry matches the reserved VTEP loopbacks
+(`EVPN-REMOTE-VTEPS`) and sets local preference 200/100, and the backup
+outbound entry prepends the node ASN. The L2VPN EVPN address family uses
+dedicated `EVPN-ACTIVE-IN`/`EVPN-ACTIVE-OUT` and
+`EVPN-BACKUP-IN`/`EVPN-BACKUP-OUT` route-maps. Unnumbered BGP applies to both
+uplinks when it is enabled, and frr-k8s's generated IPv6 deny prefix-lists stay
+in place: they only filter IPv6 unicast routes, so IPv4 routes and their IPv6
+link-local next hops are unaffected. When the mode is enabled, `deploy-infra`
+wires the selected backup endpoint with underlay enabled. If a server link
+already occupies that leaf port, it moves to the first free server-facing
+port below the fabric uplink ranges. With the defaults this moves h02's
+leaf-0 link to `swp2s0`; larger server counts and backup-port overrides use
+the actual port occupancy. The topology rejects taking h00's existing leaf
+endpoints, invalid fabric endpoints, and configurations with no spare port
+for a displaced link. The role resolves the backup guest Linux interface
+name from the Netris port's MAC, just like
+the data and primary underlay interfaces, so the generated values do not
+depend on guest NIC enumeration. It also rejects a resolved backup port whose
+Netris link lands on a leaf other than `ocp_evpn_backup_leaf_index`.
+
 Netris/CUDN EVPN settings are overlays inside the existing OSAC service profile
 directories: `osac-installer/values/vmaas-ci/netris.yaml`,
 `osac-installer/values/bmaas-ci/netris.yaml`, and

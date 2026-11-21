@@ -171,11 +171,46 @@ resource "netris_softgate" "north-south-softgate" {
 
 #### Declaration of North-South Fabric links ####
 
-#GPU server links to NS Leaf switches
+{% if ocp_evpn_bgp_active_backup | default(false) | bool %}# Reserve the selected backup endpoint and relocate only the server link
+# that occupies it. Spare ports must stay below the fabric uplink ranges.
+locals {
+  ocp-evpn-server-links = [
+    for index in range(var.gpu-server-count * 2) : {
+      leaf = index % 2 + 2 * floor(index / (var.gpu-server-count / var.north-south-fabric.leaf-count * 4))
+      port = floor(index / 2) - (var.gpu-server-count / var.north-south-fabric.leaf-count * 2) * floor(index / (var.gpu-server-count / var.north-south-fabric.leaf-count * 4))
+    }
+  ]
+  ocp-evpn-backup-leaf       = {{ ocp_evpn_backup_leaf_index | int }}
+  ocp-evpn-backup-port-parts = regex("^swp([0-9]+)s([0-9]+)$", "{{ ocp_evpn_backup_leaf_port }}")
+  ocp-evpn-backup-port       = (tonumber(local.ocp-evpn-backup-port-parts[0]) - 1) * var.north-south-fabric.leaf-port-breakout + tonumber(local.ocp-evpn-backup-port-parts[1])
+  ocp-evpn-server-port-limit = min(
+    var.north-south-fabric.leaf-port-count * var.north-south-fabric.leaf-port-breakout,
+    var.north-south-fabric.leaf-to-spine-start-port,
+    var.north-south-fabric.leaf-to-softgate-start-port
+  )
+  ocp-evpn-occupied-ports = [
+    for link in local.ocp-evpn-server-links : link.port
+    if link.leaf == local.ocp-evpn-backup-leaf
+  ]
+  ocp-evpn-spare-port = try([
+    for port in range(local.ocp-evpn-server-port-limit) : port
+    if port != local.ocp-evpn-backup-port && !contains(local.ocp-evpn-occupied-ports, port)
+  ][0], -1)
+  ocp-evpn-server-ports = [
+    for link in local.ocp-evpn-server-links :
+    link.leaf == local.ocp-evpn-backup-leaf && link.port == local.ocp-evpn-backup-port ? local.ocp-evpn-spare-port : link.port
+  ]
+}
+
+{% endif %}#GPU server links to NS Leaf switches
 resource "netris_link" "north-south-leaf-to-gpu-server" {
   count                           = (var.north-south-fabric.enable * var.gpu-server-count * 2)
   ports                           = [
+{% if ocp_evpn_bgp_active_backup | default(false) | bool %}
+                                      "swp${floor(local.ocp-evpn-server-ports[count.index] / var.north-south-fabric.leaf-port-breakout) + 1}s${local.ocp-evpn-server-ports[count.index] % var.north-south-fabric.leaf-port-breakout}@${netris_switch.north-south-leaf[local.ocp-evpn-server-links[count.index].leaf].name}",
+{% else %}
                                       "swp${ (  floor ( (floor(count.index/2) -  ( (var.gpu-server-count/var.north-south-fabric.leaf-count*2) * floor(count.index/(var.gpu-server-count/var.north-south-fabric.leaf-count*4)))) / var.north-south-fabric.leaf-port-breakout )+1  )}s${(floor(count.index/2) - ((var.gpu-server-count/var.north-south-fabric.leaf-count*2) * floor(count.index/(var.gpu-server-count/var.north-south-fabric.leaf-count*4)))) - var.north-south-fabric.leaf-port-breakout*floor((floor(count.index/2) - ((var.gpu-server-count/var.north-south-fabric.leaf-count*2) * floor(count.index/(var.gpu-server-count/var.north-south-fabric.leaf-count*4))))/var.north-south-fabric.leaf-port-breakout) }@${netris_switch.north-south-leaf[(count.index - (2*floor(count.index/2)) + (2*(floor(count.index/(var.gpu-server-count/var.north-south-fabric.leaf-count*4) )) ) )].name}",
+{% endif %}
                                       "eth${(count.index - (2*floor(count.index/2)) + local.gpu-server-first-ns-port)}@${netris_server.hgx[(floor(count.index/2))].name}"
   ]
   ipv4                            = [
@@ -196,6 +231,26 @@ resource "netris_link" "north-south-leaf-to-gpu-server" {
                                       netris_server.hgx,
                                       netris_switch.north-south-leaf
   ]
+{% if ocp_evpn_bgp_active_backup | default(false) | bool %}
+  lifecycle {
+    precondition {
+      condition     = {{ ocp_underlay_enabled | default(false) | bool | ternary('true', 'false') }} && local.ocp-evpn-backup-leaf >= 0 && local.ocp-evpn-backup-leaf < var.north-south-fabric.leaf-count && local.ocp-evpn-backup-leaf != {{ ocp_underlay_leaf_index | int }}
+      error_message = "EVPN active-backup requires the primary underlay and a backup link on a different existing leaf."
+    }
+    precondition {
+      condition     = tonumber(local.ocp-evpn-backup-port-parts[0]) >= 1 && tonumber(local.ocp-evpn-backup-port-parts[1]) < var.north-south-fabric.leaf-port-breakout && local.ocp-evpn-backup-port < local.ocp-evpn-server-port-limit
+      error_message = "The EVPN backup port must be a valid server-facing breakout port below the fabric uplink ranges."
+    }
+    precondition {
+      condition     = !contains(slice(local.ocp-evpn-server-links, 0, 2), { leaf = local.ocp-evpn-backup-leaf, port = local.ocp-evpn-backup-port })
+      error_message = "The EVPN backup port must not replace h00's existing data or primary-underlay link."
+    }
+    precondition {
+      condition     = !contains(local.ocp-evpn-occupied-ports, local.ocp-evpn-backup-port) || local.ocp-evpn-spare-port >= 0
+      error_message = "There is no free server-facing leaf port for the link displaced by the EVPN backup."
+    }
+  }
+{% endif %}
 }
 
 # The underlay peer is generated from the Netris-managed eth10 <-> swp1s0
@@ -203,7 +258,26 @@ resource "netris_link" "north-south-leaf-to-gpu-server" {
 # a separate VLAN-backed netris_bgp resource on this routed point-to-point link.
 
 
-#Leaf to Spine links
+{% if ocp_evpn_bgp_active_backup | default(false) | bool %}# Dedicated second OCP underlay for EVPN active-backup, with its leaf endpoint
+# reserved above so Netris can generate the backup E-BGP peer.
+resource "netris_link" "north-south-leaf-to-hgx-h00-backup" {
+  count                           = var.north-south-fabric.enable
+  ports                           = [
+                                      "{{ ocp_evpn_backup_leaf_port }}@${netris_switch.north-south-leaf[{{ ocp_evpn_backup_leaf_index | int }}].name}",
+                                      "{{ ocp_evpn_backup_server_port }}@${netris_server.hgx[0].name}"
+  ]
+  ipv4                            = [
+                                      "{{ ocp_evpn_backup_p2p_cidr | ansible.utils.ipaddr('1') }}",
+                                      "{{ ocp_evpn_backup_p2p_cidr | ansible.utils.ipaddr('2') }}"
+  ]
+  underlay                        = "enabled"
+  depends_on                      = [
+                                      netris_link.north-south-leaf-to-gpu-server
+  ]
+}
+
+
+{% endif %}#Leaf to Spine links
 resource "netris_link" "north-south-leaf-to-spine" {
   count                           = (var.north-south-fabric.enable * var.north-south-fabric.leaf-count * var.north-south-fabric.spine-count * var.north-south-fabric.leaf-to-spine-link-count)
   ports                           = [

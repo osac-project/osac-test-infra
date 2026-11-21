@@ -195,15 +195,23 @@
 # bare metal), the VTEP range, the fabric loopbacks and the node uplinks.
 # ipaddr('subnet') keeps every entry canonical, also when an uplink address is
 # not the network address.
+#
+# The uplink /31 and the active-backup /30 come from the Ansible variables, not
+# from .evpn-values.yaml, because an unnumbered uplink carries no `address`.
+# The node uplink addresses in the values file still cover any numbered uplink
+# whose network is not one of those two.
 - name: Compute the excluded IPv4 CIDRs
   ansible.builtin.set_fact:
     _netris_excluded_ipv4_cidrs: >-
       {{ (([dns_server ~ '/32', ocp_snat_ip ~ '/32', ocp_dnat_ip ~ '/32',
             ocp_subnet_cidr, '192.168.16.0/20', bmc_net_cidr,
             bmaas_provisioning_snat_cidr, netris_private_allocation_cidr]
+           + ([ocp_underlay_p2p_cidr] if ocp_underlay_enabled | default(false) | bool else [])
+           + ([ocp_evpn_backup_p2p_cidr] if ocp_evpn_bgp_active_backup | default(false) | bool else [])
            + ([_netris_evpn.vtepCIDR] if _netris_evpn.vtepCIDR is defined else [])
            + (_netris_evpn.bgp.acceptPrefixes | default([]))
            + (_netris_evpn.nodes | default([]) | map(attribute='uplinks') | flatten
+              | selectattr('address', 'defined')
               | map(attribute='address') | list)
            + netris_extra_excluded_cidrs)
           | map('ansible.utils.ipaddr', 'subnet') | unique | sort) }}

@@ -284,6 +284,16 @@ bmaas_provisioning_snat_vpc_id: 1
 # installer values. osac-installer configures the OpenShift-side resources.
 # The OCP cluster may use the virtualized `None` platform.
 ocp_evpn_required_version: "4.22"
+# Optional FRR-K8s BFD profile for OCP-to-Netris underlay peers. Leave empty
+# until BFD is enabled on the corresponding Netris BGP peer.
+ocp_evpn_bfd_profile: ""
+ocp_evpn_bfd_receive_interval_ms: 300
+ocp_evpn_bfd_transmit_interval_ms: 300
+ocp_evpn_bfd_detect_multiplier: 3
+# Use FRR's interface-based (unnumbered) BGP neighbor for the OCP underlay.
+# When enabled, the generated EVPN values omit the uplink IPv4 address and
+# peerAddress; the fabric must support unnumbered BGP on the matching port.
+ocp_evpn_bgp_unnumbered: false
 
 # The Netris underlay peer uses IPv4 unicast for PodNetwork advertisements;
 # setup-vmaas verifies the BGPSessionState after the FRR peer is configured.
@@ -298,6 +308,21 @@ ocp_vmaas_external_ip_tests_enabled: false
 ocp_evpn_vtep_cidr: "198.18.0.0/24"
 ocp_evpn_vtep_node_ip_cidr: "198.18.0.1/32"
 ocp_evpn_vtep_dummy_interface: "evpn-vtep0"
+# Opt in to FRR IPv4 multipath for EVPN routes; false preserves chart defaults.
+ocp_evpn_bgp_active_active: false
+# Opt in to active/backup EVPN uplinks. Mutually exclusive with
+# ocp_evpn_bgp_active_active. The primary underlay uplink stays active; the
+# backup uplink below is installed as the standby path: the installer sets
+# local-preference 100 instead of 200 and prepends the node ASN three times on
+# egress. The netris-lab topology wires the backup link (a second
+# underlay-enabled port on another leaf) only when this is enabled.
+ocp_evpn_bgp_active_backup: false
+# Netris server port name for the dedicated backup underlay. The role resolves
+# the guest Linux interface name from this port's MAC before rendering values.
+ocp_evpn_backup_server_port: "eth12"
+ocp_evpn_backup_leaf_port: "swp1s2"
+ocp_evpn_backup_leaf_index: 0
+ocp_evpn_backup_p2p_cidr: "192.0.3.0/30"
 
 # ── Netris Fabric Manager (VMaaS, OSAC networking contract) ──────────
 # Suites whose NetworkClass selects the cudn_evpn Kubernetes Manager. The

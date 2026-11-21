@@ -1053,7 +1053,7 @@ func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW strin
 	for _, bgp := range bgps {
 		// The OCP underlay peer uses the real server-facing link created by
 		// the topology. It must not also be wired to the simulated ISP.
-		if bgp.Internal == 0 && bgp.Name != "ocp-evpn-underlay" {
+		if bgp.Internal == 0 && !strings.HasPrefix(bgp.Name, "ocp-evpn-underlay") {
 			if _, alreadyProcessed := bgpPortsSeen[bgp.Port.ID]; alreadyProcessed {
 				fmt.Printf("Skipping duplicate BGP link for Port ID %d (already processed)\n", bgp.Port.ID)
 				continue

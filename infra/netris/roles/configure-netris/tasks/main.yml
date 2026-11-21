@@ -38,6 +38,10 @@
           ['--underlay-server-port', ocp_underlay_server_port]
           if ocp_underlay_enabled | default(false) | bool else []
         )
+        + (
+          ['--backup-server-port', ocp_evpn_backup_server_port]
+          if ocp_evpn_bgp_active_backup | default(false) | bool else []
+        )
       }}
 
 - name: Resolve OCP uplink from Netris links and libvirt tunnels
@@ -65,6 +69,9 @@
     ocp_vm_mgmt_ip_resolved: "{{ (_ocp_uplink_resolve.stdout | from_json).management_ip }}"
     ocp_underlay_uplink_mac: "{{ (_ocp_uplink_resolve.stdout | from_json).underlay_guest_mac | default('') }}"
     ocp_underlay_server_port_resolved: "{{ (_ocp_uplink_resolve.stdout | from_json).underlay_server_port | default('') }}"
+    ocp_evpn_backup_guest_mac: "{{ (_ocp_uplink_resolve.stdout | from_json).backup_guest_mac | default('') }}"
+    ocp_evpn_backup_leaf: "{{ (_ocp_uplink_resolve.stdout | from_json).backup_leaf | default('') }}"
+    ocp_evpn_backup_leaf_index_resolved: "{{ (_ocp_uplink_resolve.stdout | from_json).backup_leaf_index | default(-1) }}"
 
 - name: Build the single OCP VNet port
   ansible.builtin.set_fact:
