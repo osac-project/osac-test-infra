@@ -28,6 +28,13 @@ http://127.0.0.1:2021 {
 	tls internal {
 		on_demand
 	}
+	# The ci-observe MCP server's endpoints: the MCP endpoint itself and
+	# its OAuth flow (the discovery documents must sit at the origin root,
+	# where MCP clients look for them). Everything else is Grafana.
+	@mcp path /mcp /mcp/* /authorize /oauth/callback /token /register /healthz /.well-known/oauth-*
+	handle @mcp {
+		reverse_proxy 127.0.0.1:9105
+	}
 	# https, not plain http: Grafana's own listener is HTTPS-only
 	# (GF_SERVER_PROTOCOL=https in grafana.container) -- proxying to it
 	# over plain http gets "Client sent an HTTP request to an HTTPS

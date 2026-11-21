@@ -5,6 +5,21 @@ For an introduction, start with [ci-observe/README.md](ci-observe/README.md).
 
 The application and the individual tests keep their current source and behavior.
 
+## Status at 2026-11-21
+
+A full check of the live stack (osac-ci-1) found one live fault and three data gaps; all are fixed here.
+
+- **The pull request store had been frozen for five days.** Since 2026-11-16 12:09 UTC every hourly pass of `ci_observe_prs.py` stopped with "the pull request listing failed for osac-ci-artifacts; coverage did not advance". The pass lists every repository of the organization, and the token fix of 2026-11-16 (read access to the private artifact repository) made that repository visible to the listing while its pull requests stay refused (the token holds Actions: Read on it, nothing more). New pull requests were still stored each hour, but the coverage marker stood still and the page said data through Nov 16. The service now passes `--repo osac --repo osac-test-infra`, the two repositories the Pull requests page covers; nothing else is listed.
+- **2072 runs of the last 30 days were stored as "no artifact" under the pre-2026-11-15 one-place reason and never read again.** The #821 reset only cleared the rows that named the private repository's 404; the rows from the same broken era that carry the old generic reason (mostly pull-request and merge-queue runs, whose artifacts are on the run and readable) stayed. The trends migration now deletes those rows too, and the hourly pass reads the runs again: one whose artifact is truly absent gets today's reason, which names the run and the place.
+- **The daily audit crashed on 2026-11-21 03:36 UTC without writing its JSON** (GitHub was refusing requests around that hour; the audit fails fast by design). The file on disk stayed a day old and nothing alerted. The exporter now pins `ci_observe_store_last_success{store=...}` for every store (a finished poll cycle, the trends and spans rollups, the pull requests' covered window, the audit's check), and `CiObservePollStalled`, `CiObserveHourlyStoreStale` and `CiObserveAuditStale` alert on it.
+- **The job history is now proven complete every hour over the whole 30-day retention.** The reconciliation re-lists only the last 48 hours; beyond that, only the daily audit checked. The gap check asks GitHub for the completed-run count of each fully-past day (one call per repo per day), compares it with the stored rows, and verifies a differing day run by run through the same storing path the backfill uses. It is instant while everything is there, spends calls only on a real gap, records `event="dynamic"` runs and day-edge runs as a verified day's adjustment, and writes a day that GitHub would not answer as an error, never as "no gap". `CiObserveJobHistoryGap` alerts on a gap that stays.
+
+Two smaller repairs: the snapshot workflow `e2e-vmaas.yml` now uploads its artifact as `osac-logs-full-install-<run>`, the VMaaS suite's one name, so its JUnit reaches the test history (it had not run in 90 days, so nothing to re-read); and the insight documents take an `end` parameter (a UTC date or second-precision time), so a window can end anywhere in the past, not only at now.
+
+The six runs whose Failed tests panel answers 502 "no artifact in run ..., where pr/merge_queue runs keep it" are runs cancelled mid-test: their gather and upload steps are skipped by design, so the artifact never existed. The panel is right; the audit counts them under its errors, which is also right.
+
+Known and accepted: scheduled and manual runs from before 2026-11-13 stay unreadable until their on-run artifacts expire around 2026-12-13; the tokens and the stores are otherwise healthy (checked 2026-11-21: audit `runs_missing: 0` for the job history, `private_readable: true`).
+
 ## Status at 2026-11-15
 
 The E2E run page said **No failures.** for run 43552935524 (E2E VMaaS Production Install, 2026-11-14), whose test step had failed. Since 2026-11-13 scheduled and manual E2E runs publish their logs artifact (with the JUnit file) to the private repository `osac-project/osac-ci-artifacts`. The exporter's token could not read it, and every way that read could fail ended as an empty list, which the table prints as **No failures.**

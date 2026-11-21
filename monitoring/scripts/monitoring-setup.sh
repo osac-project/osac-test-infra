@@ -623,6 +623,12 @@ if [[ "${MODE}" == "update-central" ]]; then
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_audit.py" \
        "${MONITORING_HOME}/scripts/ci_observe_audit.py"
     chmod +x "${MONITORING_HOME}/scripts/ci_observe_audit.py"
+    # The ci-observe MCP server module (quadlet/ci-observe-mcp.container
+    # mounts it). The container itself starts only once its secrets are in
+    # ${MONITORING_HOME}/.env -- see phase 4 below.
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_mcp.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_mcp.py"
+    chmod +x "${MONITORING_HOME}/scripts/ci_observe_mcp.py"
     info "Config files + scripts updated."
 
     # The prometheus.yml copy above just brought in the repo's template
@@ -636,7 +642,7 @@ if [[ "${MODE}" == "update-central" ]]; then
     phase 2 "Installing Quadlet units"
     for unit in node-exporter.container haproxy-exporter.container prometheus.container grafana.container \
                 alertmanager.container org-runner-exporter.container workflow-exporter.container \
-                caddy.container ci-observe-tempo210.container; do
+                caddy.container ci-observe-tempo210.container ci-observe-mcp.container; do
         cp "${MONITORING_REPO_DIR}/quadlet/${unit}" "${QUADLET_DIR}/${unit}"
         info "Installed ${unit}"
     done
@@ -695,6 +701,25 @@ if [[ "${MODE}" == "update-central" ]]; then
         echo "  Restarting ${svc} ..."
         systemctl --user restart "${svc}"
     done
+    # The MCP server starts only with its secrets: it refuses to run
+    # without them (fail fast, with the list of what is missing). Saying
+    # so here beats a container restarting every 30 seconds against an
+    # empty .env.
+    mcp_missing=""
+    for key in MCP_GITHUB_CLIENT_ID MCP_GITHUB_CLIENT_SECRET MCP_GRAFANA_URL \
+               MCP_GRAFANA_SERVICE_TOKEN MCP_SESSION_SECRET MCP_EXTERNAL_URL; do
+        grep -q "^${key}=" "${MONITORING_HOME}/.env" 2>/dev/null || mcp_missing="${mcp_missing} ${key}"
+    done
+    if [[ -n "${mcp_missing}" ]]; then
+        echo "  WARNING: ci-observe-mcp.service is NOT started:${mcp_missing}" >&2
+        echo "           missing from ${MONITORING_HOME}/.env. Add them (see the module" >&2
+        echo "           docstring of monitoring/scripts/ci_observe_mcp.py), then run:" >&2
+        echo "           systemctl --user restart ci-observe-mcp.service" >&2
+        systemctl --user stop ci-observe-mcp.service 2>/dev/null || true
+    else
+        echo "  Restarting ci-observe-mcp.service ..."
+        systemctl --user restart ci-observe-mcp.service
+    fi
     systemctl --user restart service-health-textfile.timer
     systemctl --user enable --now ci-observe-trends.timer
     systemctl --user enable --now ci-observe-prs.timer

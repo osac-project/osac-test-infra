@@ -1,0 +1,48 @@
+# Podman Quadlet unit file for the ci-observe MCP server
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/ci-observe-mcp.container
+#
+# Deployed on the CENTRAL machine only. Serves the ci-observe questions over
+# the MCP protocol (Streamable HTTP) on 127.0.0.1:9105; Caddy's :3443 vhost
+# proxies /mcp and the OAuth endpoints to it, so clients on the VPN reach it
+# at https://<canonical-host>:3443/mcp.
+#
+# The server refuses to start until the OAuth and Grafana secrets are in
+# ~/.monitoring-server/.env (see monitoring-setup.sh's warning and the
+# module docstring of scripts/ci_observe_mcp.py):
+#   MCP_GITHUB_CLIENT_ID, MCP_GITHUB_CLIENT_SECRET  (the GitHub OAuth app;
+#     callback URL https://<canonical-host>:3443/oauth/callback)
+#   MCP_GRAFANA_SERVICE_TOKEN  (a Grafana service-account token that can
+#     look users up: Administration > Service accounts, role Admin)
+#   MCP_SESSION_SECRET  (any long random string; signs the 12-hour tokens)
+#   MCP_EXTERNAL_URL  (the origin it is published under, with the port)
+#
+# Quadlet generates a systemd unit (ci-observe-mcp.service) from this file.
+
+[Unit]
+Description=ci-observe MCP server (CI Observe over MCP)
+After=workflow-exporter.service
+
+[Container]
+Image=localhost/osac-workflow-exporter:latest
+ContainerName=ci-observe-mcp
+
+# Host networking like the exporter: the server reads the exporter on the
+# host's loopback (127.0.0.1:9103) and Grafana on 127.0.0.1:3000, and is
+# itself reached only on the host's loopback by Caddy. MCP_BIND pins the
+# listener back to loopback.
+Network=host
+Environment=MCP_BIND=127.0.0.1
+Environment=MCP_PORT=9105
+Environment=EXPORTER_URL=http://127.0.0.1:9103
+EnvironmentFile=%h/.monitoring-server/.env
+
+# The server module, mounted read-only like the exporter's siblings.
+Volume=%h/.monitoring-server/scripts/ci_observe_mcp.py:/app/ci_observe_mcp.py:ro,Z
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

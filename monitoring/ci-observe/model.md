@@ -145,7 +145,9 @@ A run is keyed by its GitHub run id; a recording id adds the suite and rerun num
 ## Data limits
 
 - The run archive (suite runs and their job timelines), the test results, the span rollup and the pull request history are kept for 90 days (`CI_OBSERVE_KEEP_DAYS`).
-- The workflow exporter keeps its own job history for 30 days. GitHub keeps the JUnit artifact for 30 days, so a run's tests are read within that window.
+- The workflow exporter keeps its own job history for 30 days, and a gap check proves it complete once an hour: one count per repo per fully-past day against GitHub, a run-by-run verification only where the counts differ (`day_checks`, `github_actions_gap_check_*`). GitHub keeps the JUnit artifact for 30 days, so a run's tests are read within that window.
+- The pull request backfill covers `osac` and `osac-test-infra` only, the two repositories the Repository filter names; no other repository of the organization is listed.
+- An insight window may end at any past moment, not only at now: the `end` parameter takes a UTC date (`2026-11-01`) or a UTC second-precision time (`2026-11-01T12:00:00Z`). The dashboards' own windows keep ending at now.
 - A run's logs artifact (with its JUnit file) is in one place, by the run's trigger: on the run for pull-request and merge-queue runs, in the private repository `osac-ci-artifacts` for scheduled and manual runs (since 2026-11-13). Reading those needs a token that can see that repository.
 - The exporter fetches the job timeline (needed for the wait for a runner and for timeouts) of a run stored before timelines existed a few runs per poll, counted suite runs only, newest first.
 - The exporter polls the newest completed runs and the runs it saw active, and every 30 minutes lists every completed run created in the last 48 hours to store what the polling missed or kept with an outdated result. A run missed while the exporter was down for longer than that is recovered by a one-off backfill (`BACKFILL_DAYS`).
