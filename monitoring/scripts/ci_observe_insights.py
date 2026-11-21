@@ -49,6 +49,7 @@ asks the same URL from many panels.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -63,6 +64,8 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_observe_phases as phases
 import ci_observe_spans
+
+logger = logging.getLogger(__name__)
 
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 KEEP_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
@@ -680,24 +683,26 @@ class CIObserveInsights:
                 )
         passes = self.stores.rollup_passes()
         if passes is None:
+            # Unknown is not "never ran": the per-job lines below would
+            # say "no pass recorded yet" over a table nobody could read.
             parts.append("Test results and inside-the-tests: the rollup pass table could"
                          " not be read, so their freshness is unknown")
-            passes = {}
-        for job, label, noun, timer in (
-            ("trends", "Test results", "test results", "ci-observe-trends.timer"),
-            ("spans", "Inside the tests", "inside-the-tests numbers", "ci-observe-spans.timer"),
-        ):
-            finished = phases.parse_time(passes.get(job))
-            if finished is None:
-                parts.append(f"{label}: no pass recorded yet")
-                continue
-            parts.append(f"{label}: updated {finished:%Y-%m-%d %H:%M} UTC")
-            hours = (now - finished).total_seconds() / 3600
-            if hours > ROLLUP_STALE_HOURS:
-                notes.append(
-                    f"{noun} were last updated {hours:.0f} h ago ({timer}), so nothing after "
-                    f"{finished:%Y-%m-%d %H:%M} UTC is counted"
-                )
+        else:
+            for job, label, noun, timer in (
+                ("trends", "Test results", "test results", "ci-observe-trends.timer"),
+                ("spans", "Inside the tests", "inside-the-tests numbers", "ci-observe-spans.timer"),
+            ):
+                finished = phases.parse_time(passes.get(job))
+                if finished is None:
+                    parts.append(f"{label}: no pass recorded yet")
+                    continue
+                parts.append(f"{label}: updated {finished:%Y-%m-%d %H:%M} UTC")
+                hours = (now - finished).total_seconds() / 3600
+                if hours > ROLLUP_STALE_HOURS:
+                    notes.append(
+                        f"{noun} were last updated {hours:.0f} h ago ({timer}), so nothing after "
+                        f"{finished:%Y-%m-%d %H:%M} UTC is counted"
+                    )
         # The daily check against GitHub: what it compared and what differed.
         checked, found = phases.audit_lines(self.stores.audit_summary(), now, "e2e")
         parts.append(checked)

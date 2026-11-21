@@ -653,6 +653,23 @@ def test_an_incomplete_trace_adds_no_waits(stores):
 # -- missing stores, the cache, the about row ------------------------------------------------------
 
 
+def test_an_unreadable_rollup_pass_table_is_unknown_freshness_not_a_crash(stores):
+    """A read failure of the rollup pass table is 'freshness unknown', not
+    a crash and not 'no pass recorded yet'. The handler that says unknown
+    called a logger the module never defined, so the honest path raised
+    NameError and took the document down instead."""
+    stores.run(NOW - timedelta(hours=2))
+    record_passes(stores, trends=0.5, spans=1)
+    # A file that opens but is not a database: _open returns a connection,
+    # the first execute raises sqlite3.Error inside rollup_passes.
+    Path(stores.trends_db).write_bytes(b"SQLite format 3\x00" + b"\x00" * 4080)
+
+    assert stores.api().stores.rollup_passes() is None
+    text, _notes = stores.api()._freshness(NOW)
+    assert "could not be read, so their freshness is unknown" in text
+    assert "no pass recorded yet" not in text, "unknown freshness is not 'never ran'"
+
+
 def test_missing_stores_are_notes_never_errors(tmp_path):
     api = insights.CIObserveInsights(str(tmp_path / "none.db"), str(tmp_path / "none-trends.db"), clock=lambda: NOW)
 

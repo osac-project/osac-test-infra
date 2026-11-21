@@ -264,6 +264,27 @@ reload_prometheus() {
     fi
 }
 
+# Enable units so they survive reboots. Quadlet-generated services
+# (node-exporter.service, prometheus.service, ...) cannot be enabled:
+# systemd refuses ("transient or generated"), because their boot
+# activation is the generator's WantedBy symlink, which `is-enabled`
+# reports as "generated". Anything else that cannot be enabled will not
+# come back after a reboot, and that is a failure.
+enable_units() {
+    local svc state
+    for svc in "$@"; do
+        state="$(systemctl --user is-enabled "${svc}" 2>/dev/null || true)"
+        if [[ "${state}" == "generated" || "${state}" == "transient" ]]; then
+            continue
+        fi
+        if ! systemctl --user enable "${svc}" 2>/dev/null; then
+            echo "ERROR: systemctl --user enable ${svc} failed -- it will not come back" >&2
+            echo "       after a reboot." >&2
+            exit 1
+        fi
+    done
+}
+
 # Deploy the repo's Caddyfile, rendering the ci-observe OTLP ingest vhost's
 # CI_OBSERVE_OTLP_HASH placeholder (a credential, never committed) into a real
 # bcrypt hash. The hash comes, in priority order, from:
@@ -751,6 +772,15 @@ if [[ "${MODE}" == "update-central" ]]; then
     fi
 
     info "Central update complete."
+    # The same check the full setup ends with: an unhealthy otelcol-router
+    # must not exit 0 just because this was only an update -- the freshly
+    # deployed Caddyfile proxies OTLP to a dead upstream either way.
+    if [[ -n "${OTEL_ROUTER_UNHEALTHY:-}" ]]; then
+        echo "  ERROR: the otelcol-router is unhealthy, so the deployed Caddyfile" >&2
+        echo "         proxies OTLP to a dead upstream." >&2
+        echo "  Recover it:  sudo monitoring/scripts/deploy-otelcol-router.sh" >&2
+        exit 1
+    fi
     exit 0
 fi
 
@@ -1115,24 +1145,11 @@ if ! loginctl enable-linger "$(whoami)" 2>/dev/null; then
     exit 1
 fi
 
-# Enable services so they survive reboots (Quadlet WantedBy handles this for
-# container units, but explicit enable ensures consistent state). A service
-# that cannot be enabled will not come back after a reboot.
-for svc in "${COMMON_SERVICES[@]}"; do
-    if ! systemctl --user enable "${svc}" 2>/dev/null; then
-        echo "ERROR: systemctl --user enable ${svc} failed -- it will not come back" >&2
-        echo "       after a reboot." >&2
-        exit 1
-    fi
-done
+# Enable services so they survive reboots (enable_units skips the
+# Quadlet-generated ones, whose boot activation is the generator's).
+enable_units "${COMMON_SERVICES[@]}"
 if [[ "${MODE}" == "central" ]]; then
-    for svc in "${CENTRAL_SERVICES[@]}"; do
-        if ! systemctl --user enable "${svc}" 2>/dev/null; then
-            echo "ERROR: systemctl --user enable ${svc} failed -- it will not come back" >&2
-            echo "       after a reboot." >&2
-            exit 1
-        fi
-    done
+    enable_units "${CENTRAL_SERVICES[@]}"
 fi
 
 ###############################################################################
