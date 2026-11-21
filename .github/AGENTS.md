@@ -27,5 +27,6 @@ python3 -I .github/scripts/test_raw_inventory.py
 python3 -I .github/scripts/test_setup_virtual_bmh.py
 python3 -I .github/scripts/test_reconcile_bmhs.py
 python3 -I .github/scripts/test_upsert_pr_comment.py
+python3 -I .github/scripts/test_validate_containerfile_context.py
 bash .github/scripts/discover-audit-runs-test.sh
 ```
