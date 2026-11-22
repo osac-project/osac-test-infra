@@ -20,6 +20,7 @@ CaptureRegistry in workflow-exporter.py); this module only reads it.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
@@ -244,9 +245,29 @@ class CIObserveRuns:
                     # recording has no capture page, so its GitHub run is the
                     # honest destination instead of an empty dashboard.
                     "details_url": self._details_url(run, capture_id, started_at_ms, done_at_ms),
+                    # The failed run's error lines in Loki, when the
+                    # artifact-log rollup indexed its bundle: the honest
+                    # "what did its logs say" link. An empty string when the
+                    # rollup has not recorded the run, because a link to
+                    # nothing is a lie.
+                    "logs_url": self._logs_url(run),
                 }
             )
         return doc
+
+    def _logs_url(self, run):
+        """A Grafana Explore link to the run's indexed artifact lines, or ""
+        when the rollup has not recorded the run. The rollup's table is the
+        record of what was indexed; asking Loki here would make every run
+        row a query."""
+        run_id = str(run.get("run_id") or "")
+        if not run_id or not self.exporter:
+            return ""
+        if not self.exporter._logs_indexed(run_id):
+            return ""
+        query = '{source="artifact", run_id="%s"}' % run_id
+        left = json.dumps({"datasource": "loki", "queries": [{"expr": query, "refId": "A"}]})
+        return "/explore?orgId=1&left=" + quote(left, safe="")
 
     @staticmethod
     def _details_url(run, capture_id, started_at_ms, done_at_ms):

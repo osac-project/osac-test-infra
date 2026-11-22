@@ -5425,6 +5425,28 @@ class WorkflowExporter:
     def _iso_utc(value):
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    def _logs_indexed(self, run_id):
+        """Whether the artifact-log rollup recorded this run's bundle (any
+        suite). The run rows link to Loki only for what was indexed: a link
+        to nothing is a lie. An unreadable trends.db logs and answers no --
+        the link is an affordance, not an answer; the signatures document
+        is where a read failure says so."""
+        path = os.path.join(CACHE_DIR, "trends.db")
+        if not os.path.exists(path):
+            return False
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM artifact_logs WHERE run_id = ? AND state = 'indexed'",
+                    (str(run_id),)).fetchone()
+                return bool(row and row[0])
+            finally:
+                conn.close()
+        except sqlite3.Error as error:
+            logger.warning("the artifact log table could not be read for the run links: %s", error)
+            return False
+
     def get_ci_observe_run_window(self, days, repo="", suite="", result="", failed_step: str = ""):
         """Every run-level row in the window, one per run.
 
