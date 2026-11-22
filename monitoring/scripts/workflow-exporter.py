@@ -5604,6 +5604,7 @@ class WorkflowExporter:
                        THEN j.timeline_json END) AS failed_timeline,
                    COUNT(*) OVER () AS matched,
                    GROUP_CONCAT(DISTINCT c.capture_id) AS capture_ids,
+                   GROUP_CONCAT(DISTINCT NULLIF(j.runner_name, '')) AS runners,
                    MAX(CASE WHEN c.identity_source = 'info' THEN 1 ELSE 0 END) AS identity_info
             FROM jobs j
             LEFT JOIN captures c ON c.run_id = j.run_id
