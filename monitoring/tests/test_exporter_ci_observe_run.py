@@ -516,6 +516,37 @@ class TestFailedTestsErrors:
     def test_a_capture_id_that_names_no_suite(self, evidence, capture_id):
         assert "is not <vmaas|caas|bmaas>-<prN|main>-<run id>-a<attempt>" in refused(evidence, capture_id)
 
+    def test_an_indexed_run_without_junit_answers_with_its_error_lines(self, evidence, github, monkeypatch):
+        """A run that failed before its tests has no junit to read, and the
+        old answer was a refusal. When the artifact-log rollup indexed the
+        run, the document answers with the indexed error lines instead:
+        'what failed in this run' has an answer even when no test ran."""
+        seed_direct_run(evidence)
+        nothing_either_place(github)
+        monkeypatch.setattr(evidence, "_logs_indexed", lambda run_id: True)
+        monkeypatch.setattr(evidence, "_indexed_error_lines", lambda run_id: [
+            {"signature": "unable to read tree <id>", "kind": "aap-jobs",
+             "line": "fatal: unable to read tree (9b17fa51)", "ts": "1795273933000000000"},
+        ])
+
+        document = failed_tests(evidence)
+
+        assert document["failed_tests"] == []
+        assert document["error_lines"][0]["signature"] == "unable to read tree <id>"
+        assert any("no JUnit file could be read" in note for note in document["notes"])
+        assert any("artifact error lines" in note for note in document["notes"])
+
+    def test_a_run_the_rollup_did_not_index_keeps_its_refusal(self, evidence, github, monkeypatch):
+        seed_direct_run(evidence)
+        nothing_either_place(github)
+        monkeypatch.setattr(evidence, "_logs_indexed", lambda run_id: False)
+        asked = []
+        monkeypatch.setattr(evidence, "_indexed_error_lines", lambda run_id: asked.append(run_id))
+
+        refused(evidence)
+
+        assert asked == [], "Loki is not asked for a run the rollup never recorded"
+
     def test_no_token(self, exporter, github):
         seed_direct_run(exporter)
 

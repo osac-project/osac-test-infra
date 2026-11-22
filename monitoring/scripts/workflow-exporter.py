@@ -21,7 +21,7 @@ import threading
 from datetime import datetime, timezone, timedelta
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import ClassVar
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 import urllib.parse
 
 import requests
@@ -5224,10 +5224,73 @@ class WorkflowExporter:
 
     def get_ci_observe_failed_tests_json(self, params):
         """The /api/ci-observe/failed-tests document: the failed tests of
-        one capture, from the JUnit file in its suite's artifact. Raises
-        EvidenceError when they cannot be read. Thin wrapper over
-        CIObserveRunEvidence.get_ci_observe_failed_tests_json."""
-        return self._run_evidence.get_ci_observe_failed_tests_json(params)
+        one capture, from the JUnit file in its suite's artifact. Thin
+        wrapper over CIObserveRunEvidence.get_ci_observe_failed_tests_json.
+
+        When the JUnit file cannot be read (a run that failed before its
+        tests, an expired artifact) and the artifact-log rollup indexed the
+        run's bundle, the document answers with the run's indexed error
+        lines instead of refusing: "what failed in this run" has an answer
+        even when no test ever ran. The lines carry their signature and
+        kind, and the notes say both why there is no junit and where the
+        lines come from. With nothing indexed the EvidenceError propagates
+        and the endpoint answers 502 with the reason, as before."""
+        try:
+            return self._run_evidence.get_ci_observe_failed_tests_json(params)
+        except EvidenceError as error:
+            capture_id = (params.get("capture_id", [""])[0] or "").strip()
+            match = re.search(r"-([0-9]+)-a[0-9]+$", capture_id)
+            # Only a run the artifact-log rollup recorded can have indexed
+            # lines; asking Loki for anything else is a query for nothing.
+            if match is None or not self._logs_indexed(match.group(1)):
+                raise
+            lines = self._indexed_error_lines(match.group(1))
+            if not lines:
+                raise
+            return {
+                "capture_id": capture_id,
+                "run_id": match.group(1),
+                "failed_tests": [],
+                "error_lines": lines,
+                "notes": [
+                    f"no JUnit file could be read: {error}",
+                    "these are the run's artifact error lines, indexed by the artifact-log rollup"
+                    " (the same lines are in Loki, linked from the run row)",
+                ],
+            }
+
+    def _indexed_error_lines(self, run_id, limit=20):
+        """The run's indexed artifact error lines from Loki, newest first:
+        [{signature, kind, line, ts}]. [] when nothing was indexed for the
+        run. None when Loki refused: "no lines" is a fact, a refusal is
+        not, and the caller keeps the original error then."""
+        query = quote(f'{{source="artifact", run_id="{run_id}", signature!=""}}')
+        url = f"{self._captures.loki_url}/loki/api/v1/query_range?query={query}&limit={limit}"
+        try:
+            response = requests.get(url, timeout=10)
+        except requests.exceptions.RequestException as error:
+            logger.warning("the indexed error lines of run %s could not be read: %s", run_id, error)
+            return None
+        if not response.ok:
+            logger.warning("Loki answered HTTP %s for the error lines of run %s",
+                           response.status_code, run_id)
+            return None
+        try:
+            result = response.json().get("data", {}).get("result", [])
+        except ValueError:
+            return None
+        rows = []
+        for stream in result if isinstance(result, list) else []:
+            labels = stream.get("stream") or {}
+            for when, line in stream.get("values") or []:
+                rows.append({
+                    "signature": labels.get("signature") or "",
+                    "kind": labels.get("kind") or "",
+                    "line": line[:500],
+                    "ts": when,
+                })
+        rows.sort(key=lambda row: row["ts"], reverse=True)
+        return rows[:limit]
 
     # -- ci-observe runs (begin) --------------------------------------------
     #

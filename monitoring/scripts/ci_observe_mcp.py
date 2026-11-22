@@ -588,8 +588,15 @@ def _run_failed_tests(config: Config, arguments: dict) -> Answer:
     notes = []
     if status == 200 and isinstance(body, dict):
         rows = [row for row in body.get("failed_tests") or [] if isinstance(row, dict)][:MAX_ROWS]
-        if not rows:
-            notes = [f"the junit.xml of {capture_id} lists no failed test"]
+        # A run that failed before its tests answers with its indexed
+        # error lines: "what failed in this run" has an answer even when
+        # no test ever ran.
+        lines = [row for row in body.get("error_lines") or [] if isinstance(row, dict)]
+        if not rows and lines:
+            rows = lines[:MAX_ROWS]
+        notes = list(body.get("notes") or [])
+        if not rows and not lines:
+            notes.append(f"the junit.xml of {capture_id} lists no failed test")
     elif isinstance(body, dict) and body.get("error"):
         not_answerable = f"{capture_id}: {body['error']}"
     else:
