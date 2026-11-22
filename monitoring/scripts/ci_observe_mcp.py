@@ -621,6 +621,13 @@ def _list_runs(config: Config, arguments: dict) -> Answer:
     repo = _need_str(arguments, "repo", REPOS)
     days = _need_int(arguments, "days", 1, RUNS_MAX_DAYS)
     params = {"days": str(days), "repo": repo, "suite": suite, "result": result, "limit": str(MAX_ROWS)}
+    question = f"{result} runs of the {suite} suite in {repo}, last {days} days"
+    end = arguments.get("end")
+    if isinstance(end, str) and end.strip():
+        # A window ending in the past: the runs of the week a regression
+        # started, without paging past everything newer.
+        params["end"] = end.strip()
+        question = f"{result} runs of the {suite} suite in {repo}, the {days} days before {end.strip()}"
     status, body = fetch_json(config, f"/api/ci-observe/runs?{urllib.parse.urlencode(params)}")
     rows = []
     not_answerable = ""
@@ -634,7 +641,7 @@ def _list_runs(config: Config, arguments: dict) -> Answer:
     else:
         not_answerable = f"the exporter answered HTTP {status} for the runs document"
     return Answer(
-        question=f"{result} runs of the {suite} suite in {repo}, last {days} days",
+        question=question,
         rows=rows,
         api_url=f"{config.exporter_url}/api/ci-observe/runs?{urllib.parse.urlencode(params)}",
         grafana_url=(f"{config.grafana_url}/d/ci-observe-runs-home/ci-observe-e28094-runs"
@@ -784,7 +791,9 @@ TOOLS.extend([
     Tool(
         name="list_runs",
         description="The runs of one suite and result in a window, newest first (the job history"
-                    " keeps 30 days).",
+                    " keeps 30 days). end moves the window into the past (a date like 2026-11-07"
+                    " or an ISO moment), so the runs of the week something broke are one call"
+                    " instead of pages past everything newer.",
         schema={
             "type": "object",
             "properties": {
@@ -792,6 +801,7 @@ TOOLS.extend([
                 "result": {"type": "string", "enum": list(RESULTS)},
                 "repo": {"type": "string", "enum": list(REPOS)},
                 "days": {"type": "integer", "minimum": 1, "maximum": RUNS_MAX_DAYS},
+                "end": {"type": "string", "description": "window end: a date (2026-11-07) or ISO moment"},
             },
             "required": ["suite", "result", "repo", "days"],
         },

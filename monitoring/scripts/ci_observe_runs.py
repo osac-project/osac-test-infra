@@ -153,6 +153,18 @@ class CIObserveRuns:
                 "newest run"
             )
             before = ""
+        # An end moves the window into the past: a date (2026-11-07) or an
+        # ISO moment. Anything else is a note and the window still ends now,
+        # the same rule the insight pages' end follows.
+        end_text = (params.get("end", [""])[0] or "").strip()
+        end = None
+        if end_text:
+            end = _parse_end(end_text)
+            if end is None:
+                notes.append(f"end={end_text!r} is neither a date nor a past moment; the window ends now")
+            elif end > now:
+                notes.append(f"end={end_text!r} is in the future; the window ends now")
+                end = None
 
         # An explicit but empty run= is the Find box with nothing typed. It
         # must answer "no rows", not fall back to the whole window.
@@ -169,13 +181,17 @@ class CIObserveRuns:
             page = self.exporter.get_ci_observe_run_page(
                 days=days, limit=limit, before=before, run_id=run_id,
                 repo=repo, suite=suite, result=result, failed_step=failed_step,
+                end=end,
             )
         source = self._source(now)
         # The cards count the whole window, not the returned page. A run
-        # lookup counts only the runs it returns.
+        # lookup counts only the runs it returns. The window the cards count
+        # ends at the end parameter when one was given, so the cards and the
+        # rows always describe the same window.
         counts = self._verdict_counts(
-            now, days if not run_id else None, source, page["rows"],
+            end or now, days if not run_id else None, source, page["rows"],
             repo=repo, suite=suite, result=result, failed_step=failed_step,
+            end=end,
         )
         counts["returned"] = len(page["rows"])
         counts["matched"] = page["matched"]
@@ -280,18 +296,19 @@ class CIObserveRuns:
 
     def _verdict_counts(
         self, now, days, source, rows=None, repo="", suite="", result="",
-        failed_step: str = "",
+        failed_step: str = "", end=None,
     ):
         """{"capture": n, "not collected": n, "unknown": n} over the window.
 
         `days` is None when the caller already has the rows (a run lookup).
         The rules are `_state` and nothing else, so the cards and the table
-        can never disagree about a run.
+        can never disagree about a run. `end` moves the window's end into
+        the past, the same move the page call's makes.
         """
         if days is not None:
             rows = self.exporter.get_ci_observe_run_window(
                 days=days, repo=repo, suite=suite, result=result,
-                failed_step=failed_step,
+                failed_step=failed_step, end=end,
             )
         totals = {"capture": 0, "not collected": 0, "unknown": 0}
         for run in rows or []:
@@ -447,6 +464,23 @@ class CIObserveRuns:
         except ValueError:
             return None
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+    @staticmethod
+    def _parse_end(value):
+        """A window end from a date (2026-11-07) or an ISO moment, or None.
+        A bare date means that day's start, so 'the runs of the week ending
+        Nov 7' covers Nov 7 itself."""
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        except ValueError:
+            return None
 
     @staticmethod
     def _iso(value):

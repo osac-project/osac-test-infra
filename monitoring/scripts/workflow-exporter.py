@@ -5510,14 +5510,15 @@ class WorkflowExporter:
             logger.warning("the artifact log table could not be read for the run links: %s", error)
             return False
 
-    def get_ci_observe_run_window(self, days, repo="", suite="", result="", failed_step: str = ""):
+    def get_ci_observe_run_window(self, days, repo="", suite="", result="", failed_step: str = "", end=None):
         """Every run-level row in the window, one per run.
 
         The entry page's verdict cards count the whole window, so they cannot
         read a 200-row page. Same filter as get_ci_observe_run_page, no page
-        limit: about 3,700 rows for 30 days.
+        limit: about 3,700 rows for 30 days. `end` moves the window's end
+        into the past, like the page call's.
         """
-        now = datetime.now(timezone.utc)
+        now = end if isinstance(end, datetime) else datetime.now(timezone.utc)
         window_from = now - timedelta(days=days)
         where, args = self._ci_observe_run_where(
             window_from, now, repo=repo, suite=suite, failed_step=failed_step
@@ -5551,7 +5552,7 @@ class WorkflowExporter:
 
     def get_ci_observe_run_page(
         self, days, limit, before="", run_id="", repo="", suite="", result="",
-        failed_step: str = "",
+        failed_step: str = "", end=None,
     ):
         """One page of run-level E2E rows, joined to their captures.
 
@@ -5561,8 +5562,11 @@ class WorkflowExporter:
         ignores the window, so an old run still resolves. `repo`, `suite` and
         `failed_step` narrow the rows; `result` filters the grouped
         conclusion, so a run with one failed suite cannot appear as a success.
+        `end` moves the window's end into the past (a date or an ISO moment),
+        so a window nobody can query because newer runs bury it -- "the runs
+        of the week the pass rate fell" -- is one call.
         """
-        now = datetime.now(timezone.utc)
+        now = end if isinstance(end, datetime) else datetime.now(timezone.utc)
         window_from = now - timedelta(days=days)
         where_sql, args = self._ci_observe_run_where(
             window_from, now, before, run_id, repo=repo, suite=suite,
