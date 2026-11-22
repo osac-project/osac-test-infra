@@ -542,6 +542,26 @@ class TestAttemptSweep:
         exporter._sweep_attempts(["osac"], ["2026-11-09", "2026-11-10"], self.NOW)
         assert github.calls[0].split("created=")[1][:10] == "2026-11-10"
 
+    def test_a_rerun_whose_jobs_could_not_be_read_keeps_its_day_unswept(self, exporter, wfe, github, R):
+        """A failed job-details fetch is "try again later", not a clean sweep:
+        recorded as clean, the re-run kept its old attempt until the day came
+        around again, about a day later."""
+        exporter._upsert_job(make_job(id=1, created_at="2026-11-10T10:00:00Z", run_attempt=1,
+                                      conclusion="failure", status="failure"))
+        rerun = make_run(id=1, created_at="2026-11-10T10:00:00Z", run_attempt=2, conclusion="success",
+                         updated_at="2026-11-20T09:00:00Z")
+        github.add(self.route(wfe, self.DAY), runs_page(rerun))
+        github.add(R("osac/actions/runs/1/attempts/2/jobs?per_page=30"), FakeResponse(status=502))
+        exporter._sweep_attempts(["osac"], [self.DAY], self.NOW)
+        [swept] = rows(exporter, "SELECT error FROM attempt_sweeps WHERE day = ?", self.DAY)
+        assert swept["error"] == "job details of run 1 could not be read"
+        assert rows(exporter, "SELECT run_attempt FROM jobs WHERE id = 1") == [{"run_attempt": 1}]
+        github.add(R("osac/actions/runs/1/attempts/2/jobs?per_page=30"),
+                   FakeResponse(payload={"jobs": [make_gh_job("e2e", "success")]}))
+        exporter._sweep_attempts(["osac", "osac-test-infra"], [self.DAY, "2026-11-11"], self.NOW)
+        assert rows(exporter, "SELECT run_attempt FROM jobs WHERE id = 1") == [{"run_attempt": 2}], (
+            "the day with the error is swept again first")
+
 
 class TestInitialLoad:
     def test_skips_non_empty_db(self, exporter, github):

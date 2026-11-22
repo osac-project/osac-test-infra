@@ -1042,6 +1042,52 @@ def stored_captures(jobs_db):
     return captures
 
 
+# The number-bearing parts of a stored reason: run ids, attempts, sizes and
+# dates. A reason names its run ("no osac-logs-full-install-44613752917
+# artifact in run 44613752917 of osac-project/osac ..."), so counting the raw
+# strings gave every run its own reason, and the summary's top three left
+# 1,148 of 2,721 missing runs on 2026-11-22 with no reason at all.
+REASON_NUMBERS_RE = re.compile(r"\d[\d:.TZ-]*")
+# How many reason classes the summary keeps; the rest are counted as one.
+MISSING_REASON_CLASSES = 8
+
+
+def reason_class(reason):
+    """A stored reason with its numbers replaced, so the runs that share a
+    cause count as one reason."""
+    return REASON_NUMBERS_RE.sub("<n>", reason or "").strip()
+
+
+def missing_reasons(missing):
+    """[(reason class, count)] of the missing runs, largest first, every run
+    in exactly one: past MISSING_REASON_CLASSES the remainder is one entry,
+    so the counts always add up to the runs that are missing."""
+    classes = Counter(reason_class(reason or state) for state, reason in missing.values()).most_common()
+    kept = classes[:MISSING_REASON_CLASSES]
+    rest = classes[MISSING_REASON_CLASSES:]
+    if rest:
+        kept.append((f"{len(rest)} other reasons", sum(count for _, count in rest)))
+    return kept
+
+
+def missing_reason(fetch):
+    """(state, reason) of a run with no test results of its suite, from its
+    run_fetches row (None when the rollup never recorded it). Every run gets
+    a reason a reader can act on: an empty one read as "parsed"."""
+    if fetch is None:
+        return "", NOT_READ_YET
+    state, reason = fetch
+    if reason:
+        return state, reason
+    if state == "parsed":
+        return state, "read, but its JUnit files hold no test of this suite"
+    return state, state or NOT_READ_YET
+
+
+NOT_READ_YET = ("not read yet by the test-history rollup (ci-observe-trends.timer reads what the shared"
+                " GitHub API budget allows each hour)")
+
+
 def results_coverage(rows, trends_db, now):
     """Every finished suite run that ran its tests has test results in the
     test history, or the reason it has none."""
@@ -1066,9 +1112,9 @@ def results_coverage(rows, trends_db, now):
         expected.setdefault((row_run_id(row), suite), row)
     results, fetches = stored_test_results(trends_db, sorted({run_id for run_id, _ in expected}))
     missing = dict(unreadable_steps)
-    missing.update({key: fetches.get(key[0], ("", "not read yet")) for key in expected
+    missing.update({key: missing_reason(fetches.get(key[0])) for key in expected
                     if suite_results(results.get(key[0]), key[1]) is None})
-    reasons = Counter(reason or state for state, reason in missing.values())
+    reasons = missing_reasons(missing)
     # Unreadable rows are not in `expected` (they were skipped before it),
     # so their metadata comes from the row captured when they were found.
     first = min((expected[key].get("created_at") or "" for key in missing if key in expected), default="")
@@ -1077,7 +1123,7 @@ def results_coverage(rows, trends_db, now):
         "runs": len(expected) + len(unreadable_steps),
         "with_results": len(expected) - (len(missing) - len(unreadable_steps)),
         "missing": len(missing),
-        "missing_since": first, "reasons": reasons.most_common(5), "ok": not missing,
+        "missing_since": first, "reasons": reasons, "ok": not missing,
         "examples": [f"{(expected.get(key, unreadable_steps_meta.get(key, {}))).get('url', key[0])}"
                      f" ({key[1]}): {reason or state}"
                      for key, (state, reason) in sorted(missing.items())[:5]],
@@ -1137,7 +1183,7 @@ def failed_runs_check(github, rows, args, api_get, now):
             "junit": sorted(truth["failed"]) if truth["failed"] is not None else None,
             "junit_where": truth["where"], "junit_note": truth["note"],
             "history": sorted(history[1]) if history is not None else None,
-            "history_reason": "" if history is not None else (fetches.get(run_id) or ("", "not read yet"))[1],
+            "history_reason": "" if history is not None else missing_reason(fetches.get(run_id))[1],
             "problems": problems,
         })
     return audited
@@ -1180,7 +1226,7 @@ def summarize(result):
                 "runs_with_results": coverage["with_results"],
                 "runs_missing": coverage["missing"],
                 "missing_since": coverage["missing_since"],
-                "missing_reasons": coverage["reasons"][:3],
+                "missing_reasons": coverage["reasons"],
                 "failed_runs": len(failed),
                 "pages_claim_none": sum(1 for audit in failed if not audit["page"] and not audit["page_error"]),
                 "pages_error": sum(1 for audit in failed if audit["page_error"]),

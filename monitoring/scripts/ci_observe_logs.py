@@ -68,7 +68,14 @@ State lives in trends.db:
     artifact_log_signatures per (run, suite, signature): occurrence count,
                           of the attempt the state names
     rollup_passes          the job "logs": when a pass last ran to its end,
-                          which the pages and CiObserveHourlyStoreStale read
+                          which the pages and CiObserveHourlyStoreStale read,
+                          and how many runs it left for the next passes
+
+The lookups share one GitHub token and one hourly budget with the exporter's
+polling, the run pages and the other rollups. A pass stops looking up when
+it reaches --limit, when the budget falls to GITHUB_RESERVE, or when GitHub
+says the budget is spent; what it read is recorded and the runs it left are
+counted on the pages. A pass that read nothing it had to read is not a pass.
 
 Usage:
     ci_observe_logs.py [--days N] [--limit N] [--force] [--dry-run]
@@ -100,9 +107,12 @@ import ci_observe_phases as phases
 from ci_observe_run_evidence import (
     SUITE_ARTIFACTS,
     EvidenceError,
+    GitHubBudget,
+    GitHubRateLimited,
     GitHubRefused,
     artifact_places,
     find_artifacts,
+    rate_limit_refusal,
 )
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
@@ -140,6 +150,10 @@ LINE_TIME_SLACK = timedelta(hours=1)
 # long after the run ended (a collect run can trail its source run), then
 # recorded unavailable: a bundle that never came is the run's own fact.
 MISSING_RETRY_HOURS = 6
+# What a pass leaves of the shared token's hourly GitHub API budget for the
+# exporter's polling and the run pages; below it the pass stops looking up
+# bundles and the next pass goes on (see ci_observe_run_evidence.GitHubBudget).
+GITHUB_RESERVE = int(os.getenv("CI_OBSERVE_LOGS_GITHUB_RESERVE", "1000"))
 
 # The strong error patterns the gather script's own summary greps for,
 # minus its noise filter: a zero counter is not an error.
@@ -328,17 +342,20 @@ def runs_in_window(days, now, failures_only):
     # picked: filtering in the SQL would make a run whose re-run passed
     # look like its attempt-1 failure, and its newest bundle would be
     # recorded under that old attempt.
+    picked = sorted(latest.values(), key=lambda run: run["finished_at"], reverse=True)
     if failures_only:
-        return [run for run in latest.values() if run["conclusion"] == "failure"]
-    return sorted(latest.values(), key=lambda run: run["finished_at"], reverse=True)
+        return [run for run in picked if run["conclusion"] == "failure"]
+    return picked
 
 
-def list_bundle(run, headers):
+def list_bundle(run, headers, budget=None):
     """The run's own-suite bundle: {suite, artifact, label, private}, or
-    None when neither place has it. GitHub refusing raises."""
+    None when neither place has it. GitHub refusing raises (a spent budget
+    as GitHubRateLimited). `budget` reads what is left off every answer."""
     name = SUITE_ARTIFACTS[run["suite"]].format(run_id=run["run_id"])
+    observe = budget.observe if budget is not None else (lambda response: response)
     found = find_artifacts(
-        lambda url: requests.get(url, headers=headers, timeout=60),
+        lambda url: observe(requests.get(url, headers=headers, timeout=60)),
         run["trigger"], run["repo"], run["run_id"], [name], org=ORG, api_url=API_URL)
     for artifact_name, artifact, label, private in found:
         if artifact_name == name:
@@ -346,9 +363,10 @@ def list_bundle(run, headers):
     return None
 
 
-def download_bundle(artifact, headers):
+def download_bundle(artifact, headers, budget=None):
     """The bundle as a zip, or (None, reason) for the run's own facts
-    (expired, over the bound, not a zip). GitHub refusing raises."""
+    (expired, over the bound, not a zip). GitHub refusing raises (a spent
+    budget as GitHubRateLimited)."""
     if artifact.get("expired"):
         return None, f"the artifact expired on {artifact.get('expires_at') or 'an unknown date'}"
     size = artifact.get("size_in_bytes") or 0
@@ -359,6 +377,11 @@ def download_bundle(artifact, headers):
         response = requests.get(url, headers=headers, timeout=300)
     except requests.exceptions.RequestException as error:
         raise GitHubRefused(f"downloading the artifact failed: {error}") from None
+    if budget is not None:
+        budget.observe(response)
+    limited = rate_limit_refusal(response, "GitHub", "the artifact download")
+    if limited is not None:
+        raise limited
     if not response.ok:
         raise GitHubRefused(f"the artifact download answered HTTP {response.status_code}")
     try:
@@ -435,7 +458,7 @@ def read_bundle(archive, run, now=None):
             # (repo, suite, kind) is bounded; queries select
             # {source="artifact"} and filter after the selector, so the
             # bucket changes nothing for them.
-            labels["bucket"] = moment.strftime("%Y-%m-%d")
+            labels["bucket"] = moment.astimezone(timezone.utc).strftime("%Y-%m-%d")
             streams.setdefault(tuple(sorted(labels.items())), []).append(
                 (int(moment.timestamp() * 1e9), line, metadata))
     return streams, signatures, counts
@@ -524,10 +547,12 @@ def main(argv=None):
                         help="skip passing runs (their signatures are the noise baseline; "
                              "the hourly pass wants them, a backfill may not)")
     parser.add_argument("--resign", action="store_true",
-                        help="recompute the signature table of runs already recorded as indexed,"
-                             " pushing nothing to Loki (their lines are already there). For"
-                             " repairing the table after the signature normalization changes;"
-                             " a plain re-index would duplicate every line in Loki.")
+                        help="recompute the signature table of runs already recorded as indexed"
+                             " or rejected, pushing nothing to Loki (their lines are already there,"
+                             " all or in part). For repairing the table after the signature"
+                             " normalization changes, or for runs rejected before 2026-11-22, whose"
+                             " signatures were not recorded; a plain re-index would duplicate"
+                             " every line in Loki.")
     args = parser.parse_args(argv)
 
     if not TOKEN:
@@ -543,30 +568,28 @@ def main(argv=None):
 
     indexed = skipped = failed = missing = unavailable = 0
     looked_up = 0
-    for run in runs:
+    budget = GitHubBudget(GITHUB_RESERVE)
+    stopped = ""
+    left = 0
+    for position, run in enumerate(runs):
         row = state.execute("SELECT * FROM artifact_logs WHERE run_id = ? AND suite = ?",
                             (run["run_id"], run["suite"])).fetchone()
-        same_attempt = row is not None and stored_attempt(row) == run["attempt"]
-        if args.resign:
-            # A repair pass recomputes what was indexed; a run with no
-            # recorded bundle has nothing to recompute.
-            if row is None or row["state"] != "indexed" or not same_attempt:
-                skipped += 1
-                continue
-        elif row is not None and same_attempt and not args.force and row["state"] in (
-                "indexed", "unavailable", "rejected"):
-            # The run's own fact at this attempt; only a forced pass reads
-            # it again. A newer attempt is a new bundle and is read.
+        if not needs_lookup(row, run, args):
             skipped += 1
             continue
         # "missing": a collect run can trail its source run by minutes, so a
         # missing bundle is asked for again every pass while the run is young.
         if args.limit and looked_up >= args.limit:
-            logger.info("the pass stops at its limit of %d runs looked up; the next pass goes on", args.limit)
+            stopped = f"a pass looks up at most {args.limit} runs"
+        elif budget.low():
+            stopped = budget.describe()
+        if stopped:
+            left = pending_lookups(state, runs[position:], args)
+            logger.info("the pass stops (%s); %d run(s) are left for the next passes", stopped, left)
             break
         looked_up += 1
         try:
-            bundle = list_bundle(run, headers)
+            bundle = list_bundle(run, headers, budget)
             if bundle is None:
                 expected, other = artifact_places(run["trigger"], run["repo"], run["run_id"], ORG)
                 reason = (f"no {SUITE_ARTIFACTS[run['suite']].format(run_id=run['run_id'])} artifact"
@@ -585,7 +608,7 @@ def main(argv=None):
                 logger.info("  %s run %s (%s, %s): %s", run["repo"], run["run_id"], run["suite"],
                             run["outcome"], reason)
                 continue
-            archive, reason = download_bundle(bundle["artifact"], headers)
+            archive, reason = download_bundle(bundle["artifact"], headers, budget)
             if archive is None:
                 if not args.dry_run:
                     record_run(state, run, "unavailable", reason, NO_COUNTS, now)
@@ -609,7 +632,10 @@ def main(argv=None):
                     state.commit()
                     raise
             if not args.dry_run:
-                record_run(state, run, "indexed", "", counts, now)
+                # A repair keeps the run's state: a rejected run's lines are
+                # in Loki only in part, and the run rows say so.
+                kept = row["state"] if args.resign else "indexed"
+                record_run(state, run, kept, row["reason"] if args.resign else "", counts, now)
                 record_signatures(state, run, signatures)
             indexed += 1
             logger.info("  %s run %s (%s, %s): %d file(s), %d error line(s), %d signature(s)%s",
@@ -619,6 +645,15 @@ def main(argv=None):
             if counts["skipped_lines"]:
                 logger.info("  %s run %s: %d line(s) over Loki's entry bound were not stored",
                             run["repo"], run["run_id"], counts["skipped_lines"])
+        except GitHubRateLimited as error:
+            # The shared budget is spent: not this run's fact and not a
+            # fault. What was read is recorded; the rest waits for the next
+            # pass, after the budget resets.
+            looked_up -= 1
+            stopped = str(error)
+            left = pending_lookups(state, runs[position:], args)
+            logger.warning("  %s run %s (%s): %s", run["repo"], run["run_id"], run["suite"], error)
+            break
         except (GitHubRefused, LokiRefused) as error:
             # A refusal is the same for every following run: stop the pass,
             # say why, exit non-zero. The guard retries next hour. No pass
@@ -634,12 +669,45 @@ def main(argv=None):
 
     summary = (f"{indexed} indexed, {missing} missing, {unavailable} unavailable, {skipped} already read,"
                f" {failed} unreadable or rejected")
+    if left:
+        summary += f", {left} left for the next passes ({stopped})"
     if not args.dry_run:
         flush_loki(session)
-        phases.record_pass(state, "logs", now, summary)
+        if left and not looked_up:
+            # It read none of what it had to read: not a pass. The pages and
+            # CiObserveHourlyStoreStale say the signatures are stale.
+            logger.error("the artifact log pass read none of the %d run(s) it has to read: %s", left, stopped)
+            state.close()
+            return 1
+        phases.record_pass(state, "logs", now, summary, pending=left)
     state.close()
     logger.info("%s%s", summary, " (dry run, nothing pushed or recorded)" if args.dry_run else "")
     return 1 if failed else 0
+
+
+def needs_lookup(row, run, args):
+    """Whether this pass looks up the run's bundle, given its artifact_logs
+    row (None when never read)."""
+    same_attempt = row is not None and stored_attempt(row) == run["attempt"]
+    if args.resign:
+        # A repair pass recomputes what was read: indexed, or rejected by
+        # Loki (whose signatures were not recorded before 2026-11-22). A run
+        # with no recorded bundle has nothing to recompute.
+        return row is not None and row["state"] in ("indexed", "rejected") and same_attempt
+    # The run's own fact at this attempt is not read again unless forced; a
+    # newer attempt is a new bundle and is read.
+    return not (row is not None and same_attempt and not args.force
+                and row["state"] in ("indexed", "unavailable", "rejected"))
+
+
+def pending_lookups(state, runs, args):
+    """How many of `runs` still need a lookup: what a stopped pass leaves."""
+    count = 0
+    for run in runs:
+        row = state.execute("SELECT * FROM artifact_logs WHERE run_id = ? AND suite = ?",
+                            (run["run_id"], run["suite"])).fetchone()
+        count += needs_lookup(row, run, args)
+    return count
 
 
 if __name__ == "__main__":

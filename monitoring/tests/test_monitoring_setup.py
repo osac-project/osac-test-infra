@@ -176,3 +176,43 @@ def test_the_mcp_container_receives_only_its_own_keys():
     passed = set(re.findall(r"--env (\w+)", container))
     assert set(mcp.Config.REQUIRED) <= passed
     assert "PRIVATE_GITHUB_TOKEN" not in passed
+
+
+def test_the_mcp_check_warns_for_a_missing_or_empty_key_and_the_setup_goes_on(tmp_path):
+    """start_mcp_if_configured runs under the script's own set -euo pipefail.
+    On 2026-11-22 its grep for an absent key failed the pipeline and ended
+    the whole setup there, silently, before the ci-observe timers were
+    enabled. A missing key, an empty one, a quoted empty one and no .env at
+    all warn and go on; the last assignment wins, as systemd reads it."""
+    function = re.search(r"(?ms)^start_mcp_if_configured\(\) \{.*?^\}", SCRIPT.read_text())
+    assert function, "start_mcp_if_configured must stay a top-level function of monitoring-setup.sh"
+    assert "set -euo pipefail" in SCRIPT.read_text()
+    systemctl = tmp_path / "systemctl"
+    systemctl.write_text('#!/usr/bin/env bash\necho "systemctl $*"\n')
+    systemctl.chmod(0o755)
+    keys = ("MCP_GITHUB_CLIENT_ID", "MCP_GITHUB_CLIENT_SECRET", "MCP_GRAFANA_URL", "MCP_GRAFANA_SERVICE_TOKEN",
+            "MCP_EXTERNAL_URL")
+    base = "".join(f"{key}=v\n" for key in keys)
+    cases = {
+        "complete": (base + "MCP_SESSION_SECRET=s\n", True),
+        "missing": (base, False),
+        "empty": (base + "MCP_SESSION_SECRET=\n", False),
+        "double-quoted empty": (base + 'MCP_SESSION_SECRET=""\n', False),
+        "single-quoted empty": (base + "MCP_SESSION_SECRET=''\n", False),
+        "emptied by a later line": (base + "MCP_SESSION_SECRET=s\nMCP_SESSION_SECRET=\n", False),
+        "set by a later line": (base + "MCP_SESSION_SECRET=\nMCP_SESSION_SECRET=s\n", True),
+        "no .env": (None, False),
+    }
+    for name, (env, starts) in cases.items():
+        home = tmp_path / name.replace(" ", "-")
+        home.mkdir()
+        if env is not None:
+            (home / ".env").write_text(env)
+        probe = ("set -euo pipefail\n" + function.group(0)
+                 + f"\nMONITORING_HOME={shlex.quote(str(home))}\nstart_mcp_if_configured\necho the-setup-goes-on\n")
+        result = subprocess.run(["bash", "-c", probe], capture_output=True, text=True,
+                                env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"})
+        assert result.returncode == 0, (name, result.stderr)
+        assert "the-setup-goes-on" in result.stdout, name
+        assert ("systemctl --user restart ci-observe-mcp.service" in result.stdout) is starts, name
+        assert ("is NOT started" in result.stderr) is (not starts), name

@@ -71,6 +71,15 @@ ORG = os.getenv("GITHUB_ORG", "osac-project")
 KEEP_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
 DEFAULT_DAYS = 7
 CACHE_SECONDS = 120
+# Every document of one window parses the same suite runs, whatever its
+# population: on 2026-11-22 an agent's fan-out of thirteen questions (a kind
+# per suite and trigger) parsed some 20,000 runs thirteen times at once and
+# timed out at the exporter's 120 s. The parsed runs of a window are shared
+# for this long, and each document filters its own population from them.
+FACTS_CACHE_SECONDS = 60
+# A window's facts take about 6 KB a run (a 30-day page reads 60 days, some
+# 80,000 runs): at most this many windows are kept, the newest.
+FACTS_CACHE_ENTRIES = 2
 CACHE_MAX_ENTRIES = 64
 # How old a source may be before the page says its numbers stop early. The
 # rollups run hourly. The exporter stores every workflow run it polls, and
@@ -275,6 +284,12 @@ class Filters:
 
 # -- the stores ------------------------------------------------------------------
 
+class StoreReadError(Exception):
+    """A store or table exists and SQLite cannot read it. The message is
+    SQLite's reason, which the page's note carries: "could not be read"
+    alone left the 2026-11-22 reader guessing at a missing column."""
+
+
 class Stores:
     """Read-only connections to the exporter DB and trends.db."""
 
@@ -439,6 +454,24 @@ class Stores:
         finally:
             conn.close()
 
+    def rollup_pending(self):
+        """{job: runs its last pass left for the next ones} (the shared
+        GitHub budget or the pass's bound stopped its reads); {} when no
+        pass recorded one, or the table predates the count."""
+        conn = self._open(self.trends_db)
+        if conn is None:
+            return {}
+        try:
+            if "rollup_passes" not in self._tables(conn) or "pending" not in self._columns(conn, "rollup_passes"):
+                return {}
+            rows = conn.execute("SELECT job, pending FROM rollup_passes")
+            return {row["job"]: int(row["pending"] or 0) for row in rows}
+        except sqlite3.Error as error:
+            logger.error("the rollup pass table could not be read: %s", error)
+            return {}
+        finally:
+            conn.close()
+
     def captures(self):
         """{run id: [(capture id, attempt, suite), ...]} from the registry."""
         conn = self._open(self.jobs_db)
@@ -486,9 +519,10 @@ class Stores:
         rejected lines for is indexed too: its signatures are bundle
         facts. rows are [(signature, kind, phase, run id, suite, lines)]
         of the indexed units. ([], []) when the rollup has indexed nothing
-        yet (its tables are absent, or the store does not exist); None
-        when the store or a table cannot be read: a read failure is not
-        "no signatures"."""
+        yet (its tables are absent, or the store does not exist). Raises
+        StoreReadError, naming SQLite's reason, when the store or a table
+        cannot be read: a read failure is not "no signatures", and the page
+        says why."""
         if not units:
             return set(), []
         if not self.trends_db or not os.path.exists(self.trends_db):
@@ -497,19 +531,25 @@ class Stores:
             conn = sqlite3.connect(f"file:{self.trends_db}?mode=ro", uri=True, timeout=5)
         except sqlite3.Error as error:
             logger.error("the artifact log tables could not be opened: %s", error)
-            return None
+            raise StoreReadError(f"trends.db could not be opened: {error}") from error
         conn.row_factory = sqlite3.Row
         try:
             tables = self._tables(conn)
             if "artifact_logs" not in tables or "artifact_log_signatures" not in tables:
                 return set(), []
+            # The rollup adds the attempt column when it next opens the
+            # store; until then every row is the first attempt's (see
+            # ci_observe_logs.stored_attempt). Selecting the column before
+            # that made the whole table unreadable after the 2026-11-22
+            # deploy, for the hour until the rollup's next pass.
+            attempt = "attempt" if "attempt" in self._columns(conn, "artifact_logs") else "'' AS attempt"
             run_ids = sorted({run_id for run_id, _ in units})
             indexed, rows = set(), []
             for start in range(0, len(run_ids), 400):
                 chunk = run_ids[start:start + 400]
                 marks = ",".join("?" * len(chunk))
                 for row in conn.execute(
-                        "SELECT run_id, suite, attempt FROM artifact_logs"
+                        f"SELECT run_id, suite, {attempt} FROM artifact_logs"
                         f" WHERE state IN ('indexed', 'rejected') AND run_id IN ({marks})", chunk):
                     unit = (str(row["run_id"]), row["suite"])
                     if unit in units and units[unit][1] == ((row["attempt"] or "") or "1"):
@@ -524,7 +564,7 @@ class Stores:
             return indexed, rows
         except sqlite3.Error as error:
             logger.error("the artifact log signature table could not be read: %s", error)
-            return None
+            raise StoreReadError(str(error)) from error
         finally:
             conn.close()
 
@@ -628,6 +668,8 @@ class CIObserveInsights:
         self._cache = {}
         self._inflight = {}
         self._lock = threading.Lock()
+        self._facts_cache = {}
+        self._facts_inflight = {}
 
     # -- cache -------------------------------------------------------------
     def get_json(self, kind, params):
@@ -755,6 +797,7 @@ class CIObserveInsights:
             parts.append("Test results, inside-the-tests and error signatures: the rollup pass table could"
                          " not be read, so their freshness is unknown")
         else:
+            pending = self.stores.rollup_pending()
             for job, label, noun, timer in (
                 ("trends", "Test results", "test results", "ci-observe-trends.timer"),
                 ("spans", "Inside the tests", "inside-the-tests numbers", "ci-observe-spans.timer"),
@@ -764,7 +807,14 @@ class CIObserveInsights:
                 if finished is None:
                     parts.append(f"{label}: no pass recorded yet")
                     continue
-                parts.append(f"{label}: updated {finished:%Y-%m-%d %H:%M} UTC")
+                left = pending.get(job) or 0
+                parts.append(f"{label}: updated {finished:%Y-%m-%d %H:%M} UTC"
+                             + (f", {left:,} runs not read yet" if left else ""))
+                if left:
+                    notes.append(
+                        f"{left:,} runs are not in the {noun} yet: each {timer} pass reads what the shared"
+                        " GitHub API budget allows and leaves the rest to the next passes"
+                    )
                 hours = (now - finished).total_seconds() / 3600
                 if hours > ROLLUP_STALE_HOURS:
                     notes.append(
@@ -778,16 +828,56 @@ class CIObserveInsights:
         return " · ".join(parts), notes
 
     # -- facts -------------------------------------------------------------
+    def _window_facts(self, since, until):
+        """(facts, notes): every suite run created in [since, until), parsed
+        once per minute-aligned window for FACTS_CACHE_SECONDS and shared by
+        every document and population (see FACTS_CACHE_SECONDS). The facts
+        are read-only to their readers. Concurrent askers of one window wait
+        for the first one's parse instead of parsing it again."""
+        start = since.replace(second=0, microsecond=0)
+        end = until.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        key = (start, end)
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                for stale in [k for k, (expires, _) in self._facts_cache.items() if expires <= now]:
+                    del self._facts_cache[stale]
+                entry = self._facts_cache.get(key)
+                if entry:
+                    value = entry[1]
+                    break
+                event = self._facts_inflight.get(key)
+                leader = event is None
+                if leader:
+                    event = threading.Event()
+                    self._facts_inflight[key] = event
+            if not leader:
+                event.wait(timeout=60)
+                continue
+            try:
+                rows, notes = self.stores.suite_run_rows(start, end)
+                captures = self.stores.captures()
+                facts = [fact for fact in (suite_run_fact(row, captures) for row in rows) if fact is not None]
+                value = (facts, notes)
+                with self._lock:
+                    self._facts_cache[key] = (time.monotonic() + FACTS_CACHE_SECONDS, value)
+                    while len(self._facts_cache) > FACTS_CACHE_ENTRIES:
+                        oldest = min(self._facts_cache, key=lambda k: self._facts_cache[k][0])
+                        del self._facts_cache[oldest]
+            finally:
+                with self._lock:
+                    self._facts_inflight.pop(key, None)
+                event.set()
+            break
+        facts, notes = value
+        low, high = iso(since), iso(until)
+        return [fact for fact in facts if low <= fact["created_at"] < high], list(notes)
+
     def _facts(self, filters, since=None, until=None):
         since = since or filters.previous_from
         until = until or filters.window_to
-        rows, notes = self.stores.suite_run_rows(since, until)
-        captures = self.stores.captures()
-        facts = []
-        for row in rows:
-            fact = suite_run_fact(row, captures)
-            if fact is not None and filters.matches(fact):
-                facts.append(fact)
+        every, notes = self._window_facts(since, until)
+        facts = [fact for fact in every if filters.matches(fact)]
         facts.sort(key=lambda fact: (fact["created_at"], str(fact["id"])))
         current = [fact for fact in facts if fact["created"] and fact["created"] >= filters.window_from]
         previous = [fact for fact in facts if fact["created"] and fact["created"] < filters.window_from]
@@ -1349,11 +1439,11 @@ class CIObserveInsights:
                 facts[unit] = fact
         for unit, fact in facts.items():
             units[unit] = (fact["result"], str(fact["attempt"] or 1))
-        read = self.stores.artifact_signatures(units)
-        if read is None:
-            return [], ["the artifact log signature table could not be read, so the error signatures"
-                        " of this window are unknown"]
-        indexed, stored = read
+        try:
+            indexed, stored = self.stores.artifact_signatures(units)
+        except StoreReadError as error:
+            return [], [f"the artifact log signature table could not be read ({error}), so the error"
+                        " signatures of this window are unknown"]
         if not indexed and not units:
             return [], ["the artifact log rollup has indexed no bundle of this window yet, so no error"
                         " signatures are known (ci-observe-logs.timer)"]

@@ -3519,6 +3519,7 @@ class WorkflowExporter:
                 continue
             stored = self._stored_attempts([run["id"] for run in runs])
             refreshed = 0
+            unread = ""
             for run in runs:
                 attempt = stored.get(run["id"])
                 if attempt is None or (run.get("run_attempt") or 1) <= attempt:
@@ -3530,14 +3531,16 @@ class WorkflowExporter:
                     # around again (~a day at three sweeps an hour).
                     logger.error("Attempt sweep of %s %s: the job details of run %s could not"
                                  " be read; the day stays to sweep again", repo, day, run["id"])
-                    self._record_sweep(repo, day, stamp, len(runs), refreshed,
-                                       f"job details of run {run['id']} could not be read")
+                    unread = f"job details of run {run['id']} could not be read"
                     break
                 refreshed += int(outcome)
             if refreshed:
                 gap_check_attempts_refreshed.labels(org=ORG, repo=repo).inc(refreshed)
                 logger.info("Attempt sweep of %s %s stored %d re-run(s) again", repo, day, refreshed)
-            self._record_sweep(repo, day, stamp, len(runs), refreshed, "")
+            # Recorded once, with the error when a fetch failed: before
+            # 2026-11-22 the clean record after the loop overwrote it, and
+            # the day waited a whole rotation anyway.
+            self._record_sweep(repo, day, stamp, len(runs), refreshed, unread)
             refreshed_total += refreshed
         return refreshed_total
 
@@ -5346,11 +5349,20 @@ class WorkflowExporter:
         even when no test ever ran. The lines carry their signature and
         kind, and the notes say both why there is no junit and where the
         lines come from. With nothing indexed the EvidenceError propagates
-        and the endpoint answers 502 with the reason, as before."""
+        and the endpoint answers 502 with the reason, as before.
+
+        Before the error lines: when GitHub cannot serve the file (a spent
+        budget, a refusal, an expired artifact) and the test-history rollup
+        read it, the failed tests come from trends.db, and the notes say so
+        (see CIObserveRunEvidence.failed_tests_from_history)."""
         try:
             return self._run_evidence.get_ci_observe_failed_tests_json(params)
         except EvidenceError as error:
             capture_id = (params.get("capture_id", [""])[0] or "").strip()
+            history = self._run_evidence.failed_tests_from_history(
+                capture_id, error, os.path.join(CACHE_DIR, "trends.db"))
+            if history is not None:
+                return history
             match = re.search(r"-([0-9]+)-a[0-9]+$", capture_id)
             # Only a run the artifact-log rollup recorded can have indexed
             # lines; asking Loki for anything else is a query for nothing.

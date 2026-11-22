@@ -258,15 +258,25 @@ def world(tmp_path, monkeypatch):
                 return dict(conn.execute("SELECT job, summary FROM rollup_passes"))
 
     world = World()
+    # The shared GitHub budget each lookup's answer states (None: GitHub
+    # sends no count), and the lookup from which GitHub says it is spent.
+    world.remaining = None
+    world.spent_from = None
 
-    def list_bundle(run, headers):
+    def list_bundle(run, headers, budget=None):
+        if world.spent_from is not None and len(world.looked_up) >= world.spent_from:
+            raise logs.GitHubRateLimited("osac-project/osac-ci-artifacts answered HTTP 403 to the artifact"
+                                         " listing: the token's GitHub API rate limit is spent")
         world.looked_up.append((run["run_id"], run["attempt"]))
         assert headers["Authorization"] == "Bearer ghp_the_token"
+        if budget is not None and world.remaining is not None:
+            budget.observe(type("Answer", (), {"headers": {"X-RateLimit-Remaining": str(world.remaining)}})())
+            world.remaining -= 1
         found = world.bundles.get(run["run_id"])
         return None if found is None else {"suite": run["suite"], "artifact": found, "label": "", "private": True}
 
     monkeypatch.setattr(logs, "list_bundle", list_bundle)
-    monkeypatch.setattr(logs, "download_bundle", lambda artifact, headers: (bundle(artifact), ""))
+    monkeypatch.setattr(logs, "download_bundle", lambda artifact, headers, budget=None: (bundle(artifact), ""))
     monkeypatch.setattr(logs.requests, "Session", lambda: world.session)
     fixed = type("FixedDatetime", (datetime,), {"now": staticmethod(lambda tz=None: NOW)})
     monkeypatch.setattr(logs, "datetime", fixed)
@@ -391,3 +401,87 @@ def test_rows_from_before_the_attempt_column_read_as_the_first_attempt(world, tm
     world.run(1, "501", "failure")
     logs.main(["--days", "30"])
     assert world.looked_up == []  # not re-read (its lines are already in Loki)
+
+
+def test_a_run_loki_rejects_keeps_its_signatures(world):
+    """The data-loss path of 2026-11-22's review: a rejected run's signatures
+    are bundle facts, recorded whatever Loki said about its lines, and the
+    ranking counts them. Before, they were lost for good: a rejected run is
+    not read again at its attempt."""
+    world.run(1, "801", "failure", ended_hours_ago=1)
+    world.bundles = {"801": {"aap-jobs/install.log": INSTALL_LOG}}
+    world.session.answers = [Response(400, "entry too far behind")]
+    logs.main(["--days", "30"])
+    assert world.state()[("801", "vmaas")]["state"] == "rejected"
+    assert {run_id for run_id, _, _ in world.signatures()} == {"801"}
+
+
+def test_a_spent_budget_ends_the_pass_with_what_it_read(world):
+    """GitHub saying the budget is spent is neither the run's fact nor a
+    fault: what was read is recorded, the pass is a pass, and the runs left
+    are counted for the pages."""
+    for job_id in range(1, 4):
+        world.run(job_id, str(700 + job_id), "failure", ended_hours_ago=job_id)
+    world.bundles = {str(700 + job_id): {"aap-jobs/install.log": INSTALL_LOG} for job_id in range(1, 4)}
+    world.spent_from = 1
+    assert logs.main(["--days", "30"]) == 0
+    assert {key[0]: row["state"] for key, row in world.state().items()} == {"701": "indexed"}
+    summary = world.passes()["logs"]
+    assert "1 indexed" in summary and "2 left for the next passes" in summary
+    assert "rate limit is spent" in summary
+    with sqlite3.connect(logs.TRENDS_DB) as conn:
+        assert conn.execute("SELECT pending FROM rollup_passes WHERE job = 'logs'").fetchone() == (2,)
+
+
+def test_a_pass_the_spent_budget_let_read_nothing_is_not_a_pass(world):
+    world.run(1, "701", "failure", ended_hours_ago=1)
+    world.bundles = {"701": {"aap-jobs/install.log": INSTALL_LOG}}
+    world.spent_from = 0
+    assert logs.main(["--days", "30"]) == 1
+    assert world.passes() == {}, "nothing it had to read was read: the store's freshness ages and alerts"
+
+
+def test_the_lookups_stop_at_the_reserve_left_for_the_exporter(world, monkeypatch):
+    monkeypatch.setattr(logs, "GITHUB_RESERVE", 1000)
+    for job_id in range(1, 4):
+        world.run(job_id, str(700 + job_id), "failure", ended_hours_ago=job_id)
+    world.remaining = 1000  # the first answer leaves exactly the reserve, the second one below it
+    logs.main(["--days", "30"])
+    assert [run_id for run_id, _ in world.looked_up] == ["701", "702"]
+    assert "below the 1000 this reader leaves for the exporter" in world.passes()["logs"]
+
+
+def test_resign_recomputes_a_rejected_runs_signatures_and_keeps_its_state(world):
+    """Runs rejected before 2026-11-22 have no signatures; --resign recomputes
+    them from the bundle, pushes nothing, and the run stays rejected (its
+    lines are in Loki only in part)."""
+    world.run(1, "801", "failure", ended_hours_ago=1)
+    world.bundles = {"801": {"aap-jobs/install.log": INSTALL_LOG}}
+    world.session.answers = [Response(400, "entry too far behind")]
+    logs.main(["--days", "30"])
+    with sqlite3.connect(logs.TRENDS_DB) as conn:
+        conn.execute("DELETE FROM artifact_log_signatures")
+    pushes = len(world.session.pushes)
+    assert logs.main(["--days", "30", "--resign"]) == 0
+    assert len(world.session.pushes) == pushes, "a repair pushes nothing"
+    assert {run_id for run_id, _, _ in world.signatures()} == {"801"}
+    row = world.state()[("801", "vmaas")]
+    assert (row["state"], row["reason"]) == (
+        "rejected", "Loki answered HTTP 400 to a push of 1 lines: entry too far behind")
+
+
+def test_a_stamp_with_an_offset_buckets_by_its_utc_day():
+    """01:15+02:00 on the 20th is 23:15 UTC on the 19th: the bucket the
+    module docstring promises, so a reader can find it by its UTC day."""
+    late = run(created=datetime(2026, 11, 19, 22, tzinfo=UTC), finished=datetime(2026, 11, 20, 0, 30, tzinfo=UTC))
+    streams, _, _ = logs.read_bundle(bundle({"x.log": "2026-11-20T01:15:00+02:00 error: offset stamp\n"}), late, NOW)
+    [group] = streams
+    assert dict(group)["bucket"] == "2026-11-19"
+
+
+def test_failures_only_reads_newest_first_like_a_full_pass(world):
+    world.run(1, "601", "failure", ended_hours_ago=5)
+    world.run(2, "602", "failure", ended_hours_ago=1)
+    world.run(3, "603", "success", ended_hours_ago=2)
+    logs.main(["--days", "30", "--failures-only"])
+    assert [run_id for run_id, _ in world.looked_up] == ["602", "601"]

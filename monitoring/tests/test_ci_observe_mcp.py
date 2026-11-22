@@ -170,8 +170,8 @@ def test_tools_list_names_every_tool_with_its_required_parameters(config):
     tools = {tool["name"]: tool for tool in answer["result"]["tools"]}
     assert set(tools) == {
         "suite_health", "failing_tests", "flaky_tests", "failure_causes", "failure_signatures",
-        "time_to_result", "slowest_tests", "test_history", "run_failed_tests", "list_runs",
-        "pull_request_stats", "pull_requests", "pull_request_detail",
+        "time_to_result", "slowest_tests", "time_phases", "waits", "test_history", "run_failed_tests",
+        "list_runs", "pull_request_stats", "pull_requests", "pull_request_detail",
     }
     # Every population dimension is required with no default: the agent
     # must ask which suite, trigger, repository and window it means.
@@ -313,12 +313,40 @@ def test_a_list_that_fits_has_no_cut_note(config, web):
     assert answer["rows_total"] == 1 and not any("showing" in note for note in answer["notes"])
 
 
-def test_a_capped_runs_page_names_its_total(config, web):
-    web.add("http://exporter/api/ci-observe/runs?days=7&repo=osac&suite=vmaas&result=failure&limit=20",
-            {"runs": [{"id": i} for i in range(20)], "truncated": True, "total": 57})
-    answer = tool_call(config, "list_runs", {"suite": "vmaas", "result": "failure", "repo": "osac", "days": 7})
-    assert answer["rows_total"] == 57
-    assert any("20 newest of 57" in note for note in answer["notes"])
+def test_a_capped_runs_page_names_its_total_and_the_next_page(config, web):
+    """The exporter pages by run id (keyset): the next page is the same
+    window, older than the last run shown, so a page neither repeats nor
+    skips a run and a 30-day window pages to its end. Moving end back, the
+    advice before 2026-11-22, moved the window out of the job history."""
+    web.add("http://exporter/api/ci-observe/runs?days=30&repo=osac&suite=vmaas&result=failure&limit=20",
+            {"runs": [{"id": str(900 - i)} for i in range(20)], "truncated": True, "total": 57,
+             "next_before": "881"})
+    web.add("http://exporter/api/ci-observe/runs?days=30&repo=osac&suite=vmaas&result=failure&limit=20&before=881",
+            {"runs": [{"id": str(880 - i)} for i in range(20)], "truncated": True, "total": 57,
+             "next_before": "861"})
+    first = tool_call(config, "list_runs", {"suite": "vmaas", "result": "failure", "repo": "osac", "days": 30})
+    assert first["rows_total"] == 57
+    assert first["next_page"] == {"before": "881"}
+    assert any("20 of the 57 runs" in note and "before=881" in note for note in first["notes"])
+    second = tool_call(config, "list_runs", {"suite": "vmaas", "result": "failure", "repo": "osac", "days": 30,
+                                             **first["next_page"]})
+    assert {row["id"] for row in first["rows"]}.isdisjoint(row["id"] for row in second["rows"])
+    assert second["next_page"] == {"before": "861"}
+
+
+def test_a_runs_page_can_hold_up_to_a_hundred_and_the_cursor_is_checked(config, web):
+    web.add("http://exporter/api/ci-observe/runs?days=7&repo=osac&suite=vmaas&result=failure&limit=100",
+            {"runs": [{"id": str(i)} for i in range(57)], "truncated": False, "total": 57, "next_before": None})
+    answer = tool_call(config, "list_runs", {"suite": "vmaas", "result": "failure", "repo": "osac", "days": 7,
+                                             "limit": 100})
+    assert len(answer["rows"]) == 57 and "next_page" not in answer
+    for bad in ("41310072671; DROP", "-1", 881, "1" * 21):
+        with pytest.raises(mcp.ToolError, match="before"):
+            mcp.TOOL_BY_NAME["list_runs"].handler(config, {"suite": "vmaas", "result": "failure", "repo": "osac",
+                                                           "days": 7, "before": bad})
+    with pytest.raises(mcp.ToolError):
+        mcp.TOOL_BY_NAME["list_runs"].handler(config, {"suite": "vmaas", "result": "failure", "repo": "osac",
+                                                       "days": 7, "limit": 101})
 
 
 def pr_row(number, merged_days_ago=None, opened_days_ago=40, closed_days_ago=None, state="merged"):
@@ -351,14 +379,31 @@ def test_the_pull_requests_of_a_past_window_are_its_own(config, web, monkeypatch
     assert [row["number"] for row in merged["rows"]] == [2, 3]
 
 
-def test_more_than_twenty_pull_requests_say_how_to_reach_the_rest(config, web):
+def test_more_than_twenty_pull_requests_page_through_the_same_window(config, web):
+    """The cursor is (moment, number): ties on a moment neither repeat nor
+    skip, and every page is the window asked for. Before 2026-11-22 the
+    advice was end=<oldest shown>, which repeated that pull request, moved
+    the window's start back by the same days, and on a tie of more than
+    twenty answered the same page forever."""
+    # Older than all thirty, so the 25 that share one moment span two pages.
+    tied = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = [pr_row(number, merged_days_ago=1 + number / 10) for number in range(1, 31)]
+    rows += [{**pr_row(number), "merged_at": tied} for number in range(100, 125)]
     web.add("http://exporter/api/ci-observe/prs?days=7&repo=osac", {"prs": rows, "about": [{}], "notes": []})
-    answer = tool_call(config, "pull_requests", {"repo": "osac", "days": 7, "state": "merged"})
-    assert [row["number"] for row in answer["rows"]] == list(range(1, 21))  # the latest first
-    assert answer["rows_total"] == 30
-    note = next(note for note in answer["notes"] if "showing the 20 latest of 30" in note)
-    assert f"end={answer['rows'][-1]['merged_at']}" in note
+    seen = []
+    arguments = {"repo": "osac", "days": 7, "state": "merged"}
+    for _ in range(5):
+        answer = tool_call(config, "pull_requests", arguments)
+        assert answer["rows_total"] == 55
+        seen += [row["number"] for row in answer["rows"]]
+        if "next_page" not in answer:
+            break
+        assert any(f"before={answer['next_page']['before']}" in note for note in answer["notes"])
+        arguments = {**arguments, **answer["next_page"]}
+    assert seen[:20] == list(range(1, 21))  # the latest first
+    assert sorted(seen) == sorted(row["number"] for row in rows), "every pull request once, no repeats"
+    with pytest.raises(mcp.ToolError, match="before"):
+        mcp.TOOL_BY_NAME["pull_requests"].handler(config, {**arguments, "before": "yesterday"})
 
 
 def test_a_failing_tool_is_an_error_answer_not_a_reset_connection(config, monkeypatch):
@@ -990,14 +1035,74 @@ def test_the_token_and_client_signature_domains_are_apart(config):
     assert mcp.read_client_id(config.session_secret, forged) is None
 
 
-def test_the_token_exchange_requires_its_client_and_redirect(server, monkeypatch):
-    """RFC 6749 4.1.3: a public client names itself with its id, and every
-    authorization of ours carried a redirect URI; omission is a refusal,
-    not a pass."""
+def test_the_token_exchange_requires_its_client_and_checks_a_redirect_it_is_sent(server, monkeypatch):
+    """A public client names itself with its id (RFC 6749 4.1.3, OAuth 2.1
+    alike): leaving it out is a refusal. The redirect URI is checked when
+    sent and may be left out: OAuth 2.1 (10.2), which MCP's authorization
+    builds on, drops it from the token request, and a client that follows
+    only 2.1 does not send it."""
     verifier = "v" * 43
     client_id, code = full_login(server, monkeypatch, verifier=verifier)
     answer, document = exchange(server, grant_type="authorization_code", code=code, code_verifier=verifier)
     assert answer.status == 400 and document["error"] == "invalid_grant"
+    client_id, code = full_login(server, monkeypatch, verifier=verifier)
+    answer, document = exchange(server, grant_type="authorization_code", code=code, code_verifier=verifier,
+                                client_id=client_id)
+    assert answer.status == 200 and document["access_token"]
+    client_id, code = full_login(server, monkeypatch, verifier=verifier)
+    answer, document = exchange(server, grant_type="authorization_code", code=code, code_verifier=verifier,
+                                client_id=client_id, redirect_uri="http://localhost:41111/elsewhere")
+    assert answer.status == 400 and document["error"] == "invalid_grant"
+
+
+class Answered:
+    """A GitHub answer for github_login: a status and a body that json()
+    returns, or raises when it is not JSON (requests raises its
+    JSONDecodeError, a RequestException and a ValueError at once)."""
+
+    def __init__(self, status, payload=None, not_json=False):
+        self.status_code = status
+        self.ok = 200 <= status < 300
+        self._payload = payload
+        self._not_json = not_json
+
+    def json(self):
+        if self._not_json:
+            raise mcp.requests.exceptions.JSONDecodeError("Expecting value", "<html>", 0)
+        return self._payload
+
+
+@pytest.mark.parametrize(("post", "get", "message"), [
+    (mcp.requests.exceptions.ConnectionError("reset"), None, "could not be reached to exchange the login code"),
+    (Answered(200, not_json=True), None, "token exchange with something other than JSON"),
+    (Answered(200, payload=["not", "an", "object"]), None, "JSON that is not an object"),
+    (Answered(200, payload={"access_token": "t"}), mcp.requests.exceptions.Timeout("slow"),
+     "could not be reached to say who logged in"),
+    (Answered(200, payload={"access_token": "t"}), Answered(200, not_json=True),
+     "user lookup with something other than JSON"),
+])
+def test_github_login_answers_every_github_failure_with_an_auth_error(config, monkeypatch, post, get, message):
+    def answer(result):
+        def call(*args, **kwargs):
+            if isinstance(result, BaseException):
+                raise result
+            return result
+        return call
+    monkeypatch.setattr(mcp.requests, "post", answer(post))
+    monkeypatch.setattr(mcp.requests, "get", answer(get))
+    with pytest.raises(mcp.AuthError, match=message):
+        mcp.github_login(config, "code")
+
+
+@pytest.mark.parametrize(("tool", "kind", "key"), [("time_phases", "time", "phases"), ("waits", "waits", "waits")])
+def test_the_time_tools_read_their_documents_rows(config, web, tool, kind, key):
+    """Where the time goes, by phase and by product wait: the exporter's
+    time and waits documents, which no tool served before 2026-11-22."""
+    web.add(f"http://exporter/api/ci-observe/{kind}?days=7&suite=vmaas&trigger=merge_queue&repo=osac",
+            {key: [{"name": "install", "median_s": 960}], "about": [{"population": "p"}], "notes": []})
+    answer = tool_call(config, tool, {"suite": "vmaas", "trigger": "merge_queue", "repo": "osac", "days": 7})
+    assert answer["rows"] == [{"name": "install", "median_s": 960}]
+    assert "/d/ci-observe-time/" in answer["grafana_url"]
 
 
 def test_a_grafana_null_authlabels_is_a_local_account_not_a_broken_answer(config, web):

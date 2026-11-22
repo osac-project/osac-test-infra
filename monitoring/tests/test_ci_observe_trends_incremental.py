@@ -20,6 +20,9 @@ from test_ci_observe_trends import (
     LIST_PATH,
     PRIVATE_NAME_PATH,
     RUN_ID,
+    SECOND_DOWNLOAD_PATH,
+    SECOND_LIST_PATH,
+    SECOND_RUN_ID,
     SHA,
     TOKEN,
     VALID_JUNIT,
@@ -164,6 +167,37 @@ class TestReadDecision:
         old = {**self.run, "created_at": iso(NOW - timedelta(days=40))}
         assert trends.read_decision(old, self.fetch("parsed", version=1), True, NOW) == "stored"
 
+    def test_a_lookup_only_change_does_not_reread_parsed_runs(self, trends):
+        """Version 3 changed where an artifact is looked for, not how a found
+        one is parsed: a run version 2 parsed is current. Re-reading every
+        parsed run on 2026-11-22 cost some 4,000 runs' worth of the budget
+        everything shares, for identical rows."""
+        assert trends.PARSED_CURRENT_FROM < trends.PARSER_VERSION
+        parsed_v2 = self.fetch("parsed", version=trends.PARSED_CURRENT_FROM)
+        assert trends.read_decision(self.run, parsed_v2, True, NOW) == "stored"
+        no_data_v2 = self.fetch("no_data", version=trends.NO_DATA_CURRENT_FROM - 1,
+                                checked=NOW - timedelta(hours=2), finished=NOW - timedelta(hours=6))
+        assert trends.read_decision(self.run, no_data_v2, False, NOW) == "fetch", "a lookup change can find it"
+
+    def test_a_reader_asks_a_run_whose_artifact_is_gone_once(self, trends):
+        """A re-read for new fields that found the artifact gone keeps the old
+        rows; the reader that looked does not look again every hour."""
+        looked = {**self.fetch("parsed", version=1), "checked_version": trends.PARSER_VERSION}
+        assert trends.read_decision(self.run, looked, True, NOW) == "stored"
+        older_reader = {**self.fetch("parsed", version=1), "checked_version": trends.PARSER_VERSION - 1}
+        assert trends.read_decision(self.run, older_reader, True, NOW) == "fetch"
+
+    def test_the_most_urgent_runs_are_read_first(self, trends):
+        """No data at all before new fields; an artifact about to expire
+        before a newer run; then the newest."""
+        def run(run_id, days_ago):
+            return {"run_id": run_id, "created_at": iso(NOW - timedelta(days=days_ago))}
+        fresh, older, expiring = run(1, 1), run(2, 5), run(3, 29)
+        reread = run(4, 0.5)
+        order = sorted([(older, False), (reread, True), (fresh, False), (expiring, False)],
+                       key=lambda pair: trends.read_priority(pair[0], pair[1], NOW))
+        assert [pair[0]["run_id"] for pair in order] == [3, 1, 2, 4]
+
     def test_no_data_is_checked_once_more_only_soon_after_the_run(self, trends):
         finished = NOW - timedelta(hours=5)
         early = self.fetch("no_data", checked=finished + timedelta(minutes=5), finished=finished)
@@ -211,13 +245,13 @@ class TestHourlyPass:
         assert query(wired, "SELECT job, summary FROM rollup_passes") == [
             {"job": "trends", "summary": "1 run(s) considered"}]
 
-    def test_a_github_error_stops_the_pass_and_stores_nothing(self, wired, exporter, github, caplog):
+    def test_a_github_error_stops_the_pass_and_is_not_a_pass(self, wired, exporter, github, caplog):
         exporter._upsert_job(run_row())
         github.routes[LIST_PATH] = [FakeResponse(status=502)]
 
         assert wired.main(["--days", "7"]) == 1
 
-        assert "the test history pass stopped, nothing was stored" in caplog.text
+        assert "the test history pass stopped" in caplog.text
         assert f"run {RUN_ID} of osac-project/osac answered HTTP 502" in caplog.text
         assert query(wired, "SELECT * FROM run_fetches") == []
         tables = {row["name"] for row in query(wired, "SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -227,6 +261,106 @@ class TestHourlyPass:
         assert wired.main(["--days", "7"]) == 0
         assert query(wired, "SELECT state FROM run_fetches") == [{"state": "parsed"}]
         assert len(query(wired, "SELECT * FROM test_runs")) == 3
+
+    def test_a_refusal_keeps_what_was_read_before_it(self, wired, exporter, github):
+        """Until 2026-11-22 a stopped pass stored nothing: with more runs to
+        read than one pass could, every hourly pass re-read the same runs,
+        spent the token's budget, stored nothing and starved the exporter
+        and the run pages. What was read before the refusal is stored now,
+        and the next pass reads only what is left."""
+        exporter._upsert_job(run_row(created_at=recent_iso(days_ago=0)))
+        exporter._upsert_job(run_row(run_id=SECOND_RUN_ID, created_at=recent_iso(days_ago=1)))
+        github.add(SECOND_LIST_PATH, FakeResponse(status=502))
+
+        assert wired.main(["--days", "7"]) == 1
+
+        assert query(wired, "SELECT run_id, state FROM run_fetches") == [{"run_id": RUN_ID, "state": "parsed"}]
+        assert len(query(wired, "SELECT * FROM test_runs WHERE run_id = ?", RUN_ID)) == 3
+        assert "rollup_passes" not in {row["name"] for row in query(
+            wired, "SELECT name FROM sqlite_master WHERE type = 'table'")}, "a refused pass is not a pass"
+        github.add(SECOND_LIST_PATH, artifact_payload("https://api.github.com", run_id=SECOND_RUN_ID, art_id=43))
+        github.add(SECOND_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+        assert wired.main(["--days", "7"]) == 0
+        assert github.count(LIST_PATH) == 1, "the run read before the refusal is not read again"
+        assert {row["run_id"] for row in query(wired, "SELECT run_id FROM run_fetches")} == {RUN_ID, SECOND_RUN_ID}
+
+    def test_a_spent_budget_leaves_the_rest_to_the_next_pass(self, wired, exporter, github):
+        exporter._upsert_job(run_row(created_at=recent_iso(days_ago=0)))
+        exporter._upsert_job(run_row(run_id=SECOND_RUN_ID, created_at=recent_iso(days_ago=1)))
+        github.add(SECOND_LIST_PATH, FakeResponse(
+            status=403, text='{"message": "API rate limit exceeded for user ID 1."}',
+            headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1795000000"}))
+
+        assert wired.main(["--days", "7"]) == 0, "it read what the budget allowed: a pass"
+
+        [recorded] = query(wired, "SELECT summary, pending FROM rollup_passes WHERE job = 'trends'")
+        assert recorded["pending"] == 1
+        assert "1 read, 1 left for the next passes" in recorded["summary"]
+        assert "rate limit is spent; it resets at" in recorded["summary"]
+        assert [row["run_id"] for row in query(wired, "SELECT run_id FROM run_fetches")] == [RUN_ID]
+
+    def test_a_pass_that_reads_nothing_it_has_to_is_not_a_pass(self, wired, exporter, github, caplog):
+        exporter._upsert_job(run_row())
+        github.routes[LIST_PATH] = [FakeResponse(status=403, text="API rate limit exceeded",
+                                                 headers={"X-RateLimit-Remaining": "0"})]
+        assert wired.main(["--days", "7"]) == 1
+        assert "read none of the 1 run(s) it has to read" in caplog.text
+        assert "rollup_passes" not in {row["name"] for row in query(
+            wired, "SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+    def test_the_reads_stop_at_the_reserve_left_for_the_exporter(self, wired, exporter, github, monkeypatch):
+        monkeypatch.setattr(wired, "GITHUB_RESERVE", 2500)
+        exporter._upsert_job(run_row(created_at=recent_iso(days_ago=0)))
+        exporter._upsert_job(run_row(run_id=SECOND_RUN_ID, created_at=recent_iso(days_ago=1)))
+        github.add(LIST_PATH, FakeResponse(payload=artifact_payload("https://api.github.com").json(),
+                                           headers={"X-RateLimit-Remaining": "2499"}))
+        assert wired.main(["--days", "7"]) == 0
+        assert github.count(SECOND_LIST_PATH) == 0, "below the reserve, nothing more is asked"
+        [recorded] = query(wired, "SELECT summary, pending FROM rollup_passes WHERE job = 'trends'")
+        assert recorded["pending"] == 1
+        assert "2499 of the token's GitHub API calls are left this hour, below the 2500" in recorded["summary"]
+
+    def test_a_pass_reads_at_most_its_bound(self, wired, exporter, github, monkeypatch):
+        monkeypatch.setattr(wired, "MAX_READS_PER_PASS", 1)
+        exporter._upsert_job(run_row(created_at=recent_iso(days_ago=0)))
+        exporter._upsert_job(run_row(run_id=SECOND_RUN_ID, created_at=recent_iso(days_ago=1)))
+        assert wired.main(["--days", "7"]) == 0
+        assert github.count(SECOND_LIST_PATH) == 0
+        assert query(wired, "SELECT pending FROM rollup_passes WHERE job = 'trends'") == [{"pending": 1}]
+
+    def test_a_reread_left_for_later_keeps_its_rows(self, wired, exporter, github, monkeypatch):
+        """A run waiting for its re-read keeps what is stored for it: a pass
+        stopped early never thins a day."""
+        exporter._upsert_job(run_row())
+        assert wired.main(["--days", "7"]) == 0
+        conn = sqlite3.connect(wired.TRENDS_DB)
+        conn.execute("UPDATE run_fetches SET version = 1, checked_version = NULL")
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr(wired, "MAX_READS_PER_PASS", 0)
+        assert wired.main(["--days", "7"]) == 1, "it read none of what it had to"
+        assert len(query(wired, "SELECT * FROM test_runs")) == 3
+        assert query(wired, "SELECT runs_parsed FROM rollup_days") == [{"runs_parsed": 1}]
+
+    def test_a_new_run_is_stored_beside_a_reread_left_for_later(self, wired, exporter, github, monkeypatch):
+        """A day holding a run waiting for its re-read and a run read now is
+        rebuilt with both: the waiting run counts with its stored rows, so
+        the new run's rows are written now instead of waiting for it."""
+        exporter._upsert_job(run_row(created_at=recent_iso(days_ago=0)))
+        assert wired.main(["--days", "7"]) == 0
+        conn = sqlite3.connect(wired.TRENDS_DB)
+        conn.execute("UPDATE run_fetches SET version = 1, checked_version = NULL")
+        conn.commit()
+        conn.close()
+        exporter._upsert_job(run_row(run_id=SECOND_RUN_ID, created_at=recent_iso(days_ago=0)))
+        github.add(SECOND_LIST_PATH, artifact_payload("https://api.github.com", run_id=SECOND_RUN_ID, art_id=43))
+        github.add(SECOND_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+        monkeypatch.setattr(wired, "MAX_READS_PER_PASS", 1)
+        assert wired.main(["--days", "7"]) == 0
+        assert github.count(SECOND_LIST_PATH) == 1 and github.count(LIST_PATH) == 1, "the run with no data first"
+        stored = {row["run_id"] for row in query(wired, "SELECT DISTINCT run_id FROM test_runs")}
+        assert stored == {RUN_ID, SECOND_RUN_ID}
+        assert query(wired, "SELECT runs_parsed FROM rollup_days") == [{"runs_parsed": 2}]
 
     def test_runs_stored_after_a_private_404_are_read_again(self, wired, exporter, github):
         """Before 2026-11-15 a 404 from osac-ci-artifacts (a token that

@@ -536,14 +536,21 @@ CREATE TABLE IF NOT EXISTS rollup_passes (
 """
 
 
-def record_pass(conn, job: str, now: datetime, summary: str = "") -> None:
-    """Remember that `job` ("trends", "spans") finished a pass at `now`."""
+def record_pass(conn, job: str, now: datetime, summary: str = "", pending: int = 0) -> None:
+    """Remember that `job` ("trends", "spans", "logs") finished a pass at
+    `now`, and how many runs it had to read are left for its next passes
+    (`pending`: the shared GitHub budget or the pass's own bound stopped its
+    reads), which the pages say next to the pass's time."""
     with conn:
         conn.execute(ROLLUP_PASSES_SCHEMA)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(rollup_passes)")}
+        if "pending" not in columns:
+            conn.execute("ALTER TABLE rollup_passes ADD COLUMN pending INTEGER NOT NULL DEFAULT 0")
         conn.execute(
-            "INSERT INTO rollup_passes (job, finished_at, summary) VALUES (?, ?, ?)"
-            " ON CONFLICT(job) DO UPDATE SET finished_at = excluded.finished_at, summary = excluded.summary",
-            (job, now.strftime("%Y-%m-%dT%H:%M:%SZ"), summary),
+            "INSERT INTO rollup_passes (job, finished_at, summary, pending) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(job) DO UPDATE SET finished_at = excluded.finished_at, summary = excluded.summary,"
+            " pending = excluded.pending",
+            (job, now.strftime("%Y-%m-%dT%H:%M:%SZ"), summary, int(pending)),
         )
 
 
@@ -673,7 +680,7 @@ def _audit_test_notes(tests: dict, when: str) -> list[str]:
                      "failed tests of those runs are missing")
     if tests.get("runs_missing"):
         since = (tests.get("missing_since") or "")[:10]
-        reasons = "; ".join(f"{count}: {reason}" for reason, count in tests.get("missing_reasons") or [])
+        reasons = "; ".join(f"{count:,}: {reason}" for reason, count in tests.get("missing_reasons") or [])
         notes.append(f"{tests['runs_missing']:,} of {tests.get('runs', 0):,} suite runs that ran their tests have "
                      f"no test results" + (f", the first from {since}" if since else "")
                      + (f" ({reasons})" if reasons else ""))

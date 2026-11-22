@@ -23,9 +23,23 @@ A run's artifact is read from the two places it can be (see
 ci_observe_run_evidence.find_artifacts): its own run and the private
 artifact repository, the place its trigger says first. A run with no
 artifact in either, an expired one or one without junit.xml is stored
-with that reason. GitHub refusing or failing to answer (an HTTP error, a
-network error) is not a fact about one run: the pass stops there, logs the
-reason, stores nothing, and exits 1; the next pass reads those runs again.
+with that reason.
+
+The reads share one GitHub token with the exporter, the run pages and the
+other rollups, and one hourly budget. A pass reads the most urgent runs
+first (no data at all before new fields; an artifact about to expire
+before a newer one), at most MAX_READS_PER_PASS, and stops reading when
+the budget falls to GITHUB_RESERVE or GitHub answers that it is spent:
+the rest are left to the next pass. GitHub refusing for another reason
+(an HTTP error, a network error) is not a fact about one run either: the
+reads stop there. Whatever stopped them, what was read is stored and the
+days are rebuilt with it. A pass that read anything, or had nothing to
+read, is recorded, with how many runs it left; a pass that read nothing
+it had to read, or that GitHub refused, is not, and exits 1, so the pages
+and CiObserveHourlyStoreStale say the test results are stale. Until
+2026-11-22 a stopped pass stored nothing: after the reader version 3
+upgrade asked for every run again, each hourly pass re-read the same
+runs, spent the whole budget, stored nothing and starved everything else.
 
     # On the central machine, next to the exporter's data directory:
     set -a; . ~/.monitoring-server/.env; set +a
@@ -82,6 +96,8 @@ from ci_observe_run_evidence import (
     SUITE_ARTIFACTS,
     CIObserveRunEvidence,
     EvidenceError,
+    GitHubBudget,
+    GitHubRateLimited,
     GitHubRefused,
     artifact_places,
     find_artifacts,
@@ -113,9 +129,33 @@ DEFAULT_DAYS = ARTIFACT_RETENTION_DAYS
 # days, so these rows are the only copy; the archive outlives every other
 # store on purpose, so a trend can look back a quarter.
 KEEP_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
-# The parser version a run was read with. A run read by an older parser is
-# read again while its artifact still exists, so new fields fill in.
+# The reader version a run was read with (run_fetches.version). A re-read
+# costs GitHub API calls from the budget everything else shares, so a run
+# is read again (while its artifact exists) only when the change can alter
+# its stored answer: bump PARSER_VERSION with every reader change, and
+# raise the threshold below that names the answers the change affects.
 PARSER_VERSION = 3
+# The oldest reader whose parsed rows are current. Version 2 (2026-11-07)
+# added the per-run fields (suite, trigger, pull request, failure message,
+# test key); version 3 only changed where an artifact is looked for, which
+# cannot change a run that was found and parsed. Before 2026-11-22 every
+# parsed run was read again on version 3: some 4,000 runs, for nothing.
+PARSED_CURRENT_FROM = 2
+# The oldest reader whose "no readable artifact" answers are current.
+# Version 3 (2026-11-22) looks in both places an artifact can be, so a run
+# an older reader did not find may be found now.
+NO_DATA_CURRENT_FROM = 3
+# What a pass leaves of the shared token's hourly budget for the exporter,
+# the run pages and the other rollups: at the exporter's gap-check floor
+# (GAP_CHECK_MIN_RATE_LIMIT), so the hourly completeness check still runs
+# while a backlog drains.
+GITHUB_RESERVE = int(os.getenv("CI_OBSERVE_TRENDS_GITHUB_RESERVE", "2500"))
+# At most this many runs are read per pass (2 to 7 API calls each); the
+# rest follow in the next passes.
+MAX_READS_PER_PASS = int(os.getenv("CI_OBSERVE_TRENDS_MAX_READS", "800"))
+# A run whose artifact expires within this long is read before newer ones:
+# after expiry its answer is gone for good.
+READ_URGENT_BEFORE_EXPIRY = timedelta(days=2)
 # A run with no readable artifact is checked once more when the first check
 # came soon after it ended; an artifact can trail the run's completion.
 NO_DATA_RECHECK_WITHIN = timedelta(hours=3)
@@ -208,7 +248,11 @@ CREATE TABLE IF NOT EXISTS run_fetches (
     reason TEXT NOT NULL DEFAULT '',
     version INTEGER NOT NULL,
     checked_at TEXT NOT NULL,
-    finished_at TEXT NOT NULL DEFAULT ''
+    finished_at TEXT NOT NULL DEFAULT '',
+    -- The reader that last looked, when that differs from the one whose
+    -- rows are stored (version): a re-read that found the artifact gone
+    -- keeps the old rows, and the run is not asked again by this reader.
+    checked_version INTEGER
 );
 -- The exporter's E2E job rows, copied every pass and kept for KEEP_DAYS, so
 -- the time and failure pages outlive the exporter's 30-day job history.
@@ -387,6 +431,12 @@ def candidate_runs(rows):
     for run_id, entry in grouped.items():
         parent = run_rows.get(run_id) or {}
         workflows = sorted(set(entry.pop("workflows")))
+        # The suites whose artifacts the run can hold, when every E2E row
+        # names one: a VMaaS run's artifact is looked up under its own name
+        # only, a third of the listing calls of all three names (and the
+        # private repository is listed by name). [] when a row names none.
+        named = [phases.suite_key(workflow) for workflow in workflows]
+        entry["suites"] = sorted(set(named)) if named and all(named) else []
         if parent.get("workflow"):
             workflow = parent["workflow"]
         elif len(workflows) == 1:
@@ -615,10 +665,12 @@ class ArtifactFetcher:
     exporter instance, no server, no second copy of the parser's bounds.
     """
 
-    def __init__(self, token=None, org=ORG, api_url=API_URL):
+    def __init__(self, token=None, org=ORG, api_url=API_URL, reserve=None):
         self.token = token if token is not None else TOKEN
         self.org = org
         self.api_url = api_url
+        # What GitHub's last answer said is left of the shared budget.
+        self.budget = GitHubBudget(GITHUB_RESERVE if reserve is None else reserve)
         self.headers = {}
         if self.token:
             self.headers = {
@@ -632,22 +684,24 @@ class ArtifactFetcher:
 
     def _update_rate_limit(self, response):
         """The evidence module reports rate-limit headers through its
-        exporter. A batch job logs the budget instead of exporting a gauge."""
-        remaining = response.headers.get("X-RateLimit-Remaining")
-        if remaining is not None:
-            logger.debug("GitHub API rate limit remaining: %s", remaining)
+        exporter. A batch job keeps the budget, which decides when its
+        reads stop (see GITHUB_RESERVE), instead of exporting a gauge."""
+        self.budget.observe(response)
+        if self.budget.remaining is not None:
+            logger.debug("GitHub API rate limit remaining: %s", self.budget.remaining)
 
     def _artifacts(self, run):
         """The run's artifacts in the two places they can be (see
         ci_observe_run_evidence.find_artifacts): every suite's that is
         there. Raises GitHubRefused when GitHub does not answer, which stops
-        the pass; raises EvidenceError for a run whose trigger has no
-        artifact place."""
+        the pass's reads; raises EvidenceError for a run whose trigger has
+        no artifact place."""
         run_id = run["run_id"]
-        names = [pattern.format(run_id=run_id) for pattern in SUITE_ARTIFACTS.values()]
+        suites = [suite for suite in run.get("suites") or () if suite in SUITE_ARTIFACTS] or list(SUITE_ARTIFACTS)
+        names = [SUITE_ARTIFACTS[suite].format(run_id=run_id) for suite in suites]
         found = find_artifacts(
-            lambda url: requests.get(url, headers=self.headers, timeout=60), run.get("trigger"), run["repo"],
-            run_id, names, org=self.org, api_url=self.api_url)
+            lambda url: self.budget.observe(requests.get(url, headers=self.headers, timeout=60)),
+            run.get("trigger"), run["repo"], run_id, names, org=self.org, api_url=self.api_url)
         return [artifact for _, artifact, _, _ in found]
 
     def fetch(self, run):
@@ -724,6 +778,9 @@ def open_trends_db(path):
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(rollup_days)")}
     if "parsed_run_ids" not in columns:
         conn.execute("ALTER TABLE rollup_days ADD COLUMN parsed_run_ids TEXT NOT NULL DEFAULT '[]'")
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(run_fetches)")}
+    if "checked_version" not in columns:
+        conn.execute("ALTER TABLE run_fetches ADD COLUMN checked_version INTEGER")
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(test_runs)")}
     added = [column for column in ADDED_RUN_COLUMNS if column not in columns]
     for column in added:
@@ -1098,9 +1155,10 @@ def read_decision(run, fetch, has_stored, now, force=False):
     "stored" rows, or "skip" it (unfinished, or known to have no data).
 
     A run is read again only when that can change the answer: it was never
-    read, an older parser read it while its artifact may still exist, or an
-    older version stored it as a failed lookup. A run known to have no
-    artifact is checked once more when the first check came within
+    read, a reader older than PARSED_CURRENT_FROM parsed it while its
+    artifact may still exist, or a reader older than NO_DATA_CURRENT_FROM
+    stored it as a failed lookup. A run known to have no artifact is
+    checked once more when the first check came within
     NO_DATA_RECHECK_WITHIN of its end: a privately published artifact
     arrives a few minutes after its run ends.
     """
@@ -1115,18 +1173,22 @@ def read_decision(run, fetch, has_stored, now, force=False):
     if state == "parsed":
         if not has_stored:
             return "fetch"
-        if (fetch.get("version") or 0) < PARSER_VERSION:
+        version = fetch.get("version") or 0
+        # Once per reader: a re-read that found the artifact gone keeps the
+        # old rows, and asking again every hour would only spend the budget.
+        checked_by = fetch.get("checked_version") or version
+        if version < PARSED_CURRENT_FROM and checked_by < PARSER_VERSION:
             created = phases.parse_time(run.get("created_at"))
             if created and now - created < timedelta(days=ARTIFACT_RETENTION_DAYS - 1):
                 return "fetch"
         return "stored"
     if state == "no_data":
-        # An older parser's failed lookup is re-read: a newer parser can
+        # An older reader's failed lookup is re-read: a newer reader can
         # resolve what an older one could not (the private-publication
         # switch of 2026-11-14 was exactly that). Only while the artifact
         # may still exist: past retention, re-reading cannot change the
         # answer.
-        if (fetch.get("version") or 0) < PARSER_VERSION:
+        if (fetch.get("version") or 0) < NO_DATA_CURRENT_FROM:
             created = phases.parse_time(run.get("created_at"))
             if created and now - created < timedelta(days=ARTIFACT_RETENTION_DAYS - 1):
                 return "fetch"
@@ -1139,14 +1201,26 @@ def read_decision(run, fetch, has_stored, now, force=False):
     return "skip"
 
 
+def read_priority(run, has_stored, now):
+    """Sort key of a run to read, most urgent first: a run with no stored
+    rows (it has no test data at all) before one that only gets new fields;
+    then a run whose artifact expires within READ_URGENT_BEFORE_EXPIRY (its
+    answer is gone for good after that); then the newest (the pages' default
+    windows are the last days)."""
+    created = phases.parse_time(run.get("created_at"))
+    age = now - created if created else timedelta(0)
+    expiring = age > timedelta(days=ARTIFACT_RETENTION_DAYS) - READ_URGENT_BEFORE_EXPIRY
+    return (1 if has_stored else 0, 0 if expiring else 1, -(created.timestamp() if created else 0), run["run_id"])
+
+
 def record_fetches(conn, entries):
-    """Insert or replace run_fetches rows."""
+    """Insert or replace run_fetches rows, each checked by this reader."""
     with conn:
         conn.executemany(
             "INSERT OR REPLACE INTO run_fetches"
-            " (run_id, day, state, reason, version, checked_at, finished_at)"
-            " VALUES (:run_id, :day, :state, :reason, :version, :checked_at, :finished_at)",
-            entries,
+            " (run_id, day, state, reason, version, checked_at, finished_at, checked_version)"
+            " VALUES (:run_id, :day, :state, :reason, :version, :checked_at, :finished_at, :checked_version)",
+            [{**entry, "checked_version": PARSER_VERSION} for entry in entries],
         )
 
 
@@ -1224,43 +1298,88 @@ def main(argv=None):
             logger.info("no stored e2e runs on or after %s: nothing to roll up", start)
             phases.record_pass(conn, "trends", now, "no stored e2e run to roll up")
             return 0
-        try:
-            _roll_up(conn, runs, args.force, now)
-        except GitHubRefused as error:
-            # The same for every run: stop, store nothing of this pass, and
-            # leave the last pass's time on the pages, which then say the
-            # test results are stale. The next pass reads every run again.
-            logger.error("the test history pass stopped, nothing was stored: %s", error)
+        outcome = _roll_up(conn, runs, args.force, now)
+        if outcome["refused"]:
+            # The same for every run: the reads stopped, what was read is
+            # stored, and the last pass's time stays on the pages, which then
+            # say the test results are stale. The next pass goes on.
+            logger.error("the test history pass stopped: %s; the %d run(s) read before it are stored,"
+                         " %d are left", outcome["refused"], outcome["read"], outcome["left"])
             return 1
-        phases.record_pass(conn, "trends", now, f"{len(runs)} run(s) considered")
+        if outcome["left"] and not outcome["read"]:
+            # Nothing it had to read was read: not a pass. The pages and
+            # CiObserveHourlyStoreStale say the test results are stale.
+            logger.error("the test history pass read none of the %d run(s) it has to read: %s",
+                         outcome["left"], outcome["stopped"])
+            return 1
+        summary = f"{len(runs)} run(s) considered"
+        if outcome["left"]:
+            summary += f", {outcome['read']} read, {outcome['left']} left for the next passes ({outcome['stopped']})"
+            logger.warning("%d run(s) are left for the next passes: %s", outcome["left"], outcome["stopped"])
+        phases.record_pass(conn, "trends", now, summary, pending=outcome["left"])
     finally:
         conn.close()
     logger.info("wrote %s", trends_db)
     return 0
 
 
-def _roll_up(conn, runs, force, now):
-    """Read what is new, then rebuild every day whose stored answer changed."""
+def _roll_up(conn, runs, force, now, fetcher=None, max_reads=None):
+    """Read what is new, then rebuild every day whose stored answer changed.
+
+    The runs to read are read most urgent first (see read_priority), at
+    most max_reads (MAX_READS_PER_PASS) of them, and the reads stop when the
+    shared GitHub budget falls to the fetcher's reserve, when GitHub says it
+    is spent, or when GitHub refuses. Whatever stopped them, what was read
+    is stored and the days are rebuilt with it; a run not read yet keeps
+    the rows stored for it, so a stopped pass never thins a day.
+
+    Returns {"read", "left", "stopped", "refused"}: how many runs were read,
+    how many of those it had to read are left for the next passes and why
+    ("" when none are), and GitHub's refusal when it was not the budget."""
     fetches = load_fetches(conn)
     stored = load_stored_cases(conn, [run["run_id"] for run in runs])
     checked_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    fetcher = None
+    max_reads = MAX_READS_PER_PASS if max_reads is None else max_reads
     plan = {"fetch": 0, "stored": 0, "skip": 0}
     changed_days = set()
     parsed_now = {}
     no_data = []
+    wanted = []
     for run in runs:
         run_id = run["run_id"]
         decision = read_decision(run, fetches.get(run_id), run_id in stored, now, force)
         plan[decision] += 1
-        if decision == "stored":
+        if decision == "fetch":
+            # Until it is read again, a run keeps what is stored for it.
+            run["cases"] = stored.get(run_id, [])
+            wanted.append(run)
+        elif decision == "stored":
             run["cases"] = stored[run_id]
-            continue
-        if decision == "skip":
+        else:
             run["cases"] = []
-            continue
+    wanted.sort(key=lambda run: read_priority(run, run["run_id"] in stored, now))
+    read = 0
+    left = 0
+    stopped = refused = ""
+    for index, run in enumerate(wanted):
+        run_id = run["run_id"]
+        if read >= max_reads:
+            stopped = f"a pass reads at most {max_reads} runs"
+        elif fetcher is not None and fetcher.budget.low():
+            stopped = fetcher.budget.describe()
+        if stopped:
+            left = len(wanted) - index
+            break
         fetcher = fetcher or ArtifactFetcher()
-        cases, reason = fetcher.fetch(run)
+        try:
+            cases, reason = fetcher.fetch(run)
+        except GitHubRateLimited as error:
+            stopped, left = str(error), len(wanted) - index
+            break
+        except GitHubRefused as error:
+            refused, left = str(error), len(wanted) - index
+            break
+        read += 1
         entry = {
             "run_id": run_id, "day": run["day"], "reason": reason or "", "version": PARSER_VERSION,
             "checked_at": checked_at, "finished_at": run.get("finished_at") or "",
@@ -1274,10 +1393,9 @@ def _roll_up(conn, runs, force, now):
         logger.info("  %s run %s: no test data (%s)", run["repo"], run_id, reason)
         if run_id in stored and not force:
             # An older pass read this run and the artifact is gone now: keep
-            # what was read, and stop asking. The rows keep the version they
-            # were actually stored with, so a parser upgrade still re-reads
-            # them; stamping the current version here would mark old-format
-            # rows as current forever.
+            # what was read. The rows keep the version they were actually
+            # stored with (the format they are in); checked_version says this
+            # reader already looked, so it does not look again every hour.
             run["cases"] = stored[run_id]
             previous = fetches.get(run_id) or {}
             no_data.append({**entry, "state": "parsed", "version": previous.get("version") or entry["version"]})
@@ -1287,8 +1405,8 @@ def _roll_up(conn, runs, force, now):
         # junit.xml): it does not change, so the run is not asked again.
         no_data.append({**entry, "state": "no_data"})
     logger.info(
-        "%d run(s): %d read now, %d reused from trends.db, %d skipped",
-        len(runs), plan["fetch"], plan["stored"], plan["skip"],
+        "%d run(s): %d to read, %d read now, %d left for the next passes, %d reused from trends.db, %d skipped",
+        len(runs), plan["fetch"], read, left, plan["stored"], plan["skip"],
     )
     if no_data:
         record_fetches(conn, no_data)
@@ -1344,6 +1462,7 @@ def _roll_up(conn, runs, force, now):
             "%s: %d run(s) listed, %d parsed, %d without readable test data, %d rollup row(s)",
             day, len(day_runs), len(parsed_ids), len(day_runs) - len(parsed_ids), len(rows),
         )
+    return {"read": read, "left": left, "stopped": stopped, "refused": refused}
 
 
 if __name__ == "__main__":

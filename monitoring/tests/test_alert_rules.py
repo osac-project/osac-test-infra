@@ -33,6 +33,14 @@ def test_every_store_the_exporter_pins_has_a_stale_and_an_unknown_alert():
     assert "absent(github_actions_gap_check_last_success)" in rules["CiObserveGapCheckStalled"]["expr"]
 
 
+def test_a_spent_github_budget_alerts():
+    """Every ci-observe store and page draws on one token's budget: spent, they
+    all answer 403, and on 2026-11-22 nothing said so for eleven hours."""
+    rule = ci_observe_rules()["CiObserveGitHubBudgetExhausted"]
+    assert "github_actions_api_rate_limit_remaining" in rule["expr"]
+    assert rule["for"] == "15m"
+
+
 @pytest.mark.skipif(shutil.which("promtool") is None, reason="promtool is unavailable")
 def test_the_rules_pass_their_promtool_unit_tests():
     for command in (["promtool", "check", "rules", str(RULES)],

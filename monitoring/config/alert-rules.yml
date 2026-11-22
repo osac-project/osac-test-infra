@@ -132,6 +132,20 @@ groups:
           summary: "The ci-observe gap check has not completed in 3 hours"
           description: "The hourly check that proves the job history complete has not finished a pass GitHub answered for every day. Check the exporter's log for 'Gap check waits' (the shared GitHub budget, github_actions_gap_check_skipped_total) or 'Gap check for ... could not read GitHub'."
 
+      # CiObserveGitHubBudgetExhausted -- the shared token's hourly GitHub
+      # API budget has stayed spent for 15 minutes. The exporter's polling,
+      # the run pages and every rollup draw on it, so all of them answer
+      # 403 until it resets. From 2026-11-21 23:47 UTC the test-history
+      # rollup spent it every hour for eleven hours, and nothing said so.
+      - alert: CiObserveGitHubBudgetExhausted
+        expr: github_actions_api_rate_limit_remaining < 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The GitHub API budget of the ci-observe token is spent"
+          description: "{{ $value }} calls are left of the token's hourly GitHub API budget. The exporter's polling, the run pages' failed tests and every ci-observe rollup answer 403 until it resets. Check which ci-observe service is reading: the rollups stop at their reserves (CI_OBSERVE_TRENDS_GITHUB_RESERVE, CI_OBSERVE_LOGS_GITHUB_RESERVE), so a spent budget is something else, or a reserve set too low."
+
       # CiObserveHourlyStoreStale -- an hourly store (test results, span
       # rollup, error signatures, pull requests) has not completed a pass in
       # 90 minutes. The 2026-11-16 to 2026-11-21 pull-request stall looked

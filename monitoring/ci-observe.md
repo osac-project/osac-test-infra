@@ -5,6 +5,37 @@ For an introduction, start with [ci-observe/README.md](ci-observe/README.md).
 
 The application and the individual tests keep their current source and behavior.
 
+## Status at 2026-11-22, the second round
+
+An agent working the install-failure incident through the MCP found the "why" layer degraded: the error-signature table unreadable, the run pages' failed tests answering 403, test results eleven hours stale, half the runs that ran their tests without stored results, the exporter timing out under a fan-out of thirteen questions, and `list_runs` showing 20 of 152 runs with no way to the rest. One fault drove most of it; all are fixed here, and each fix is pinned by a test.
+
+- **The test-history rollup spent the whole GitHub budget every hour and stored nothing.** Reader version 3 (#849) asked for every run of the 29-day retention again, about 7,000 runs and 25,000 API calls, more than one pass can make. A pass that GitHub stopped stored nothing, so every hourly pass re-read the same runs from the start, spent the token's 5,000 calls, stored nothing and exited 1, from 2026-11-21 23:47 UTC on. The exporter, the run pages and the artifact-log rollup share that token, so they answered 403 for the rest of each hour. Now:
+  - What a pass reads is stored whatever stops it.
+  - It reads the most urgent runs first: no data before new fields, an artifact about to expire before a newer one.
+  - It reads at most `CI_OBSERVE_TRENDS_MAX_READS` (800) runs, and stops when the budget falls to `CI_OBSERVE_TRENDS_GITHUB_RESERVE` (2,500, the gap check's floor) or GitHub says it is spent.
+  - A pass that read anything records itself with the runs it left, which the pages show next to its time.
+  - A lookup-only reader change no longer re-reads the runs it parsed (`PARSED_CURRENT_FROM`, `NO_DATA_CURRENT_FROM`), and a run whose artifact is gone is asked once per reader, not every hour.
+  - A one-suite run asks the private repository for its own artifact only, one listing call instead of three.
+  - The artifact-log rollup stops at its own reserve (`CI_OBSERVE_LOGS_GITHUB_RESERVE`, 1,000) the same way.
+  - `CiObserveGitHubBudgetExhausted` fires when the budget stays spent for 15 minutes.
+- **Every rate limit says so.** Only the private repository's listing said "rate limit"; a pull-request or merge-queue run's page said "HTTP 403". Both places and the download now say the budget is spent and when it resets.
+- **The run page keeps its failed tests while GitHub cannot serve them.** When the budget is spent, GitHub refuses or the artifact has expired (GitHub keeps 30 days), the failed tests come from the test history's copy of the same JUnit file, read after the attempt ended, and the notes say so.
+- **The error-signature table was unreadable for an hour after the #850 deploy.** The ranking selected `artifact_logs.attempt`, which only the artifact-log rollup adds when it next opens the store. It now reads a table without the column as the first attempt's, and an unreadable table names SQLite's reason.
+- **The missing test results now add up.** The audit kept the three most common raw reasons, and a reason names its run, so 1,148 of 2,721 missing runs had none. Reasons are counted by class (numbers replaced), with "not read yet" and "read, but no test of this suite" named, and the counts sum to the missing runs.
+- **A fan-out no longer times out the exporter.** Every document of one window parsed the same some 20,000 suite runs. Thirteen questions at once parsed them thirteen times under one interpreter lock, past the 120 s timeout. The parsed runs of a window are now shared for a minute, and each document filters its own population.
+- **The MCP pages its lists.**
+  - `list_runs` passes the exporter's keyset cursor (`next_page.before`) and takes a page size of up to 100. The old advice to move `end` back left the 30 days of job history.
+  - `pull_requests` pages by (moment, number) inside the window asked for. Its old `end=<oldest>` advice repeated rows and moved the window.
+  - `time_phases` (the time document's phases) and `waits` (the product waits) serve "where the time goes". No pushed revision ever had them, so the tools an agent saw before the deploy came from an unpushed build.
+- **Smaller, from the review of #850's last commit:**
+  - The setup script's MCP check ended the whole setup, silently, when a key or `.env` was missing (`set -euo pipefail` and a failing `grep`). It now warns and goes on, and reads the last assignment and either quote style, as systemd does.
+  - The attempt sweep's fix for a failed fetch did nothing: the clean record after the loop overwrote the error.
+  - A rejected run's signatures are pinned at the rollup level, and `--resign` repairs runs rejected before (it keeps them rejected).
+  - The `bucket` label is the stamp's UTC day, as documented.
+  - `--failures-only` reads newest first.
+  - A login answer from GitHub that is not JSON says so, rather than "could not be reached".
+  - `/token` accepts an exchange without `redirect_uri` and checks it when sent (OAuth 2.1 10.2); `client_id` stays required.
+
 ## Status at 2026-11-22
 
 A review of the stack after #849 found faults in the MCP server's login, in the artifact-log rollup, in the deployment and in the alerts; all are fixed here.
@@ -55,7 +86,7 @@ The failed tests now have one path, and every way off it is an error:
 
 - **Where the artifact is.** The run's trigger decides the one place: pull-request and merge-queue runs keep it on the run (they get no app key, on purpose: `e2e-pr-*.yml`, `e2e-queue.yml`); scheduled and manual runs publish it to `osac-ci-artifacts`. The capture's suite decides the one name: `osac-logs-full-install-<run id>` (VMaaS), `osac-logs-caas-full-install-<run id>`, `osac-logs-bmaas-full-install-<run id>`. No second place is looked in. A merge-queue run holds all three suites, and each suite's page reads its own artifact; before, every page read the VMaaS one.
 - **Failed tests panel.** It reads `/api/ci-observe/failed-tests?capture_id=`: the JUnit file's failed tests, and **No failures.** only when the file lists none. Anything else is an HTTP 502 whose status line, which Grafana shows on the panel, says what failed, where and what to fix; the workflow exporter logs the same line at ERROR. That covers a GitHub refusal or error, no artifact at the place, expired, too large, no or unreadable `junit.xml`, a capture of an earlier attempt than the stored one (an artifact does not say which attempt uploaded it), and a test step that failed while `junit.xml` lists no failed test (pytest stopped before it reported one). The job-history panels read `/api/ci-observe/run`, which reads no artifact, so a failed read does not take them down.
-- **Test history.** It reads each run's artifacts at the same one place. A run's own fact (no artifact there, expired, no `junit.xml`) is stored with that reason. GitHub refusing or failing to answer is the same for every run: the pass stops, stores nothing, logs the reason and exits 1, and the pages' **Data as of** shows the test results going stale. Runs stored as "no artifact" after a 404 from `osac-ci-artifacts`, the answer to a token that cannot see it, are read once more.
+- **Test history.** It reads each run's artifacts at the same one place. A run's own fact (no artifact there, expired, no `junit.xml`) is stored with that reason. GitHub refusing or failing to answer is the same for every run: the reads stop, what was read is stored, the pass logs the reason and exits 1, and the pages' **Data as of** shows the test results going stale (until 2026-11-22 a stopped pass stored nothing; see the status of that day). Runs stored as "no artifact" after a 404 from `osac-ci-artifacts`, the answer to a token that cannot see it, are read once more.
 - **The token.** `PRIVATE_GITHUB_TOKEN` (Vault `secret/osac/monitoring/github-token`, field `token`) needs read access to the Actions artifacts of `osac-project/osac-ci-artifacts`: the `repo` scope on a classic token, or that repository with **Actions: Read-only** on a fine-grained one.
 
 The daily check against GitHub now covers the tests too: whether the token can read `osac-ci-artifacts`; that every suite run that ran its tests has test results; and, for the 10 newest runs that failed in their test step, the run page's failed tests and the test history against the run's own JUnit file, downloaded and parsed by the check. What it finds is under **Missing or partial data** on every E2E page.

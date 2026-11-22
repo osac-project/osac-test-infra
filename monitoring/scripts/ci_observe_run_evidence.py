@@ -31,10 +31,12 @@ import logging
 import math
 import os
 import re
+import sqlite3
 import threading
 import time
 import zipfile
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 
 import requests
 
@@ -89,6 +91,81 @@ class GitHubRefused(EvidenceError):
     every run, so a batch reader stops on it."""
 
 
+class ArtifactGone(EvidenceError):
+    """The run's artifact was there and has expired: GitHub keeps artifacts
+    30 days. The test history keeps what was read from it for 90."""
+
+
+class GitHubRateLimited(GitHubRefused):
+    """GitHub refused because the token's API budget is spent: a 403 or 429
+    with X-RateLimit-Remaining 0, or one whose body names a rate limit (the
+    secondary limit). Neither the token nor the run is wrong, and the
+    budget comes back within the hour: a batch reader keeps what it read
+    and leaves the rest to its next pass."""
+
+
+def rate_limit_refusal(response, label, what):
+    """GitHubRateLimited for a response that is GitHub's rate-limit answer,
+    None for any other. One test for every place an artifact is listed or
+    downloaded: before 2026-11-22 only the private repository's listing
+    said "rate limit", so a pull-request run's page reported a bare
+    "HTTP 403" for the same spent budget."""
+    if response.status_code not in (403, 429):
+        return None
+    headers = response.headers or {}
+    body = (response.text or "")[:300].lower()
+    if headers.get("X-RateLimit-Remaining") != "0" and "rate limit" not in body:
+        return None
+    kind = "secondary rate limit (too many calls at once)" if "secondary" in body else "rate limit"
+    when = ""
+    try:
+        reset = int(headers.get("X-RateLimit-Reset") or "")
+        when = f"; it resets at {datetime.fromtimestamp(reset, timezone.utc):%H:%M} UTC"
+    except (ValueError, OverflowError, OSError):
+        retry = str(headers.get("Retry-After") or "")
+        if retry.isascii() and retry.isdigit() and len(retry) < 7:
+            when = f"; GitHub asks to retry after {int(retry)} s"
+    return GitHubRateLimited(
+        f"{label} answered HTTP {response.status_code} to {what}: the token's GitHub API {kind} is spent{when}")
+
+
+class GitHubBudget:
+    """The shared token's hourly GitHub API budget as GitHub's last answer
+    stated it (X-RateLimit-Remaining and -Reset), and the reserve a batch
+    reader stops at. The exporter's polling, the run pages and every rollup
+    spend this one budget: a reader that spends it to zero blinds all of
+    them for the rest of the hour, which is what the test-history rollup
+    did every hour from 2026-11-21 23:47 UTC on."""
+
+    def __init__(self, reserve):
+        self.reserve = reserve
+        self.remaining = None
+        self.reset_at = None
+
+    def observe(self, response):
+        """Read the budget off a GitHub response; returns the response."""
+        headers = getattr(response, "headers", None) or {}
+        try:
+            self.remaining = int(headers["X-RateLimit-Remaining"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        try:
+            self.reset_at = datetime.fromtimestamp(int(headers["X-RateLimit-Reset"]), timezone.utc)
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            pass
+        return response
+
+    def low(self):
+        """Whether the budget is below the reserve. Unknown is not low: the
+        first answer of a pass says what is left."""
+        return self.remaining is not None and self.remaining < self.reserve
+
+    def describe(self):
+        when = f"; it resets at {self.reset_at:%H:%M} UTC" if self.reset_at else ""
+        return (f"{self.remaining} of the token's GitHub API calls are left this hour, below the {self.reserve}"
+                f" this reader leaves for the exporter and the run pages{when}")
+
+
 def artifact_place(trigger, repo, run_id, org=ORG, private=None):
     """(listing path, label, private) of one place a run's artifact can be:
     its own run for a pull-request or merge-queue run, the private artifact
@@ -137,12 +214,12 @@ def find_artifacts(get, trigger, repo, run_id, names, org=ORG, api_url=API_URL):
                 response = get(url)
             except requests.exceptions.RequestException as error:
                 raise GitHubRefused(f"listing the artifacts of {label} failed: {error}") from None
+            # The spent budget first, in both places: it is not the token's
+            # missing access, and it is not "HTTP 403" without a reason.
+            limited = rate_limit_refusal(response, label, "the artifact listing")
+            if limited is not None:
+                raise limited
             if private and response.status_code in (401, 403, 404):
-                body = (response.text or "")[:200]
-                if "rate limit" in body.lower():
-                    raise GitHubRefused(
-                        f"{label} answered HTTP {response.status_code} to the artifact listing: the token's"
-                        " GitHub API rate limit is spent; retry after the limit resets")
                 raise GitHubRefused(
                     f"{label} answered HTTP {response.status_code} to the artifact listing: the token cannot read it. "
                     + TOKEN_FIX.format(org=org, repo=PRIVATE_ARTIFACT_REPO)
@@ -481,13 +558,18 @@ class CIObserveRunEvidence:
         """Download an artifact zip, reading at most NATIVE_MAX_DOWNLOAD_BYTES
         (streamed; a larger artifact is abandoned mid-read, never buffered
         whole). Returns (data, reason): (bytes, None) on success, or
-        (None, reason) with reason "too_large" or an error message."""
+        (None, reason) with reason "too_large" or an error message. Raises
+        GitHubRateLimited when GitHub answers that the budget is spent, so
+        a batch reader can tell "come back later" from a broken artifact."""
         try:
             resp = requests.get(url, headers=self.exporter.headers, timeout=120, stream=True)
         except requests.exceptions.RequestException:
             return None, "artifact download failed (network error)"
         try:
             self.exporter._update_rate_limit(resp)
+            limited = rate_limit_refusal(resp, "GitHub", "the artifact download")
+            if limited is not None:
+                raise limited
             if not resp.ok:
                 return None, f"artifact download failed with HTTP {resp.status_code}"
             chunks = []
@@ -809,13 +891,18 @@ class CIObserveRunEvidence:
         if cached is not None:
             kind, value = cached
             if kind == "error":
-                raise EvidenceError(value)
+                # The error's own class: a caller tells a spent budget or an
+                # expired artifact (the test history can stand in) from the
+                # run's own facts.
+                error_class, message = value
+                raise error_class(message)
             return value
         try:
             document = self._failed_tests_uncached(capture_id, suite, run_id, run_attempt)
         except EvidenceError as error:
             logger.error("failed tests of %s cannot be read: %s", capture_id, error)
-            self._cache.put(key, ("error", str(error)), CIObserveRunEvidence.NATIVE_FAILURE_CACHE_TTL_SECONDS)
+            self._cache.put(key, ("error", (type(error), str(error))),
+                            CIObserveRunEvidence.NATIVE_FAILURE_CACHE_TTL_SECONDS)
             raise
         self._cache.put(key, ("ok", document), CIObserveRunEvidence.NATIVE_CACHE_TTL_SECONDS)
         return document
@@ -872,7 +959,7 @@ class CIObserveRunEvidence:
         _, artifact, place, private = found[0]
         artifact_url = artifact_page_url(artifact, repo, run_id, private)
         if artifact.get("expired"):
-            raise EvidenceError(
+            raise ArtifactGone(
                 f"{name} in {place} expired on {artifact.get('expires_at') or 'an unknown date'} "
                 "(GitHub keeps artifacts 30 days)"
             )
@@ -919,4 +1006,101 @@ class CIObserveRunEvidence:
             "time_s": fields["time_s"],
             "failed_tests": fields["failed_tests"],
             "notes": fields["notes"],
+        }
+
+    def failed_tests_from_history(self, capture_id, error, trends_db):
+        """The failed tests of one capture from the test history (trends.db),
+        for when GitHub cannot serve its JUnit file: the budget is spent,
+        GitHub refused, or the artifact expired (GitHub keeps artifacts 30
+        days, the test history 90). The rows are the test-history rollup's
+        copy of the same file, so the run page and run_failed_tests keep an
+        answer while GitHub has none.
+
+        None when the history cannot stand in for the file: `error` is one
+        of the run's own facts (no artifact, an attempt mismatch), the
+        history holds no rows of the capture's suite, the capture is not
+        the run's latest attempt, the rows were read before that attempt
+        ended (they may be an older attempt's), or they list no failed
+        test while the test step failed."""
+        if not isinstance(error, (GitHubRefused, ArtifactGone)) or not trends_db or not os.path.exists(trends_db):
+            return None
+        match = self.SUITE_CAPTURE_ID_RE.match(capture_id or "")
+        if match is None:
+            return None
+        suite, run_id, run_attempt = match.group(1), int(match.group(2)), int(match.group(3))
+        rows = self._ci_observe_run_rows(run_id)
+        own = [row for row in rows if ci_observe_phases.suite_key(row.get("workflow")) == suite]
+        own = own or [row for row in rows if row.get("id") == run_id]
+        if not own or run_attempt != max(row.get("run_attempt") or 1 for row in own):
+            return None
+        ended = max((ci_observe_phases.parse_time(row.get("updated_at")) for row in own
+                     if ci_observe_phases.parse_time(row.get("updated_at"))), default=None)
+        try:
+            conn = sqlite3.connect(f"file:{trends_db}?mode=ro", uri=True, timeout=5)
+        except sqlite3.Error as open_error:
+            logger.warning("the test history could not be opened for %s: %s", capture_id, open_error)
+            return None
+        conn.row_factory = sqlite3.Row
+        try:
+            tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if not {"run_fetches", "test_runs"} <= tables:
+                return None
+            fetch = conn.execute("SELECT state, checked_at FROM run_fetches WHERE run_id = ?", (run_id,)).fetchone()
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(test_runs)")}
+            suite_column = "suite_key" if "suite_key" in columns else "''"
+            message_column = "message" if "message" in columns else "''"
+            cases = [dict(row) for row in conn.execute(
+                f"SELECT test_id, passed, duration_s, {suite_column} AS suite_key, {message_column} AS message"
+                " FROM test_runs WHERE run_id = ? ORDER BY test_id", (run_id,))]
+        except sqlite3.Error as read_error:
+            logger.warning("the test history could not be read for %s: %s", capture_id, read_error)
+            return None
+        finally:
+            conn.close()
+        checked = ci_observe_phases.parse_time(fetch["checked_at"]) if fetch else None
+        if fetch is None or fetch["state"] != "parsed" or checked is None or (ended and checked < ended):
+            return None
+        named = [case for case in cases if case["suite_key"] == suite]
+        run_suites = {ci_observe_phases.suite_key(row.get("workflow")) for row in rows} - {""}
+        if not named and cases and not any(case["suite_key"] for case in cases) and len(run_suites) <= 1:
+            # Rows from before the suite was stored name none; they are the
+            # run's only suite's.
+            named = cases
+        if not named:
+            return None
+        failed = [case for case in named if not case["passed"]]
+        failed_test_steps = [
+            step for row in own for job, step in ci_observe_phases.failed_steps(row.get("failed_step"))
+            if ci_observe_phases.step_phase(step, job) == "test"
+        ]
+        if failed_test_steps and not failed:
+            return None
+        failed_tests = []
+        for case in failed:
+            classname, _, test_name = (case["test_id"] or "").partition("::")
+            failed_tests.append({
+                "classname": classname, "name": test_name or case["test_id"] or "", "type": "",
+                "message": case["message"] or "", "time_s": case["duration_s"], "artifact_url": "",
+            })
+        return {
+            "capture_id": capture_id,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+            "suite": suite,
+            "trigger": self.run_trigger(rows, run_id),
+            "artifact": {"name": SUITE_ARTIFACTS[suite].format(run_id=run_id),
+                         "place": "the test history (trends.db)", "url": ""},
+            "tests": len(named),
+            "failures": len(failed),
+            "errors": None,
+            "skipped": None,
+            "time_s": round(sum(case["duration_s"] or 0 for case in named), 3),
+            "failed_tests": failed_tests,
+            "source": "test_history",
+            "notes": [
+                f"GitHub could not serve the JUnit file ({error}); these are the test history's rows, read"
+                f" from the same file at {fetch['checked_at']}",
+                "the test history keeps pass or fail per test: an error counts as a failure, skipped tests"
+                " are not kept, and a message is its first line",
+            ],
         }

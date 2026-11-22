@@ -1096,3 +1096,98 @@ def test_vs_before_of_a_past_window_names_no_date_it_will_never_reach(stores):
     note = next(note for note in doc["notes"] if note.startswith("'vs before' is empty"))
     assert "after the start of the 30 days before the window" in note
     assert "are stored from" not in note
+
+
+def test_a_signature_table_from_before_the_attempt_column_is_read(stores):
+    """The rollup adds artifact_logs.attempt when it next opens the store;
+    until then the rows are the first attempt's. Selecting the column before
+    that made the whole table unreadable after the 2026-11-22 deploy."""
+    failed = stores.run(NOW - timedelta(hours=1), conclusion="failure", failed="Install OSAC")
+    with sqlite3.connect(stores.trends_db) as conn:
+        conn.execute("CREATE TABLE artifact_logs (run_id TEXT NOT NULL, suite TEXT NOT NULL, repo TEXT NOT NULL,"
+                     " state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', ingested_at TEXT NOT NULL,"
+                     " PRIMARY KEY (run_id, suite))")
+        conn.execute("CREATE TABLE artifact_log_signatures (run_id TEXT NOT NULL, suite TEXT NOT NULL,"
+                     " kind TEXT NOT NULL, signature TEXT NOT NULL, outcome TEXT NOT NULL, phase TEXT NOT NULL,"
+                     " lines INTEGER NOT NULL, PRIMARY KEY (run_id, suite, kind, signature))")
+        conn.execute("INSERT INTO artifact_logs VALUES (?, 'vmaas', 'osac', 'indexed', '', ?)", (failed, iso(NOW)))
+        conn.execute("INSERT INTO artifact_log_signatures VALUES (?, 'vmaas', 'pod', 'an error', 'failure',"
+                     " 'install', 3)", (failed,))
+    document = get(stores.api(), "failures", days="7")
+    assert [row["signature"] for row in document["signatures"]] == ["an error"]
+    assert not any("could not be read" in note for note in document["notes"])
+
+
+def test_an_unreadable_signature_table_names_sqlites_reason(stores):
+    stores.run(NOW - timedelta(hours=1), conclusion="failure", failed="Install OSAC")
+    with sqlite3.connect(stores.trends_db) as conn:
+        conn.execute("CREATE TABLE artifact_logs (run_id TEXT)")
+        conn.execute("CREATE TABLE artifact_log_signatures (run_id TEXT)")
+    notes = get(stores.api(), "failures", days="7")["notes"]
+    note = next(note for note in notes if "signature table could not be read" in note)
+    assert "no such column" in note, "the page says why, not only that"
+
+
+def test_runs_a_pass_left_for_the_next_ones_are_on_the_page(stores):
+    """A pass the shared GitHub budget stopped is a pass; the runs it left
+    are said next to its time, and in Missing or partial data."""
+    stores.run(NOW - timedelta(hours=1))
+    with sqlite3.connect(stores.trends_db) as conn:
+        phases.record_pass(conn, "trends", NOW - timedelta(minutes=20), "summary", pending=1148)
+    document = get(stores.api(), "health", days="7")
+    assert "Test results: updated 2026-11-07 11:40 UTC, 1,148 runs not read yet" in document["about"][0]["sources"]
+    assert any(note.startswith("1,148 runs are not in the test results yet") for note in document["notes"])
+
+
+def test_an_old_pass_table_gains_its_pending_count(tmp_path):
+    path = tmp_path / "trends.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE rollup_passes (job TEXT PRIMARY KEY, finished_at TEXT NOT NULL,"
+                     " summary TEXT NOT NULL DEFAULT '')")
+        conn.execute("INSERT INTO rollup_passes VALUES ('spans', '2026-11-07T10:00:00Z', '')")
+        phases.record_pass(conn, "trends", NOW, "s", pending=3)
+        assert sorted(conn.execute("SELECT job, pending FROM rollup_passes")) == [("spans", 0), ("trends", 3)]
+
+
+def test_concurrent_documents_of_one_window_parse_its_runs_once(stores, monkeypatch):
+    """An agent's fan-out (a kind per suite and trigger) asks one window
+    many times at once: the runs are parsed once and shared, and every
+    document still counts only its own population."""
+    for hours in range(1, 7):
+        stores.run(NOW - timedelta(hours=hours), suite="vmaas")
+        stores.run(NOW - timedelta(hours=hours, minutes=5), suite="caas", conclusion="failure", failed="Install OSAC")
+    api = stores.api()
+    reads = []
+    real = api.stores.suite_run_rows
+
+    def counted(since, until):
+        reads.append((since, until))
+        time.sleep(0.05)  # long enough for every asker to arrive while the first parses
+        return real(since, until)
+
+    monkeypatch.setattr(api.stores, "suite_run_rows", counted)
+    answers = {}
+
+    def ask(kind, suite):
+        answers[(kind, suite)] = get(api, kind, days="7", suite=suite)
+
+    threads = [threading.Thread(target=ask, args=(kind, suite))
+               for kind in ("health", "failures", "time") for suite in ("vmaas", "caas")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(reads) == 1, "one parse for the window, whatever the population"
+    health = {suite: answers[("health", suite)]["suites"][0] for suite in ("vmaas", "caas")}
+    assert (health["vmaas"]["runs"], health["vmaas"]["failed"]) == (6, 0)
+    assert (health["caas"]["runs"], health["caas"]["failed"]) == (6, 6)
+
+
+def test_the_shared_run_facts_keep_at_most_a_few_windows(stores, monkeypatch):
+    """A window's facts are some 6 KB a run: three windows asked in a row
+    keep the newest FACTS_CACHE_ENTRIES, not all of them."""
+    stores.run(NOW - timedelta(hours=1))
+    api = stores.api()
+    for days in ("1", "7", "30"):
+        get(api, "health", days=days)
+    assert len(api._facts_cache) == insights.FACTS_CACHE_ENTRIES

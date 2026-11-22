@@ -333,12 +333,13 @@ def serve_artifacts(fake, api_url, artifacts, world, private_visible=True):
 
 
 def fill_test_history(trends, tmp_path, monkeypatch):
-    """trends.db as the hourly pass fills it, at the tests' clock."""
+    """trends.db as the hourly pass fills it, at the tests' clock: the pass's
+    outcome (what it read, what it left and why)."""
     monkeypatch.setattr(trends, "TOKEN", "t")
     conn = trends.open_trends_db(str(tmp_path / "trends.db"))
     try:
         runs = trends.candidate_runs(trends.stored_rows(str(tmp_path / "workflow-exporter.db"), "2026-10-01"))
-        trends._roll_up(conn, runs, False, NOW)
+        return trends._roll_up(conn, runs, False, NOW)
     finally:
         conn.close()
 
@@ -548,9 +549,11 @@ def private_refused(evidence, wfe, trends, artifact_github, tmp_path, monkeypatc
         assert evidence._process_completed_run("osac", run)
     artifacts = {503: e2e_artifacts()[503]}
     serve_artifacts(artifact_github, wfe.API_URL, artifacts, world, private_visible=False)
-    # The test history pass stops at the first private run, and stores nothing.
-    with pytest.raises(trends.GitHubRefused, match="osac-project/osac-ci-artifacts answered HTTP 404"):
-        fill_test_history(trends, tmp_path, monkeypatch)
+    # The test history pass stops at the first private run (the newest);
+    # nothing was read before it.
+    outcome = fill_test_history(trends, tmp_path, monkeypatch)
+    assert "osac-project/osac-ci-artifacts answered HTTP 404" in outcome["refused"]
+    assert (outcome["read"], outcome["left"]) == (0, 5)
     register_captures(evidence, [("vmaas-main-501-a1", 501), ("caas-main-503-a1", 503), ("vmaas-main-505-a1", 505)])
     insights = wfe.CIObserveInsights(str(tmp_path / "workflow-exporter.db"), str(tmp_path / "trends.db"),
                                      clock=lambda: NOW)
@@ -747,3 +750,28 @@ def test_an_unreadable_test_history_fails_the_check_instead_of_reporting_runs_mi
     broken.write_bytes(b"not a database")
     with pytest.raises(RuntimeError, match="test history .* could not be read"):
         audit.stored_test_results(str(broken), ["1"])
+
+
+def test_every_missing_run_has_a_counted_reason():
+    """On 2026-11-22 the summary kept the three most common raw reasons, and
+    a reason names its run: 1,148 of 2,721 missing runs had none a reader
+    could see. Reasons are counted by class now, and the counts add up."""
+    missing = {}
+    for index in range(30):
+        run_id = 44613752900 + index
+        missing[(str(run_id), "vmaas")] = ("no_data", f"no osac-logs-[<suite>-]full-install-{run_id} artifact in"
+                                                      f" run {run_id} of osac-project/osac or in"
+                                                      " osac-project/osac-ci-artifacts")
+    missing[("1", "caas")] = audit.missing_reason(None)
+    missing[("2", "caas")] = audit.missing_reason(("parsed", ""))
+    for index in range(10):
+        missing[(str(100 + index), "bmaas")] = ("no_data", f"reason number {index} of its own kind {'x' * index}")
+    reasons = audit.missing_reasons(missing)
+    assert sum(count for _, count in reasons) == len(missing)
+    assert reasons[0] == ("no osac-logs-[<suite>-]full-install-<n> artifact in run <n> of osac-project/osac or in"
+                          " osac-project/osac-ci-artifacts", 30)
+    texts = [reason for reason, _ in reasons]
+    assert any(reason.startswith("not read yet by the test-history rollup") for reason in texts)
+    assert "read, but its JUnit files hold no test of this suite" in texts
+    assert texts[-1].endswith("other reasons"), "past the kept classes, the rest is one counted entry"
+    assert len(reasons) == audit.MISSING_REASON_CLASSES + 1

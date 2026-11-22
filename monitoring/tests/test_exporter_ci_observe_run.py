@@ -918,3 +918,122 @@ def test_deployment_ships_the_run_evidence_module():
     setup = (MONITORING / "scripts" / "monitoring-setup.sh").read_text()
     assert "ci_observe_run_evidence.py:/app/ci_observe_run_evidence.py" in container
     assert "scripts/ci_observe_run_evidence.py" in setup
+
+
+SPENT = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1795000000"}
+
+
+def store_test_history(trends, tmp_path, checked_at="2026-10-10T12:00:00Z", rows=None):
+    """trends.db as the test-history rollup leaves it for RUN_ID: its
+    run_fetches row and one test_runs row per case."""
+    conn = trends.open_trends_db(str(tmp_path / "trends.db"))
+    try:
+        conn.execute("INSERT INTO run_fetches (run_id, day, state, reason, version, checked_at, finished_at)"
+                     " VALUES (?, '2026-10-10', 'parsed', '', ?, ?, '2026-10-10T10:10:00Z')",
+                     (RUN_ID, trends.PARSER_VERSION, checked_at))
+        for test_id, passed, message in rows or [
+                ("tests/e2e/vmaas::test_pass", 1, ""),
+                ("tests/e2e/vmaas::test_fail", 0, "assert 1 == 2")]:
+            conn.execute(
+                "INSERT INTO test_runs (day, repo, workflow, suite, test_id, source_sha, run_id, created_at,"
+                " duration_s, passed, suite_key, test_key, trigger, pr, message)"
+                " VALUES ('2026-10-10', 'osac', 'E2E VMaaS Full Install', 'tests/e2e/vmaas', ?, '', ?,"
+                " '2026-10-10T10:00:00Z', 2.5, ?, 'vmaas', ?, 'scheduled', '', ?)",
+                (test_id, RUN_ID, passed, test_id, message))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestFailedTestsWhenGitHubCannot:
+    """The run page and run_failed_tests keep an answer while GitHub has
+    none: on 2026-11-22 a spent budget left 8 of 10 failed runs' pages
+    without their failed tests, though the test history held them."""
+
+    def test_a_spent_budget_on_the_run_says_so(self, evidence, github):
+        """Before, only the private repository's listing named the rate
+        limit; a pull-request or merge-queue run's page said 'HTTP 403'."""
+        seed_merge_queue_run(evidence)
+        github.add(LIST_PATH, FakeResponse(403, text='{"message": "API rate limit exceeded"}', headers=SPENT))
+
+        message = refused(evidence, f"caas-main-{RUN_ID}-a1")
+
+        assert message.startswith(f"run {RUN_ID} of osac-project/osac answered HTTP 403 to the artifact listing:"
+                                  " the token's GitHub API rate limit is spent; it resets at")
+        assert TOKEN_FIX not in message, "a spent budget is not a token without access"
+
+    def test_a_spent_budget_on_the_download_says_so(self, evidence, github, wfe):
+        seed_direct_run(evidence)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            private_artifact_payload(wfe.API_URL)]}))
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(429, text="You have exceeded a secondary rate limit"))
+
+        assert "secondary rate limit (too many calls at once) is spent" in refused(evidence)
+
+    def test_the_test_history_answers_when_the_budget_is_spent(self, evidence, github, trends, tmp_path):
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests", updated_at="2026-10-10T11:00:00Z")
+        store_test_history(trends, tmp_path)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(403, text="API rate limit exceeded", headers=SPENT))
+
+        document = failed_tests(evidence)
+
+        assert document["source"] == "test_history"
+        assert [(test["classname"], test["name"], test["message"]) for test in document["failed_tests"]] == [
+            ("tests/e2e/vmaas", "test_fail", "assert 1 == 2")]
+        assert (document["tests"], document["failures"], document["errors"]) == (2, 1, None)
+        assert "rate limit is spent" in document["notes"][0]
+        assert "read from the same file at 2026-10-10T12:00:00Z" in document["notes"][0]
+        json.dumps(document, allow_nan=False)
+        # A second ask inside the error cache's two minutes still falls back:
+        # the cached error keeps its class.
+        assert failed_tests(evidence)["source"] == "test_history"
+
+    def test_the_test_history_answers_for_an_expired_artifact(self, evidence, github, trends, tmp_path, wfe):
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests", updated_at="2026-10-10T11:00:00Z")
+        store_test_history(trends, tmp_path)
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            private_artifact_payload(wfe.API_URL, expired=True)]}))
+
+        document = failed_tests(evidence)
+
+        assert document["source"] == "test_history"
+        assert "expired" in document["notes"][0]
+
+    def test_rows_read_before_the_attempt_ended_do_not_stand_in(self, evidence, github, trends, tmp_path):
+        """They may be an earlier attempt's: the refusal stays."""
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests", updated_at="2026-10-10T13:00:00Z")
+        store_test_history(trends, tmp_path, checked_at="2026-10-10T12:00:00Z")
+        github.add(PRIVATE_LIST_PATH, FakeResponse(403, text="API rate limit exceeded", headers=SPENT))
+
+        assert "rate limit is spent" in refused(evidence)
+
+    def test_a_runs_own_fact_is_not_answered_from_the_history(self, evidence, github, trends, tmp_path):
+        """No artifact in either place is the run's fact; the history (which
+        reads the same places) does not paper over it."""
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests", updated_at="2026-10-10T11:00:00Z")
+        store_test_history(trends, tmp_path)
+        nothing_either_place(github)
+
+        assert f"no {ARTIFACT_NAME} artifact in" in refused(evidence)
+
+    def test_history_rows_that_list_no_failure_for_a_failed_test_step_do_not_stand_in(
+            self, evidence, github, trends, tmp_path):
+        seed_direct_run(evidence, failed_step="e2e → Run E2E tests", updated_at="2026-10-10T11:00:00Z")
+        store_test_history(trends, tmp_path, rows=[("tests/e2e/vmaas::test_pass", 1, "")])
+        github.add(PRIVATE_LIST_PATH, FakeResponse(403, text="API rate limit exceeded", headers=SPENT))
+
+        assert "rate limit is spent" in refused(evidence)
+
+
+def test_the_budget_reads_what_github_says_is_left():
+    evidence_module = sys.modules["ci_observe_run_evidence"]
+    budget = evidence_module.GitHubBudget(2500)
+    assert not budget.low(), "unknown is not low"
+    budget.observe(FakeResponse(headers={"X-RateLimit-Remaining": "2499", "X-RateLimit-Reset": "1795000000"}))
+    assert budget.low()
+    assert budget.describe().startswith("2499 of the token's GitHub API calls are left this hour, below the 2500")
+    budget.observe(FakeResponse(headers={"X-RateLimit-Remaining": "not a number"}))
+    assert budget.remaining == 2499, "an answer without a count keeps the last one"
+    assert evidence_module.rate_limit_refusal(FakeResponse(403, text="Resource not accessible"), "x", "y") is None
+    assert evidence_module.rate_limit_refusal(FakeResponse(404, headers={"X-RateLimit-Remaining": "0"}), "x", "y") \
+        is None

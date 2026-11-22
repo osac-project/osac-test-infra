@@ -43,3 +43,26 @@ tests:
             exp_annotations:
               summary: "The ci-observe gap check has not completed in 3 hours"
               description: "The hourly check that proves the job history complete has not finished a pass GitHub answered for every day. Check the exporter's log for 'Gap check waits' (the shared GitHub budget, github_actions_gap_check_skipped_total) or 'Gap check for ... could not read GitHub'."
+
+  # The shared GitHub budget spent for 15 minutes, then back: the alert fires
+  # while it stays spent, and not before.
+  - interval: 1m
+    input_series:
+      - series: 'github_actions_api_rate_limit_remaining{org="o"}'
+        values: '4000x10 0x30 5000x10'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CiObserveGitHubBudgetExhausted
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: CiObserveGitHubBudgetExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              org: o
+            exp_annotations:
+              summary: "The GitHub API budget of the ci-observe token is spent"
+              description: "0 calls are left of the token's hourly GitHub API budget. The exporter's polling, the run pages' failed tests and every ci-observe rollup answer 403 until it resets. Check which ci-observe service is reading: the rollups stop at their reserves (CI_OBSERVE_TRENDS_GITHUB_RESERVE, CI_OBSERVE_LOGS_GITHUB_RESERVE), so a spent budget is something else, or a reserve set too low."
+      - eval_time: 48m
+        alertname: CiObserveGitHubBudgetExhausted
+        exp_alerts: []

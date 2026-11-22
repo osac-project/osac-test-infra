@@ -296,9 +296,16 @@ start_mcp_if_configured() {
         # The effective value, not the assignment's presence: "KEY=" or
         # 'KEY=""' or spaces would start a server that refuses to run and
         # restarts against the empty value every 30 seconds. Read with
-        # cut, never by sourcing the file (it holds secrets).
-        value="$(grep "^${key}=" "${MONITORING_HOME}/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
-        value="${value%\"}" ; value="${value#\"}"   # strip one pair of quotes
+        # cut, never by sourcing the file (it holds secrets). The last
+        # assignment, as systemd's EnvironmentFile reads it. A key that is
+        # absent (or no .env at all) is an empty value, not a failure: under
+        # set -euo pipefail a grep without a match ended the whole setup
+        # here, silently, before the timers were enabled.
+        value="$( { grep "^${key}=" "${MONITORING_HOME}/.env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-)"
+        # One pair of quotes, double or single, as systemd strips them.
+        if [[ "${value}" == \"*\" || "${value}" == \'*\' ]]; then
+            value="${value:1:${#value}-2}"
+        fi
         if [[ -z "${value// /}" ]]; then
             mcp_missing="${mcp_missing} ${key}"
         fi

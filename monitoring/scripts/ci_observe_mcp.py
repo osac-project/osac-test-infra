@@ -101,6 +101,10 @@ SERVER_INFO = {"name": "ci-observe", "version": "1.0.0"}
 TOKEN_SECONDS = 12 * 3600
 CODE_SECONDS = 120
 MAX_ROWS = 20
+# The most runs one list_runs page may hold when the caller asks for more
+# than MAX_ROWS: a population question over a week (152 failed runs) is a
+# few pages, not eight.
+RUNS_MAX_PAGE = 100
 
 # What one unauthenticated caller may hold. A body is read before the 401
 # (an unread body on a keep-alive connection becomes the next request's
@@ -319,13 +323,17 @@ def github_login(config: Config, code: str) -> str:
         if not answer.ok:
             raise AuthError(f"GitHub would not exchange the login code: HTTP {answer.status_code}")
         body = answer.json()
+    except ValueError:
+        # First: requests' JSONDecodeError is a RequestException too, and an
+        # answer that is not JSON is not a GitHub that cannot be reached.
+        raise AuthError("GitHub answered its token exchange with something other than JSON") from None
     except requests.exceptions.RequestException as error:
         # A network blip mid-login is an error naming GitHub, never a
         # traceback that drops the connection; the login restarts from
         # /authorize either way.
         raise AuthError(f"GitHub could not be reached to exchange the login code: {error}") from error
-    except ValueError:
-        raise AuthError("GitHub answered its token exchange with something other than JSON") from None
+    if not isinstance(body, dict):
+        raise AuthError("GitHub answered its token exchange with JSON that is not an object")
     access_token = body.get("access_token")
     if not access_token:
         detail = body.get("error") or "no error named"
@@ -339,11 +347,12 @@ def github_login(config: Config, code: str) -> str:
         )
         if not who.ok:
             raise AuthError(f"GitHub would not say who logged in: HTTP {who.status_code}")
-        login = who.json().get("login")
-    except requests.exceptions.RequestException as error:
-        raise AuthError(f"GitHub could not be reached to say who logged in: {error}") from error
+        found = who.json()
     except ValueError:
         raise AuthError("GitHub answered its user lookup with something other than JSON") from None
+    except requests.exceptions.RequestException as error:
+        raise AuthError(f"GitHub could not be reached to say who logged in: {error}") from error
+    login = found.get("login") if isinstance(found, dict) else None
     if not login:
         raise AuthError("GitHub named no login")
     return login
@@ -455,9 +464,12 @@ class Answer:
     notes: list[str]
     # How many rows the source held; rows is at most MAX_ROWS of them.
     rows_total: int = field(default=-1)
+    # The arguments that ask for the next page of the same window, when
+    # there is one: the same call with these added.
+    next_page: dict | None = field(default=None)
 
     def document(self) -> dict:
-        return {
+        document = {
             "question": self.question,
             "rows": self.rows,
             "rows_total": len(self.rows) if self.rows_total < 0 else self.rows_total,
@@ -468,6 +480,9 @@ class Answer:
             "not_answerable": self.not_answerable,
             "notes": self.notes,
         }
+        if self.next_page:
+            document["next_page"] = self.next_page
+        return document
 
 
 class ToolError(Exception):
@@ -738,6 +753,25 @@ TOOLS: list[Tool] = [
         "ci-observe-home", "ci-observe-e28094-overview",
         lambda pop: _population_question("Slowest tests", pop),
     ),
+    _insight_tool(
+        "time_phases",
+        "Where a run's time goes, phase by phase (queue, setup, cluster, build, install, tests,"
+        " teardown): each phase's median and mean per run and its share of the run, from the"
+        " job and step timelines.",
+        "time",
+        _rows_of("phases"),
+        "ci-observe-time", "ci-observe-e28094-where-the-time-goes",
+        lambda pop: _population_question("Time per phase", pop),
+    ),
+    _insight_tool(
+        "waits",
+        "What the tests waited on the product for, from the in-test spans: each wait's resource"
+        " kind and what it waited for, how often, and how long in total and per run.",
+        "waits",
+        _rows_of("waits"),
+        "ci-observe-time", "ci-observe-e28094-where-the-time-goes",
+        lambda pop: _population_question("Product waits", pop),
+    ),
 ]
 
 
@@ -840,7 +874,16 @@ def _list_runs(config: Config, arguments: dict) -> Answer:
     repo = _need_str(arguments, "repo", REPOS)
     days = _need_int(arguments, "days", 1, RUNS_MAX_DAYS)
     end = _need_end(arguments, days, RUNS_MAX_DAYS, "the job history")
-    params = {"days": str(days), "repo": repo, "suite": suite, "result": result, "limit": str(MAX_ROWS)}
+    limit = _need_int(arguments, "limit", 1, RUNS_MAX_PAGE) if "limit" in arguments else MAX_ROWS
+    before = arguments.get("before")
+    if before is not None and (not isinstance(before, str) or not before.isascii() or not before.isdigit()
+                               or len(before) > 20):
+        raise ToolError("before must be the next_page.before of the previous answer: a run id, digits only")
+    params = {"days": str(days), "repo": repo, "suite": suite, "result": result, "limit": str(limit)}
+    if before:
+        # Keyset paging in the exporter: the runs older than this id, in
+        # the same window. A page neither repeats nor skips a run.
+        params["before"] = before
     question = f"{result} runs of the {suite} suite in {repo}, last {days} days"
     if end:
         # A window ending in the past: the runs of the week a regression
@@ -852,12 +895,15 @@ def _list_runs(config: Config, arguments: dict) -> Answer:
     not_answerable = ""
     notes = []
     total = 0
+    next_page = None
     if status == 200 and isinstance(body, dict):
-        rows = [row for row in body.get("runs") or [] if isinstance(row, dict)][:MAX_ROWS]
+        rows = [row for row in body.get("runs") or [] if isinstance(row, dict)][:limit]
         total = body.get("total") if isinstance(body.get("total"), int) else len(rows)
-        if body.get("truncated") or total > len(rows):
-            notes.append(f"showing the {len(rows)} newest of {total} runs in this window;"
-                         " move end back or narrow the question for the rest")
+        cursor = body.get("next_before")
+        if cursor and rows:
+            next_page = {"before": str(cursor)}
+            notes.append(f"this page holds {len(rows)} of the {total} runs in this window, newest first;"
+                         f" the same call with before={cursor} returns the next page")
         if not rows:
             not_answerable = "no runs match in this window"
     else:
@@ -873,6 +919,7 @@ def _list_runs(config: Config, arguments: dict) -> Answer:
         not_answerable=not_answerable,
         notes=notes,
         rows_total=total,
+        next_page=next_page,
     )
 
 
@@ -916,6 +963,12 @@ def _pull_request_stats(config: Config, arguments: dict) -> Answer:
     )
 
 
+def _pull_request_key(row: dict) -> tuple[str, int]:
+    """(moment, number): the pull_requests page order."""
+    number = row.get("number")
+    return _pull_request_moment(row), number if isinstance(number, int) and not isinstance(number, bool) else 0
+
+
 def _pull_request_moment(row: dict) -> str:
     """The time the pull request index orders and windows a row by: when it
     merged, else when it closed, else when it opened."""
@@ -933,6 +986,15 @@ def _pull_requests(config: Config, arguments: dict, now: datetime | None = None)
         raise ToolError("state is required: all, merged, open or closed")
     now = now or datetime.now(timezone.utc)
     end = _need_end(arguments, days, PRS_MAX_DAYS, "the pull request store", now)
+    before = arguments.get("before")
+    cursor = None
+    if before is not None:
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\|(\d{1,9})", before) \
+            if isinstance(before, str) else None
+        if match is None:
+            raise ToolError("before must be the next_page.before of the previous answer"
+                            " (a moment and a number: 2026-11-06T12:00:00Z|2311)")
+        cursor = (match.group(1), int(match.group(2)))
     window_to = _parse_end(end) if end else now
     window_from = window_to - timedelta(days=days)
     # The index windows by the same moment from now; a window ending in the
@@ -944,6 +1006,7 @@ def _pull_requests(config: Config, arguments: dict, now: datetime | None = None)
     else:
         question = f"{state} pull requests of {repo}, last {days} days"
     notes = []
+    next_page = None
     status, body = fetch_json(config, f"/api/ci-observe/prs?{urllib.parse.urlencode(params)}")
     rows = []
     total = 0
@@ -954,13 +1017,18 @@ def _pull_requests(config: Config, arguments: dict, now: datetime | None = None)
                  if low <= _pull_request_moment(row) <= high]
         if state != "all":
             every = [row for row in every if (row.get("state") or "") == state]
-        every.sort(key=_pull_request_moment, reverse=True)
+        # Latest first, ties by number: the order a cursor pages through, so
+        # a page neither repeats nor skips a pull request that shares its
+        # moment with another, and the window stays the one asked for.
+        every.sort(key=_pull_request_key, reverse=True)
         total = len(every)
-        rows = every[:MAX_ROWS]
-        if total > MAX_ROWS:
-            oldest = _pull_request_moment(rows[-1])
-            notes.append(f"showing the {MAX_ROWS} latest of {total} pull requests in the window;"
-                         f" ask again with end={oldest} for the earlier ones")
+        page = [row for row in every if cursor is None or _pull_request_key(row) < cursor]
+        rows = page[:MAX_ROWS]
+        if len(page) > MAX_ROWS:
+            moment, number = _pull_request_key(rows[-1])
+            next_page = {"before": f"{moment}|{number}"}
+            notes.append(f"this page holds {len(rows)} of the {total} pull requests in the window, latest"
+                         f" first; the same call with before={next_page['before']} returns the next page")
         if not rows:
             not_answerable = f"the pull request store holds no {state} pull requests of {repo} in this window"
     else:
@@ -980,6 +1048,7 @@ def _pull_requests(config: Config, arguments: dict, now: datetime | None = None)
         not_answerable=not_answerable,
         notes=notes + (list(body.get("notes") or []) if isinstance(body, dict) else []),
         rows_total=total,
+        next_page=next_page,
     )
 
 
@@ -1058,7 +1127,9 @@ TOOLS.extend([
                     " keeps 30 days). end moves the window into the past (a UTC date like"
                     " 2026-11-07 or time like 2026-11-07T12:00:00Z), so the runs of the week"
                     " something broke are one call instead of pages past everything newer; the"
-                    " window must lie inside the 30 days.",
+                    " window must lie inside the 30 days. A window with more runs than a page"
+                    " (limit, 20 by default, at most 100) answers with next_page: the same call"
+                    " with its before returns the next page of the same window.",
         schema={
             "type": "object",
             "properties": {
@@ -1068,6 +1139,10 @@ TOOLS.extend([
                 "days": {"type": "integer", "minimum": 1, "maximum": RUNS_MAX_DAYS},
                 "end": {"type": "string",
                         "description": "window end: a UTC date (2026-11-07) or time (2026-11-07T12:00:00Z)"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": RUNS_MAX_PAGE,
+                          "description": f"runs per page (default {MAX_ROWS})"},
+                "before": {"type": "string",
+                           "description": "the next page: next_page.before of the previous answer"},
             },
             "required": ["suite", "result", "repo", "days"],
         },
@@ -1094,7 +1169,8 @@ TOOLS.extend([
                     " move: ask 'which PRs merged in this window' here, then pull_request_detail on"
                     " the suspects. end moves the window into the past (a UTC date like 2026-11-06"
                     " or time like 2026-11-06T12:00:00Z), so the merges of the week a regression"
-                    " started are one call; more than 20 are paged by moving end back.",
+                    " started are one call. More than 20 answer with next_page: the same call with"
+                    " its before returns the next page of the same window.",
         schema={
             "type": "object",
             "properties": {
@@ -1103,6 +1179,8 @@ TOOLS.extend([
                 "state": {"type": "string", "enum": ["all", "merged", "open", "closed"]},
                 "end": {"type": "string",
                         "description": "window end: a UTC date (2026-11-06) or time (2026-11-06T12:00:00Z)"},
+                "before": {"type": "string",
+                           "description": "the next page: next_page.before of the previous answer"},
             },
             "required": ["repo", "days", "state"],
         },
@@ -1514,13 +1592,17 @@ class McpHandler(BaseHTTPRequestHandler):
                                                      "error_description": "the code verifier"
                                                      " does not match"})
             return
-        # RFC 6749 4.1.3: the exchange is the authorization's own client
-        # and redirect URI. Both are required here -- the client is public
-        # (no secret to authenticate it), so its id is the only thing that
-        # names it, and every authorization of ours carried a redirect URI.
+        # The exchange is the authorization's own client and redirect URI.
+        # The client id is required: the client is public (no secret to
+        # authenticate it), so its id is the only thing that names it
+        # (RFC 6749 4.1.3 and OAuth 2.1 alike). The redirect URI is checked
+        # when sent and may be left out: OAuth 2.1 (10.2), which MCP's
+        # authorization builds on, drops it from the token request, since
+        # PKCE binds the code to its client; a server MUST accept and
+        # enforce it when a client sends it.
         sent_client = (form.get("client_id") or [""])[0]
         sent_redirect = (form.get("redirect_uri") or [""])[0]
-        if sent_client != entry["client_id"] or sent_redirect != entry["redirect_uri"]:
+        if sent_client != entry["client_id"] or (sent_redirect and sent_redirect != entry["redirect_uri"]):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_grant",
                                                      "error_description": "the code was issued to another"
                                                      " client or redirect URI"})

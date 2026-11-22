@@ -470,6 +470,36 @@ class TestArtifactFetch:
         assert len(cases) == 3
         assert github.count(LIST_PATH) == 0, "a scheduled run's own artifacts are not asked"
 
+    def test_a_one_suite_run_asks_the_private_repository_for_its_own_artifact_only(self, trends, github, wfe):
+        """The private repository is listed by name, one call a name: a VMaaS
+        run asks for its own artifact, not all three suites', a third of the
+        calls on the budget everything shares. A run whose suites are not
+        all known asks for all three."""
+        vmaas = f"osac-logs-full-install-{RUN_ID}"
+        github.add(PRIVATE_NAME_PATH.format(name=vmaas),
+                   FakeResponse(payload={"total_count": 1, "artifacts": [private_entry(wfe.API_URL)]}))
+        github.add("/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip",
+                   FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+        fetcher = trends.ArtifactFetcher(token=TOKEN)
+        run = {"run_id": RUN_ID, "repo": "osac", "trigger": "scheduled", "suites": ["vmaas"]}
+        cases, reason = fetcher.fetch(run)
+        assert reason is None and len(cases) == 3
+        assert [call for call in github.calls if "osac-ci-artifacts" in call and "name=" in call] == [
+            PRIVATE_NAME_PATH.format(name=vmaas)]
+        github.calls.clear()
+        for name in (f"osac-logs-caas-full-install-{RUN_ID}", f"osac-logs-bmaas-full-install-{RUN_ID}"):
+            github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        fetcher.fetch({**run, "suites": []})
+        assert len([call for call in github.calls if "name=" in call]) == 3
+
+    def test_a_run_knows_the_suites_its_rows_name(self, trends):
+        merge_queue = trends.candidate_runs([
+            suite_row(5, workflow="E2E vmaas (merge queue)"), suite_row(6, workflow="E2E caas (merge queue)")])
+        direct = trends.candidate_runs([run_row()])
+        unknown = trends.candidate_runs([run_row(workflow="E2E Something Else")])
+        assert (merge_queue[0]["suites"], direct[0]["suites"], unknown[0]["suites"]) == (
+            ["caas", "vmaas"], ["vmaas"], [])
+
     @pytest.mark.parametrize("status", [401, 403, 404])
     def test_a_private_repository_that_refuses_the_token_stops_the_pass(self, trends, github, status):
         github.add(PRIVATE_NAME_PATH.format(name=f"osac-logs-full-install-{RUN_ID}"),
