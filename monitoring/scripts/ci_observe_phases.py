@@ -380,6 +380,11 @@ MESSAGE_SIGNATURE_RES = (
     (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I), "<id>"),
     (re.compile(r"\b(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+\b"), "<id>"),
     (re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,}\b", re.I), "<id>"),
+    # A filesystem path in prose: the variable part of messages like
+    # "skipping a dir without errors: /manifests", which otherwise split
+    # into one signature per directory and crowd the ranking. The path is
+    # rarely the signal; where it is, the kind and the raw line carry it.
+    (re.compile(r"(?<![\w`\"'])/(?:[\w.-]+/)*[\w.-]+"), "<path>"),
     (re.compile(r"\b\d+(\.\d+)?s?\b"), "N"),
 )
 

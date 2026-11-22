@@ -1342,7 +1342,12 @@ class CIObserveInsights:
             return [], ("the artifact log rollup has indexed no bundle of this window yet, so no error"
                         " signatures are known (ci-observe-logs.timer)")
         for row in rows:
-            row["logs_query"] = '{source="artifact", signature="%s"}' % row["signature"].replace('"', "")
+            # The drill-down selects the runs that show the signature, not
+            # the signature label: the label is the table's normalization
+            # of the line, and Loki's copy of it can lag a normalization
+            # change. The runs' lines are the verbatim evidence either way.
+            row["logs_query"] = '{source="artifact", run_id=~"%s"}' % "|".join(
+                run.replace('"', "") for run in row["runs"])
         rows = [row for row in rows if row["failed_runs"]]
         rows.sort(key=lambda row: (-(row["failed_runs"] - row["passing_runs"]), -row["failed_runs"],
                                    row["signature"]))

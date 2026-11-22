@@ -414,6 +414,11 @@ def main(argv=None):
     parser.add_argument("--failures-only", action="store_true",
                         help="skip passing runs (their signatures are the noise baseline; "
                              "the hourly pass wants them, a backfill may not)")
+    parser.add_argument("--resign", action="store_true",
+                        help="recompute the signature table of runs already recorded as indexed,"
+                             " pushing nothing to Loki (their lines are already there). For"
+                             " repairing the table after the signature normalization changes;"
+                             " a plain re-index would duplicate every line in Loki.")
     args = parser.parse_args(argv)
 
     if not TOKEN:
@@ -434,16 +439,21 @@ def main(argv=None):
         row = state.execute("SELECT state FROM artifact_logs WHERE run_id = ? AND suite = ?",
                             (run["run_id"], run["suite"])).fetchone()
         if row and not args.force:
-            if row["state"] == "indexed":
-                skipped += 1
-                continue
             if row["state"] == "unavailable":
                 # The run's own fact (expired, unreadable); only a forced
                 # pass says it again.
                 skipped += 1
                 continue
+            if row["state"] == "indexed" and not args.resign:
+                skipped += 1
+                continue
             # "missing": a collect run can trail its source run by minutes,
             # so a missing bundle is asked for again every pass.
+        if args.resign and (row is None or row["state"] != "indexed"):
+            # A repair pass recomputes what was indexed; a run with no
+            # recorded bundle has nothing to recompute.
+            skipped += 1
+            continue
         try:
             bundle = list_bundle(run, headers)
             if bundle is None:
@@ -471,9 +481,9 @@ def main(argv=None):
                             run["outcome"], reason)
                 continue
             streams, signatures, counts = read_bundle(archive, run)
+            if not args.dry_run and streams and not args.resign:
+                push_streams(streams, session)
             if not args.dry_run:
-                if streams:
-                    push_streams(streams, session)
                 record_run(state, run, "indexed", "", counts, now)
                 record_signatures(state, run, signatures)
             indexed += 1
