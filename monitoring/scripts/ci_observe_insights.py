@@ -473,12 +473,15 @@ class Stores:
         finally:
             conn.close()
 
-    def artifact_signatures(self, run_ids):
+    def artifact_signatures(self, run_ids, suite="all"):
         """[{signature, kind, phase, failed_runs, passing_runs, failed_lines,
         runs}] for the given runs, from the artifact-log rollup's table: how
         many failed and how many passing runs of this set show each error
-        signature. [] when the rollup has indexed nothing yet (its table is
-        absent); None when the table cannot be read: a read failure is not
+        signature. A merge-queue run holds three bundles (one per suite),
+        so the table carries its signatures under all three; `suite`
+        narrows to one suite's bundles, and "all" reads every suite's.
+        [] when the rollup has indexed nothing yet (its table is absent);
+        None when the table cannot be read: a read failure is not
         "no signatures"."""
         if not run_ids:
             return []
@@ -489,12 +492,13 @@ class Stores:
             if "artifact_log_signatures" not in self._tables(conn):
                 return []
             grouped = {}
+            suite_filter = "" if suite == "all" or suite not in phases.SUITES else "AND suite = ?"
             for start in range(0, len(run_ids), 400):
                 chunk = run_ids[start:start + 400]
                 marks = ",".join("?" * len(chunk))
                 rows = conn.execute(
                     "SELECT signature, kind, phase, outcome, run_id, lines FROM artifact_log_signatures"
-                    f" WHERE run_id IN ({marks})", chunk)
+                    f" WHERE run_id IN ({marks}) {suite_filter}", chunk if not suite_filter else [*chunk, suite])
                 for row in rows:
                     key = (row["signature"], row["kind"], row["phase"] or "")
                     entry = grouped.setdefault(
@@ -1334,7 +1338,7 @@ class CIObserveInsights:
         empty answer without a note means the window's bundles held no
         error lines at all."""
         run_ids = [str(fact["run_id"]) for fact in finished]
-        rows = self.stores.artifact_signatures(run_ids)
+        rows = self.stores.artifact_signatures(run_ids, filters.suite)
         if rows is None:
             return [], ("the artifact log signature table could not be read, so the error signatures"
                         " of this window are unknown")

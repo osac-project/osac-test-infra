@@ -5265,7 +5265,13 @@ class WorkflowExporter:
         run. None when Loki refused: "no lines" is a fact, a refusal is
         not, and the caller keeps the original error then."""
         query = quote(f'{{source="artifact", run_id="{run_id}", signature!=""}}')
-        url = f"{self._captures.loki_url}/loki/api/v1/query_range?query={query}&limit={limit}"
+        # The whole retention, just under Loki's 30d1h query-length limit:
+        # a run's lines carry the run's own timestamps, so a default
+        # (last hour) range would answer nothing for any run older than
+        # an hour, and a range over the limit is a 400.
+        start = int((time.time() - 29 * 86400) * 1e9)
+        url = (f"{self._captures.loki_url}/loki/api/v1/query_range?query={query}"
+               f"&limit={limit}&start={start}&end={int(time.time() * 1e9)}")
         try:
             response = requests.get(url, timeout=10)
         except requests.exceptions.RequestException as error:

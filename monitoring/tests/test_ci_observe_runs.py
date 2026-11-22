@@ -1174,6 +1174,22 @@ def test_the_exporter_exposes_the_endpoints(exporter, jobs, fresh):
     assert cohorts_doc["cohorts"]
 
 
+def test_an_end_moves_the_runs_window_into_the_past(exporter, jobs, fresh):
+    """The runs of the week something broke are one call, not pages past
+    everything newer. This pins the crash the first app-SRE persona found:
+    the end parsing called a module function that did not exist, and every
+    request with an end dropped the connection."""
+    doc = exporter.get_ci_observe_runs_json({"days": ["7"], "end": ["2026-11-07"]})
+
+    assert doc["window_to"].startswith("2026-11-07"), "the window ends at the end parameter"
+    assert doc["window_from"].startswith("2026-10-31")
+    assert all(run["created_at"] <= doc["window_to"] for run in doc["runs"] if run["created_at"])
+
+    junk = exporter.get_ci_observe_runs_json({"days": ["7"], "end": ["not a date"]})
+    assert any("is neither a date nor a past moment" in note for note in junk["notes"])
+    assert junk["window_to"] == doc["window_to"] or junk["runs"], "the window still answers"
+
+
 class TestHTTP:
     @pytest.fixture
     def base_url(self, wfe, exporter, monkeypatch):

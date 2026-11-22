@@ -62,6 +62,7 @@ import sys
 import time
 import urllib.parse
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
@@ -682,6 +683,26 @@ def _pull_request_stats(config: Config, arguments: dict) -> Answer:
     )
 
 
+def _window_boundary(end_text, days):
+    """(end iso, fetch days) for a window ending at `end_text`: the days
+    to fetch must reach back to the window's start (end minus days), not
+    to now minus days, or the store never serves the window's rows."""
+    try:
+        end = datetime.strptime(end_text, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        try:
+            end = datetime.fromisoformat(end_text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if end > now:
+        return None
+    reach = (now - (end - timedelta(days=days))).days + 1
+    return end.strftime("%Y-%m-%dT%H:%M:%SZ"), max(1, min(reach, PRS_MAX_DAYS))
+
+
 def _pull_requests(config: Config, arguments: dict) -> Answer:
     """The window's pull requests as rows: number, title, author, when it
     merged, its queue attempts and ejections. This is the "what merged
@@ -692,6 +713,16 @@ def _pull_requests(config: Config, arguments: dict) -> Answer:
     if not isinstance(state, str) or state not in ("all", "merged", "open", "closed"):
         raise ToolError("state is required: all, merged, open or closed")
     params = {"days": str(days), "repo": repo}
+    question = f"{state} pull requests of {repo}, last {days} days"
+    notes = []
+    end = arguments.get("end")
+    boundary = None
+    if isinstance(end, str) and end.strip():
+        boundary = _window_boundary(end.strip(), days)
+        if boundary is None:
+            raise ToolError(f"end={end!r} is neither a past date nor a past moment")
+        params["days"] = str(boundary[1])
+        question = f"{state} pull requests of {repo}, the {days} days before {end.strip()}"
     status, body = fetch_json(config, f"/api/ci-observe/prs?{urllib.parse.urlencode(params)}")
     rows = []
     not_answerable = ""
@@ -700,6 +731,14 @@ def _pull_requests(config: Config, arguments: dict) -> Answer:
         rows = [row for row in (every or []) if isinstance(row, dict)]
         if state != "all":
             rows = [row for row in rows if (row.get("state") or "") == state]
+        if boundary:
+            # Keep the window's rows (merged on or before the end) and say
+            # what was cut: the store serves newest-first, so a window
+            # ending in the past hides nothing once the fetch reached its
+            # start.
+            rows = [row for row in rows
+                    if (row.get("merged_at") or row.get("opened_at") or "") <= boundary[0]]
+            notes.append(f"the {days} days before {end.strip()}; older merges are not listed")
         if not rows:
             not_answerable = f"the pull request store holds no {state} pull requests of {repo} in this window"
     else:
@@ -709,7 +748,7 @@ def _pull_requests(config: Config, arguments: dict) -> Answer:
     rows = [{key: row.get(key) for key in keep if row.get(key) is not None} for row in rows]
     rows.sort(key=lambda row: row.get("merged_at") or row.get("opened_at") or "", reverse=True)
     return Answer(
-        question=f"{state} pull requests of {repo}, last {days} days",
+        question=question,
         rows=rows[:MAX_ROWS],
         api_url=f"{config.exporter_url}/api/ci-observe/prs?{urllib.parse.urlencode(params)}",
         grafana_url=(f"{config.grafana_url}/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests"
@@ -717,7 +756,7 @@ def _pull_requests(config: Config, arguments: dict) -> Answer:
         about=(body.get("about") or [None])[0] if isinstance(body, dict) else None,
         window=None,
         not_answerable=not_answerable,
-        notes=list(body.get("notes") or []) if isinstance(body, dict) else [],
+        notes=notes + (list(body.get("notes") or []) if isinstance(body, dict) else []),
     )
 
 
@@ -826,13 +865,15 @@ TOOLS.extend([
         description="The pull requests of a window as rows: number, title, author, when it merged,"
                     " queue attempts and ejections. The change list behind a pass-rate move: ask"
                     " 'which PRs merged in this window' here, then pull_request_detail on the"
-                    " suspects.",
+                    " suspects. end moves the window into the past (a date like 2026-11-06), so"
+                    " the merges of the week a regression started are one call.",
         schema={
             "type": "object",
             "properties": {
                 "repo": {"type": "string", "enum": list(REPOS)},
                 "days": {"type": "integer", "minimum": 1, "maximum": PRS_MAX_DAYS},
                 "state": {"type": "string", "enum": ["all", "merged", "open", "closed"]},
+                "end": {"type": "string", "description": "window end: a date (2026-11-06) or ISO moment"},
             },
             "required": ["repo", "days", "state"],
         },

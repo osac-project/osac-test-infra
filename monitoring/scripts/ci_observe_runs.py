@@ -159,7 +159,7 @@ class CIObserveRuns:
         end_text = (params.get("end", [""])[0] or "").strip()
         end = None
         if end_text:
-            end = _parse_end(end_text)
+            end = self._parse_end(end_text)
             if end is None:
                 notes.append(f"end={end_text!r} is neither a date nor a past moment; the window ends now")
             elif end > now:
