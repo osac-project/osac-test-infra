@@ -114,6 +114,13 @@ limits_config:
   max_global_streams_per_user: 500000
   ingestion_rate_mb: 50
   ingestion_burst_size_mb: 100
+  # The artifact-log backfill pushes the regression window's bundles with
+  # their real timestamps, and Loki's default oldest-acceptable age is
+  # max_chunk_age (168h here), so it refused lines older than a week
+  # ("timestamp too old"). The timestamps come from the logs themselves,
+  # not from a skewed clock; the bound protects nothing here. 720h is the
+  # retention: nothing older can be stored anyway.
+  reject_old_samples_max_age: 720h
   otlp_config:
     resource_attributes:
       attributes_config:

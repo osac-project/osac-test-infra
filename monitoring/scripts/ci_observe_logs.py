@@ -226,14 +226,18 @@ def runs_in_window(days, now, failures_only):
     """The in-scope suite runs inside the window, newest first: [{run_id,
     repo, trigger, workflow, suite, conclusion, failed_step, attempt,
     finished_at, outcome}]. A merge-queue run appears once per suite (it
-    holds three bundles); every other run once for its own suite."""
+    holds three bundles); every other run once for its own suite. The
+    trigger is the taxonomy word (pr, merge_queue, scheduled, manual) the
+    artifact places route on, not the raw stored text ("merge queue (PR
+    #2180)"): the stored text names the run, the taxonomy names where its
+    artifact lives."""
     conn = sqlite3.connect(f"file:{EXPORTER_DB}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     since = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     conclusion = "AND conclusion = 'failure'" if failures_only else "AND conclusion IN ('success', 'failure')"
     try:
         rows = conn.execute(
-            "SELECT run_id, repo, workflow, trigger, failed_step, conclusion, updated_at, run_attempt"
+            "SELECT run_id, repo, workflow, event, trigger, failed_step, conclusion, updated_at, run_attempt"
             f" FROM jobs WHERE category = 'e2e' {conclusion}"
             " AND updated_at >= ? ORDER BY updated_at DESC", (since,)).fetchall()
     finally:
@@ -244,7 +248,8 @@ def runs_in_window(days, now, failures_only):
         if not suite:
             continue
         runs.append({
-            "run_id": str(row["run_id"]), "repo": row["repo"], "trigger": row["trigger"],
+            "run_id": str(row["run_id"]), "repo": row["repo"],
+            "trigger": phases.trigger_key(row["event"], row["workflow"]),
             "workflow": row["workflow"], "failed_step": row["failed_step"], "suite": suite,
             "conclusion": row["conclusion"], "outcome": "success" if row["conclusion"] == "success" else "failure",
             "attempt": str(row["run_attempt"] or 1),
