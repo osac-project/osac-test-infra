@@ -179,6 +179,12 @@ def parse_line_time(line, fallback):
 
 
 def is_error_line(line):
+    stripped = line.strip()
+    # The gather script's own markers: the summary file's header and its
+    # per-file separators ("--- path ---", "PLAY RECAP"). They carry the
+    # words the error patterns grep for, and they say nothing failed.
+    if stripped.startswith("===") or stripped.startswith("---") or stripped == "PLAY RECAP":
+        return False
     return bool(ERROR_LINE_RE.search(line)) and not NOT_ERROR_RE.search(line)
 
 
