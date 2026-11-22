@@ -15,7 +15,16 @@
 #     label-values query on osac_ci_capture_id) stayed empty: every panel filtered
 #     on an empty variable and showed no data. The list below replaces the
 #     defaults, so it repeats them and adds the osac.ci attributes (capture id,
-#     observed namespace, suite and PR).
+#     observed namespace, suite, PR, and the run's own id, attempt and workflow:
+#     without run_id in the list it displays on every stream but no selector can
+#     filter on it).
+#   - limits_config.max_query_series 50000 (stock 500): the artifact-log rollup
+#     labels error lines by normalized signature, and any aggregate over a week
+#     of them reads more than 500 streams, which the stock bound refuses.
+#   - limits_config.max_global_streams_per_user 500000 and a raised ingestion
+#     rate (stock 5000 streams, 4 MB/s): the rollup creates one stream per
+#     (run, signature) and the stock bound refused its pushes after two days
+#     of bundles.
 #   - server.grpc_server_max_recv_msg_size and grpc_server_max_send_msg_size 32 MiB
 #     (stock 4 MiB): a query over a whole 20-minute capture returns a response
 #     larger than 4 MiB and Loki failed with ResourceExhausted (4505394 vs.
@@ -92,6 +101,19 @@ compactor:
 
 limits_config:
   retention_period: 720h
+  # The artifact-log rollup labels every error line with its normalized
+  # signature: a week of failed runs holds tens of thousands of streams,
+  # and the stock 500-series query bound refuses any aggregate over them
+  # ("maximum number of series (500) reached"). This stack is single-user
+  # and localhost-only, so the bound protects nothing here.
+  max_query_series: 50000
+  # The same rollup creates one stream per (run, signature); the live
+  # capture lane already runs thousands. The stock 5000 active-stream bound
+  # refused the pushes ("maximum active stream limit exceeded") after two
+  # days of bundles. Single user, localhost-only: raise it out of the way.
+  max_global_streams_per_user: 500000
+  ingestion_rate_mb: 50
+  ingestion_burst_size_mb: 100
   otlp_config:
     resource_attributes:
       attributes_config:
@@ -119,3 +141,10 @@ limits_config:
             - osac.ci.observed_namespace
             - osac.ci.suite
             - osac.ci.pr
+            # The run's own identity: without run_id here it arrives as
+            # structured metadata, which every query result displays but no
+            # selector can filter on, so "the logs of run X" answered
+            # nothing until capture_id (which embeds it) was used instead.
+            - osac.ci.run_id
+            - osac.ci.run_attempt
+            - osac.ci.workflow

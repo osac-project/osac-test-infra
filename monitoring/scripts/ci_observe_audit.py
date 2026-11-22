@@ -923,28 +923,36 @@ def run_trigger(row):
 
 
 def artifact_failures(github, repo, run_id, suite, trigger):
-    """The JUnit file of one suite of a run, read here from the one place
-    its trigger says (the run itself for a pull-request or merge-queue run,
-    osac-ci-artifacts for a scheduled or manual one): {"failed", "tests",
-    "where", "note"}. failed is None when it could not be read."""
+    """The JUnit file of one suite of a run, read from the two places it
+    can be (its own run and osac-ci-artifacts, the place its trigger says
+    first; see ci_observe_run_evidence.find_artifacts for the eras):
+    {"failed", "tests", "where", "note"}. failed is None when it could not
+    be read."""
     if suite not in SUITE_ARTIFACTS:
         return {"failed": None, "tests": 0, "where": "", "note": "the capture names no suite"}
     name = SUITE_ARTIFACTS[suite].format(run=run_id)
+    on_the_run = (f"run {run_id} of {ORG}/{repo}",
+                  f"/repos/{ORG}/{repo}/actions/runs/{run_id}/artifacts?per_page=100")
+    in_the_private_repo = (f"{ORG}/{PRIVATE_ARTIFACTS}",
+                           f"/repos/{ORG}/{PRIVATE_ARTIFACTS}/actions/artifacts?name={name}&per_page=100")
     if trigger in ("pr", "merge_queue"):
-        where = f"run {run_id} of {ORG}/{repo}"
-        path = f"/repos/{ORG}/{repo}/actions/runs/{run_id}/artifacts?per_page=100"
+        places = [on_the_run, in_the_private_repo]
     elif trigger in ("scheduled", "manual"):
-        where = f"{ORG}/{PRIVATE_ARTIFACTS}"
-        path = f"/repos/{ORG}/{PRIVATE_ARTIFACTS}/actions/artifacts?name={name}&per_page=100"
+        places = [in_the_private_repo, on_the_run]
     else:
         return {"failed": None, "tests": 0, "where": "", "note": f"a {trigger} run has no known artifact place"}
-    status, listing = github.try_get(path)
-    if status != 200:
-        answer = f"answered HTTP {status}" if status else "did not answer"
-        return {"failed": None, "tests": 0, "where": where, "note": f"{where} {answer}"}
-    artifacts = [a for a in (listing or {}).get("artifacts") or [] if a.get("name") == name]
+    where, note, artifacts = "", "", []
+    for where, path in places:
+        status, listing = github.try_get(path)
+        if status != 200:
+            answer = f"answered HTTP {status}" if status else "did not answer"
+            return {"failed": None, "tests": 0, "where": where, "note": f"{where} {answer}"}
+        artifacts = [a for a in (listing or {}).get("artifacts") or [] if a.get("name") == name]
+        if artifacts:
+            break
     if not artifacts:
-        return {"failed": None, "tests": 0, "where": where, "note": f"no {name} in {where}"}
+        return {"failed": None, "tests": 0, "where": where,
+                "note": f"no {name} in {places[0][0]} or in {places[1][0]}"}
     artifact = max(artifacts, key=lambda a: a.get("created_at") or "")
     if artifact.get("expired"):
         return {"failed": None, "tests": 0, "where": where, "note": f"{name} has expired"}

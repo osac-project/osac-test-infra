@@ -506,6 +506,18 @@ TOOLS: list[Tool] = [
         lambda pop: _population_question("Failure causes", pop),
     ),
     _insight_tool(
+        "failure_signatures",
+        "Why runs fail, from the failed runs' own logs: error signatures (the message with ids and"
+        " numbers replaced), how many failed and passing runs show each, first and last seen, and"
+        " example runs. Ranked by how much more failed runs show a signature than passing ones:"
+        " the comparison that separates a cause from noise every cluster logs. Each row's"
+        " logs_query is a Loki selector for the raw lines.",
+        "failures",
+        _rows_of("signatures"),
+        "ci-observe-failures", "ci-observe-e28094-why-runs-fail",
+        lambda pop: _population_question("Failure signatures", pop),
+    ),
+    _insight_tool(
         "time_to_result",
         "Time to result (median, p90, mean), the runner wait and runner hours.",
         "time",
@@ -656,6 +668,45 @@ def _pull_request_stats(config: Config, arguments: dict) -> Answer:
     )
 
 
+def _pull_requests(config: Config, arguments: dict) -> Answer:
+    """The window's pull requests as rows: number, title, author, when it
+    merged, its queue attempts and ejections. This is the "what merged
+    around the drop" tool -- the change list behind a pass-rate move."""
+    repo = _need_str(arguments, "repo", REPOS)
+    days = _need_int(arguments, "days", 1, PRS_MAX_DAYS)
+    state = arguments.get("state")
+    if not isinstance(state, str) or state not in ("all", "merged", "open", "closed"):
+        raise ToolError("state is required: all, merged, open or closed")
+    params = {"days": str(days), "repo": repo}
+    status, body = fetch_json(config, f"/api/ci-observe/prs?{urllib.parse.urlencode(params)}")
+    rows = []
+    not_answerable = ""
+    if status == 200 and isinstance(body, dict):
+        every = body.get("pull_requests") if isinstance(body.get("pull_requests"), list) else body.get("prs")
+        rows = [row for row in (every or []) if isinstance(row, dict)]
+        if state != "all":
+            rows = [row for row in rows if (row.get("state") or "") == state]
+        if not rows:
+            not_answerable = f"the pull request store holds no {state} pull requests of {repo} in this window"
+    else:
+        not_answerable = f"the exporter answered HTTP {status} for the pull request document"
+    keep = ("number", "repo", "title", "author", "state", "opened_at", "merged_at", "closed_at",
+            "queue_attempt_count", "ejected_attempt_count", "requeued_attempt_count", "url", "detail_url")
+    rows = [{key: row.get(key) for key in keep if row.get(key) is not None} for row in rows]
+    rows.sort(key=lambda row: row.get("merged_at") or row.get("opened_at") or "", reverse=True)
+    return Answer(
+        question=f"{state} pull requests of {repo}, last {days} days",
+        rows=rows[:MAX_ROWS],
+        api_url=f"{config.exporter_url}/api/ci-observe/prs?{urllib.parse.urlencode(params)}",
+        grafana_url=(f"{config.grafana_url}/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests"
+                     f"?var-days={days}&var-pr_repo={repo}"),
+        about=(body.get("about") or [None])[0] if isinstance(body, dict) else None,
+        window=None,
+        not_answerable=not_answerable,
+        notes=list(body.get("notes") or []) if isinstance(body, dict) else [],
+    )
+
+
 def _pull_request_detail(config: Config, arguments: dict) -> Answer:
     number = arguments.get("number")
     if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
@@ -752,6 +803,23 @@ TOOLS.extend([
             "required": ["repo", "days"],
         },
         handler=_pull_request_stats,
+    ),
+    Tool(
+        name="pull_requests",
+        description="The pull requests of a window as rows: number, title, author, when it merged,"
+                    " queue attempts and ejections. The change list behind a pass-rate move: ask"
+                    " 'which PRs merged in this window' here, then pull_request_detail on the"
+                    " suspects.",
+        schema={
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "enum": list(REPOS)},
+                "days": {"type": "integer", "minimum": 1, "maximum": PRS_MAX_DAYS},
+                "state": {"type": "string", "enum": ["all", "merged", "open", "closed"]},
+            },
+            "required": ["repo", "days", "state"],
+        },
+        handler=_pull_requests,
     ),
     Tool(
         name="pull_request_detail",

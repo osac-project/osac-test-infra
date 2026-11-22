@@ -392,6 +392,15 @@ def fetched(trends, trigger="pr", repo="osac", **fetcher):
 PRIVATE_NAME_PATH = "/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100"
 
 
+def nothing_anywhere(github):
+    """Empty listings at both places a run's artifact can be: the run's own
+    artifact list and the private repository's three name-filtered ones."""
+    github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+    for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
+                 f"osac-logs-bmaas-full-install-{RUN_ID}"):
+        github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+
 def private_entry(api_url, name=f"osac-logs-full-install-{RUN_ID}"):
     entry = artifact_payload(api_url).json()["artifacts"][0]
     entry["name"] = name
@@ -419,12 +428,32 @@ class TestArtifactFetch:
         assert github.count(DOWNLOAD_PATH) == 0
 
     def test_a_missing_artifact_is_a_reason(self, trends, github):
-        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        nothing_anywhere(github)
 
         cases, reason = fetched(trends)
 
         assert cases is None
-        assert reason == f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in run {RUN_ID} of osac-project/osac"
+        assert reason == (f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in "
+                          f"run {RUN_ID} of osac-project/osac or in osac-project/osac-ci-artifacts")
+
+    def test_a_pull_request_run_whose_artifact_went_private_is_found(self, trends, github, wfe):
+        """Since osac commit c39048bb96 (2026-11-14) every trigger publishes
+        to the private repository, so a pull-request run's own artifact list
+        is empty and the artifact must be found by name in the private
+        repository. Before this lookup every pull-request and merge-queue
+        run since that date read as 'no artifact'."""
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        for name in (f"osac-logs-caas-full-install-{RUN_ID}", f"osac-logs-bmaas-full-install-{RUN_ID}"):
+            github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_NAME_PATH.format(name=f"osac-logs-full-install-{RUN_ID}"),
+                   FakeResponse(payload={"total_count": 1, "artifacts": [private_entry(wfe.API_URL)]}))
+        github.add("/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip",
+                   FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        cases, reason = fetched(trends)
+
+        assert reason is None
+        assert len(cases) == 3
 
     def test_a_scheduled_run_is_read_from_the_private_repository_only(self, trends, github, wfe):
         for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
@@ -473,14 +502,13 @@ class TestArtifactFetch:
             fetched(trends)
 
     def test_a_run_with_no_private_artifact_is_a_reason(self, trends, github):
-        for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
-                     f"osac-logs-bmaas-full-install-{RUN_ID}"):
-            github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        nothing_anywhere(github)
 
         cases, reason = fetched(trends, "scheduled")
 
         assert cases is None
-        assert reason == f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in osac-project/osac-ci-artifacts"
+        assert reason == (f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in "
+                          f"osac-project/osac-ci-artifacts or in run {RUN_ID} of osac-project/osac")
 
     def test_a_trigger_without_an_artifact_place_is_a_reason(self, trends, github):
         cases, reason = fetched(trends, "other")
@@ -494,10 +522,14 @@ class TestArtifactFetch:
                      f"osac-logs-bmaas-full-install-{RUN_ID}"):
             github.add(f"/repos/other-org/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
                        FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(f"/repos/other-org/runs-here/actions/runs/{RUN_ID}/artifacts?per_page=100",
+                   FakeResponse(payload={"total_count": 0, "artifacts": []}))
 
         fetched(trends, "scheduled", "runs-here", org="other-org", api_url="https://api.github.com")
 
-        assert github.calls and all(call.startswith("/repos/other-org/osac-ci-artifacts/") for call in github.calls)
+        assert github.calls and all(
+            call.startswith("/repos/other-org/osac-ci-artifacts/") or call.startswith("/repos/other-org/runs-here/")
+            for call in github.calls)
 
     def test_a_pull_request_run_is_read_without_asking_the_private_repository(self, trends, github, wfe):
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))
@@ -586,9 +618,17 @@ class TestMain:
         coverage = self.coverage(wired)
         assert coverage["runs_parsed"] == 1, "coverage still describes the stored rows"
 
+    def no_artifacts(self, github):
+        """Both places answer with no artifact for the wired run."""
+        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
+                     f"osac-logs-bmaas-full-install-{RUN_ID}"):
+            github.routes[PRIVATE_NAME_PATH.format(name=name)] = [
+                FakeResponse(payload={"total_count": 0, "artifacts": []})]
+
     def test_a_run_without_an_artifact_is_counted_unavailable(self, wired, exporter, github):
         exporter._upsert_job(run_row())
-        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        self.no_artifacts(github)
 
         assert wired.main(["--days", "7"]) == 0
 
@@ -604,7 +644,7 @@ class TestMain:
         assert wired.main(["--days", "7"]) == 0
         assert len(self.rows(wired)) == 3
 
-        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        self.no_artifacts(github)
         assert wired.main(["--days", "7"]) == 0
         assert len(self.rows(wired)) == 3, "the default still keeps the stored day"
 

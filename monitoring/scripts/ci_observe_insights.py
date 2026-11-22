@@ -93,12 +93,6 @@ RUN_COLUMNS = (
     "updated_at", "run_attempt", "failed_step", "steps_json", "failure_reason", "head_sha", "url",
     "runner_name", "timeline_json",
 )
-MESSAGE_SIGNATURE_RES = (
-    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I), "<id>"),
-    (re.compile(r"\b(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+\b"), "<id>"),
-    (re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,}\b", re.I), "<id>"),
-    (re.compile(r"\b\d+(\.\d+)?s?\b"), "N"),
-)
 
 
 # -- small helpers -------------------------------------------------------------
@@ -141,11 +135,10 @@ def wait_group(row):
 
 def message_signature(message):
     """A failure message with its instance-specific parts replaced, so the
-    same error in two runs groups together."""
-    text = " ".join((message or "").split())
-    for pattern, replacement in MESSAGE_SIGNATURE_RES:
-        text = pattern.sub(replacement, text)
-    return text[:200]
+    same error in two runs groups together. The patterns live in
+    ci_observe_phases (shared vocabulary); this re-export keeps the pages'
+    imports stable."""
+    return phases.message_signature(message)
 
 
 def time_parts(row):
@@ -476,6 +469,87 @@ class Stores:
                 columns = ", ".join(column if column in available else f"NULL AS {column}" for column in columns)
             return [dict(row) for row in conn.execute(f"SELECT {columns} FROM {table} WHERE {where}", args)]
         except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+
+    def artifact_signatures(self, run_ids):
+        """[{signature, kind, phase, failed_runs, passing_runs, failed_lines,
+        runs}] for the given runs, from the artifact-log rollup's table: how
+        many failed and how many passing runs of this set show each error
+        signature. [] when the rollup has indexed nothing yet (its table is
+        absent); None when the table cannot be read: a read failure is not
+        "no signatures"."""
+        if not run_ids:
+            return []
+        conn = self._open(self.trends_db)
+        if conn is None:
+            return []
+        try:
+            if "artifact_log_signatures" not in self._tables(conn):
+                return []
+            grouped = {}
+            for start in range(0, len(run_ids), 400):
+                chunk = run_ids[start:start + 400]
+                marks = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    "SELECT signature, kind, phase, outcome, run_id, lines FROM artifact_log_signatures"
+                    f" WHERE run_id IN ({marks})", chunk)
+                for row in rows:
+                    key = (row["signature"], row["kind"], row["phase"] or "")
+                    entry = grouped.setdefault(
+                        key, {"failed_runs": set(), "passing_runs": set(), "failed_lines": 0})
+                    if row["outcome"] == "failure":
+                        entry["failed_runs"].add(row["run_id"])
+                        entry["failed_lines"] += row["lines"]
+                    else:
+                        entry["passing_runs"].add(row["run_id"])
+            created = self.run_created([run_id for entry in grouped.values()
+                                        for run_id in entry["failed_runs"]])
+            if created is None:
+                return None
+            table = []
+            for (signature, kind, phase), entry in grouped.items():
+                moments = [created[run_id] for run_id in entry["failed_runs"] if run_id in created]
+                table.append({
+                    "signature": signature, "kind": kind, "phase": phase,
+                    "failed_runs": len(entry["failed_runs"]), "passing_runs": len(entry["passing_runs"]),
+                    "failed_lines": entry["failed_lines"],
+                    "first_seen": min(moments) if moments else "",
+                    "last_seen": max(moments) if moments else "",
+                    "runs": sorted(entry["failed_runs"], reverse=True)[:3],
+                })
+            return table
+        except sqlite3.Error as error:
+            logger.error("the artifact log signature table could not be read: %s", error)
+            return None
+        finally:
+            conn.close()
+
+    def run_created(self, run_ids):
+        """{run id: created_at} of the given runs from the archive, for
+        first-seen and last-seen. Runs the archive does not hold are left
+        out: their date is unknown, not today. None when the archive cannot
+        be read."""
+        if not run_ids:
+            return {}
+        conn = self._open(self.trends_db)
+        if conn is None:
+            return {}
+        try:
+            if "suite_runs" not in self._tables(conn):
+                return {}
+            out = {}
+            for start in range(0, len(run_ids), 400):
+                chunk = run_ids[start:start + 400]
+                marks = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                        f"SELECT run_id, MIN(created_at) AS created FROM suite_runs WHERE run_id IN ({marks})"
+                        " GROUP BY run_id", chunk):
+                    out[str(row["run_id"])] = row["created"]
+            return out
+        except sqlite3.Error as error:
+            logger.error("the run archive could not be read: %s", error)
             return None
         finally:
             conn.close()
@@ -1228,6 +1302,9 @@ class CIObserveInsights:
         message_rows.sort(key=lambda row: (-row["count"], row["message"]))
         if not test_rows:
             notes.append("no per-test rollup is stored for this window, so failing tests and messages are empty")
+        signature_rows, signature_note = self._artifact_signature_rows(finished, filters)
+        if signature_note:
+            notes.append(signature_note)
         return {
             "population": (
                 f"failed VMaaS, CaaS and BMaaS suite runs in the last {filters.days} days; a run's cause is the "
@@ -1238,6 +1315,7 @@ class CIObserveInsights:
             "daily": daily,
             "causes": causes,
             "steps": step_rows,
+            "signatures": signature_rows,
             "runs": self._failed_runs(failed, limit=100, test_failures=failures_by_run),
             "tests": failing[:100],
             "flaky": sorted(
@@ -1247,6 +1325,28 @@ class CIObserveInsights:
             "messages": message_rows[:50],
             "notes": notes,
         }
+
+    def _artifact_signature_rows(self, finished, filters, limit=50):
+        """(rows, note): the error signatures of this window's runs, ranked
+        by how much more failed runs show them than passing ones -- the
+        comparison that tells a cause from the ambient noise every cluster
+        logs. The note says when the answer is not available and why; an
+        empty answer without a note means the window's bundles held no
+        error lines at all."""
+        run_ids = [str(fact["run_id"]) for fact in finished]
+        rows = self.stores.artifact_signatures(run_ids)
+        if rows is None:
+            return [], ("the artifact log signature table could not be read, so the error signatures"
+                        " of this window are unknown")
+        if not rows:
+            return [], ("the artifact log rollup has indexed no bundle of this window yet, so no error"
+                        " signatures are known (ci-observe-logs.timer)")
+        for row in rows:
+            row["logs_query"] = '{source="artifact", signature="%s"}' % row["signature"].replace('"', "")
+        rows = [row for row in rows if row["failed_runs"]]
+        rows.sort(key=lambda row: (-(row["failed_runs"] - row["passing_runs"]), -row["failed_runs"],
+                                   row["signature"]))
+        return rows[:limit], ""
 
     # -- tests -------------------------------------------------------------
     def _test_summaries(self, rows, filters):

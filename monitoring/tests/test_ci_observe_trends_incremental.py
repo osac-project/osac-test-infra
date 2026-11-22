@@ -12,9 +12,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from helpers import FakeResponse, make_job
+from conftest import _load
+
+trends_module = _load("ci_observe_trends", "ci_observe_trends.py")
 from test_ci_observe_trends import (
     DOWNLOAD_PATH,
     LIST_PATH,
+    PRIVATE_NAME_PATH,
     RUN_ID,
     SHA,
     TOKEN,
@@ -29,6 +33,16 @@ from test_ci_observe_trends import (
 )
 
 NOW = datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc)
+
+
+def no_artifacts_anywhere(github):
+    """Both places a run's artifact can be answer with none (see
+    find_artifacts: both are checked)."""
+    github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+    for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
+                 f"osac-logs-bmaas-full-install-{RUN_ID}"):
+        github.routes[PRIVATE_NAME_PATH.format(name=name)] = [
+            FakeResponse(payload={"total_count": 0, "artifacts": []})]
 
 
 def iso(moment):
@@ -132,7 +146,8 @@ class TestReadDecision:
     run = {"finished": True, "created_at": iso(NOW - timedelta(days=1)), "finished_at": iso(NOW - timedelta(hours=5))}
 
     def fetch(self, state, checked=NOW - timedelta(hours=2), version=None, finished=None):
-        return {"state": state, "checked_at": iso(checked), "version": version or 2,
+        return {"state": state, "checked_at": iso(checked),
+                "version": trends_module.PARSER_VERSION if version is None else version,
                 "finished_at": iso(finished) if finished else self.run["finished_at"]}
 
     def test_new_and_unfinished_runs(self, trends):
@@ -156,6 +171,19 @@ class TestReadDecision:
         assert trends.read_decision(self.run, early, False, NOW) == "fetch"
         assert trends.read_decision(self.run, late, False, NOW) == "skip"
 
+    def test_an_older_parser_rereads_a_failed_lookup_while_the_artifact_exists(self, trends):
+        """A no_data row written by an older parser is re-read: a newer
+        parser can resolve what an older one could not (the
+        private-publication switch of 2026-11-14 darkened every
+        pull-request run until the reader learned the second place). Past
+        artifact retention it stays skipped: re-reading cannot change the
+        answer."""
+        older = self.fetch("no_data", version=trends.PARSER_VERSION - 1, checked=NOW - timedelta(hours=2),
+                           finished=NOW - timedelta(hours=6))
+        assert trends.read_decision(self.run, older, False, NOW) == "fetch"
+        old_run = {**self.run, "created_at": iso(NOW - timedelta(days=40))}
+        assert trends.read_decision(old_run, older, False, NOW) == "skip"
+
     def test_an_error_is_retried_after_a_while(self, trends):
         assert trends.read_decision(self.run, self.fetch("error", checked=NOW - timedelta(minutes=5)), False,
                                     NOW) == "skip"
@@ -166,7 +194,7 @@ class TestReadDecision:
 class TestHourlyPass:
     def test_a_run_without_an_artifact_is_not_listed_again(self, wired, exporter, github):
         exporter._upsert_job(run_row(updated_at=recent_iso(days_ago=1)))
-        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        no_artifacts_anywhere(github)
         assert wired.main(["--days", "7"]) == 0
         assert wired.main(["--days", "7"]) == 0
         assert github.count(LIST_PATH) == 1
@@ -178,7 +206,7 @@ class TestHourlyPass:
         assert [row["job"] for row in query(wired, "SELECT job FROM rollup_passes")] == ["trends"], (
             "a pass with nothing to roll up is still a pass")
         exporter._upsert_job(run_row(updated_at=recent_iso(days_ago=1)))
-        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        no_artifacts_anywhere(github)
         assert wired.main(["--days", "7"]) == 0
         assert query(wired, "SELECT job, summary FROM rollup_passes") == [
             {"job": "trends", "summary": "1 run(s) considered"}]
@@ -251,7 +279,7 @@ class TestHourlyPass:
         conn.execute("DELETE FROM run_fetches")
         conn.commit()
         conn.close()
-        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        no_artifacts_anywhere(github)
         assert wired.main(["--days", "7"]) == 0
         assert len(query(wired, "SELECT * FROM test_runs")) == 3
         assert query(wired, "SELECT state FROM run_fetches") == [{"state": "parsed"}]

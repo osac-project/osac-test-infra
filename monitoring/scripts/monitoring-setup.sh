@@ -654,6 +654,11 @@ if [[ "${MODE}" == "update-central" ]]; then
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_spans.py" \
        "${MONITORING_HOME}/scripts/ci_observe_spans.py"
     chmod +x "${MONITORING_HOME}/scripts/ci_observe_spans.py"
+    # The artifact-log rollup the ci-observe-logs timer runs: failed runs'
+    # error lines into Loki, every run's signatures into trends.db.
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_logs.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_logs.py"
+    chmod +x "${MONITORING_HOME}/scripts/ci_observe_logs.py"
     # The daily check of the pages against GitHub (ci-observe-audit.timer).
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_audit.py" \
        "${MONITORING_HOME}/scripts/ci_observe_audit.py"
@@ -689,6 +694,10 @@ if [[ "${MODE}" == "update-central" ]]; then
        "${SYSTEMD_USER_DIR}/ci-observe-trends.service"
     cp "${MONITORING_REPO_DIR}/systemd/ci-observe-trends.timer" \
        "${SYSTEMD_USER_DIR}/ci-observe-trends.timer"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-logs.service" \
+       "${SYSTEMD_USER_DIR}/ci-observe-logs.service"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-logs.timer" \
+       "${SYSTEMD_USER_DIR}/ci-observe-logs.timer"
     cp "${MONITORING_REPO_DIR}/systemd/ci-observe-prs.service" \
        "${SYSTEMD_USER_DIR}/ci-observe-prs.service"
     cp "${MONITORING_REPO_DIR}/systemd/ci-observe-prs.timer" \
@@ -977,6 +986,11 @@ if [[ "${MODE}" == "central" ]]; then
     cp "${MONITORING_REPO_DIR}/systemd/ci-observe-trends.timer" \
        "${SYSTEMD_USER_DIR}/ci-observe-trends.timer"
     info "Installed ci-observe-trends.service + .timer"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-logs.service" \
+       "${SYSTEMD_USER_DIR}/ci-observe-logs.service"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-logs.timer" \
+       "${SYSTEMD_USER_DIR}/ci-observe-logs.timer"
+    info "Installed ci-observe-logs.service + .timer"
     cp "${MONITORING_REPO_DIR}/systemd/ci-observe-prs.service" \
        "${SYSTEMD_USER_DIR}/ci-observe-prs.service"
     cp "${MONITORING_REPO_DIR}/systemd/ci-observe-prs.timer" \
@@ -1031,6 +1045,7 @@ CENTRAL_SERVICES=(
     "caddy.service"
     "ci-observe-tempo210.service"
     "ci-observe-trends.timer"
+    "ci-observe-logs.timer"
     "ci-observe-prs.timer"
     "ci-observe-spans.timer"
 )

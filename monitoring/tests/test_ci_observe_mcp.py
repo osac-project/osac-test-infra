@@ -162,9 +162,9 @@ def test_tools_list_names_every_tool_with_its_required_parameters(config):
     _, answer = rpc(config, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     tools = {tool["name"]: tool for tool in answer["result"]["tools"]}
     assert set(tools) == {
-        "suite_health", "failing_tests", "flaky_tests", "failure_causes", "time_to_result",
-        "slowest_tests", "test_history", "run_failed_tests", "list_runs",
-        "pull_request_stats", "pull_request_detail",
+        "suite_health", "failing_tests", "flaky_tests", "failure_causes", "failure_signatures",
+        "time_to_result", "slowest_tests", "test_history", "run_failed_tests", "list_runs",
+        "pull_request_stats", "pull_requests", "pull_request_detail",
     }
     # Every population dimension is required with no default: the agent
     # must ask which suite, trigger, repository and window it means.

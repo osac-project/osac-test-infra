@@ -19,10 +19,10 @@ when its day is rebuilt. Only finished runs that were never read and runs
 read by an older parser are read. Rebuilding a day replaces its rows, so
 rerunning never doubles a day.
 
-A run's artifact is read from the one place its trigger says (see
-ci_observe_run_evidence.artifact_place): its own run for a pull-request or
-merge-queue run, osac-ci-artifacts for a scheduled or manual one. A run
-with no artifact there, an expired one or one without junit.xml is stored
+A run's artifact is read from the two places it can be (see
+ci_observe_run_evidence.find_artifacts): its own run and the private
+artifact repository, the place its trigger says first. A run with no
+artifact in either, an expired one or one without junit.xml is stored
 with that reason. GitHub refusing or failing to answer (an HTTP error, a
 network error) is not a fact about one run: the pass stops there, logs the
 reason, stores nothing, and exits 1; the next pass reads those runs again.
@@ -83,7 +83,7 @@ from ci_observe_run_evidence import (
     CIObserveRunEvidence,
     EvidenceError,
     GitHubRefused,
-    artifact_place,
+    artifact_places,
     find_artifacts,
 )
 
@@ -115,7 +115,7 @@ DEFAULT_DAYS = ARTIFACT_RETENTION_DAYS
 KEEP_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
 # The parser version a run was read with. A run read by an older parser is
 # read again while its artifact still exists, so new fields fill in.
-PARSER_VERSION = 2
+PARSER_VERSION = 3
 # A run with no readable artifact is checked once more when the first check
 # came soon after it ended; an artifact can trail the run's completion.
 NO_DATA_RECHECK_WITHIN = timedelta(hours=3)
@@ -638,8 +638,8 @@ class ArtifactFetcher:
             logger.debug("GitHub API rate limit remaining: %s", remaining)
 
     def _artifacts(self, run):
-        """The run's artifacts at the one place its trigger says (see
-        ci_observe_run_evidence.artifact_place): every suite's that is
+        """The run's artifacts in the two places they can be (see
+        ci_observe_run_evidence.find_artifacts): every suite's that is
         there. Raises GitHubRefused when GitHub does not answer, which stops
         the pass; raises EvidenceError for a run whose trigger has no
         artifact place."""
@@ -669,8 +669,8 @@ class ArtifactFetcher:
         except EvidenceError as error:
             return None, str(error)
         if not artifacts:
-            _, place, _ = artifact_place(run.get("trigger"), run["repo"], run_id, self.org)
-            return None, f"no osac-logs-[<suite>-]full-install-{run_id} artifact in {place}"
+            expected, other = artifact_places(run.get("trigger"), run["repo"], run_id, self.org)
+            return None, f"no osac-logs-[<suite>-]full-install-{run_id} artifact in {expected} or in {other}"
         files = []
         unfinished = []
         for artifact in artifacts[:MAX_ARTIFACTS_PER_RUN]:
@@ -1121,6 +1121,15 @@ def read_decision(run, fetch, has_stored, now, force=False):
                 return "fetch"
         return "stored"
     if state == "no_data":
+        # An older parser's failed lookup is re-read: a newer parser can
+        # resolve what an older one could not (the private-publication
+        # switch of 2026-11-14 was exactly that). Only while the artifact
+        # may still exist: past retention, re-reading cannot change the
+        # answer.
+        if (fetch.get("version") or 0) < PARSER_VERSION:
+            created = phases.parse_time(run.get("created_at"))
+            if created and now - created < timedelta(days=ARTIFACT_RETENTION_DAYS - 1):
+                return "fetch"
         finished = phases.parse_time(fetch.get("finished_at") or run.get("finished_at"))
         if checked and finished and checked - finished < NO_DATA_RECHECK_WITHIN and now - checked > RECHECK_AFTER:
             return "fetch"

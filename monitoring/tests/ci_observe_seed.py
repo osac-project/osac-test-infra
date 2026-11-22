@@ -363,6 +363,8 @@ def seed(directory, now=None, days=40, rng_seed=7):
     finally:
         conn.close()
 
+    _seed_signatures(str(trends_db), str(jobs_db), now)
+
     conn = spans.open_db(str(trends_db))
     try:
         for capture, rid, suite, created, (tests, waits, fixtures) in span_rows:
@@ -546,6 +548,52 @@ def _pr_story(rng, opened, wgs=None):
     events.append({"at": at(merged), "kind": "merged", "actor": "", "detail": "", "url": ""})
     events.sort(key=lambda event: event["at"])
     return events, graph, {"attempts": attempts, "merged": merged}
+
+
+def _seed_signatures(trends_db, jobs_db, now):
+    """The artifact-log rollup's tables, in the schema the rollup itself
+    creates: every failed install run shows the discriminative signature,
+    every failed test run its own, and every run of the window (passing
+    ones included) the ambient informer noise. The Why-runs-fail page's
+    signatures panel and the failure_signatures tool resolve against these
+    rows; the noise row is what the failed-minus-passing ranking must sink."""
+    logs = _load("ci_observe_logs", "ci_observe_logs.py")
+    phases = _load("ci_observe_phases", "ci_observe_phases.py")
+    jobs = sqlite3.connect(jobs_db)
+    rows = jobs.execute(
+        "SELECT run_id, workflow, conclusion, failed_step FROM jobs WHERE category = 'e2e'"
+        " AND conclusion IN ('success', 'failure')").fetchall()
+    jobs.close()
+    ambient = "failed to list resource <id>: User cannot list resource at the cluster scope"
+    signatures = [
+        (ambient, "pod", 12),
+    ]
+    conn = logs.open_state(trends_db)
+    try:
+        for run_id, workflow, conclusion, failed_step in rows:
+            suite = phases.suite_key(workflow)
+            if not suite:
+                continue
+            phase = phases.failure_cause(conclusion, failed_step, None)["phase"] or "other"
+            outcome = "success" if conclusion == "success" else "failure"
+            rows_to_write = list(signatures)
+            if outcome == "failure" and failed_step and "Install OSAC" in failed_step:
+                rows_to_write.append(
+                    ("unable to read tree <id> (fatal: the AAP project update cannot check out the commit)",
+                     "aap-jobs", 4))
+            if outcome == "failure" and failed_step and "Run E2E tests" in failed_step:
+                rows_to_write.append(
+                    ("StuckState: worker Agents installing not reached after N", "test-failure", 6))
+            for signature, kind, lines in rows_to_write:
+                conn.execute(
+                    "INSERT OR REPLACE INTO artifact_log_signatures VALUES (?,?,?,?,?,?,?)",
+                    (str(run_id), suite, kind, signature, outcome, phase, lines))
+            conn.execute(
+                "INSERT OR REPLACE INTO artifact_logs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (str(run_id), suite, "osac", "indexed", "", 12, 900, 30, 0, 0, _iso(now)))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _seed_prs(path, rng, now, days, pr_runs):

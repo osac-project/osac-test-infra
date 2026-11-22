@@ -1,0 +1,25 @@
+# Hourly ci-observe artifact-log rollup.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-logs.service
+#
+# Triggered by ci-observe-logs.timer. Each pass reads the artifact bundle of
+# every in-scope suite run of the last 30 days that it has not read yet
+# (GitHub keeps artifacts 30 days), and:
+#   - failed runs: their error lines and failure-summary context go to Loki,
+#     labeled by run, suite and normalized signature, where they outlive the
+#     artifact and answer "what failed in this run";
+#   - every run: its error signatures go to the artifact_log_signatures
+#     table in trends.db, where failed and passing runs compare, and only
+#     that comparison tells a cause from the noise every cluster logs.
+#
+# The rollup runs inside the workflow-exporter container because that
+# container already has the GitHub token, the `requests` dependency, the
+# /data volume where trends.db lives, and network access to Loki. Do not
+# enable it directly; the timer owns the schedule.
+
+[Unit]
+Description=ci-observe artifact-log rollup (failed runs' logs into Loki)
+After=workflow-exporter.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_logs.py --days 1

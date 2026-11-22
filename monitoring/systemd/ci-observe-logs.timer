@@ -1,0 +1,20 @@
+# Systemd user timer for the ci-observe artifact-log rollup.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-logs.timer
+#
+# Runs hourly at 55 past, after the exporter's poll and the trends rollup
+# (25 past), so a finished run's bundle is usually published by then: a
+# collect run in the private artifact repository can trail its source run
+# by minutes. Persistent means a missed pass (machine down) runs when the
+# machine comes back; a bundle inside GitHub's 30-day window is read late,
+# not lost.
+
+[Unit]
+Description=Run the ci-observe artifact-log rollup hourly
+
+[Timer]
+OnCalendar=*-*-* *:55:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

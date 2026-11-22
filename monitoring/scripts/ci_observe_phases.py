@@ -370,6 +370,29 @@ def step_phase(step: str | None, job: str | None = "") -> str:
     return "other"
 
 
+# -- message signatures -------------------------------------------------------
+
+# A failure message with its instance-specific parts replaced, so the same
+# error in two runs groups together. Shared vocabulary: the insights pages
+# group test errors with it, and the artifact-log rollup labels install and
+# infrastructure errors with it.
+MESSAGE_SIGNATURE_RES = (
+    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I), "<id>"),
+    (re.compile(r"\b(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+\b"), "<id>"),
+    (re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,}\b", re.I), "<id>"),
+    (re.compile(r"\b\d+(\.\d+)?s?\b"), "N"),
+)
+
+
+def message_signature(message):
+    """A failure message with its instance-specific parts replaced, so the
+    same error in two runs groups together."""
+    text = " ".join((message or "").split())
+    for pattern, replacement in MESSAGE_SIGNATURE_RES:
+        text = pattern.sub(replacement, text)
+    return text[:200]
+
+
 # -- failure causes -----------------------------------------------------------
 
 # (key, label, area, color). The area is the one-word answer to "did my code
