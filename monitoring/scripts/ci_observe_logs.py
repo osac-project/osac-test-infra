@@ -204,8 +204,12 @@ def run_phase(run):
 
 def open_state(db_path):
     """The trends DB with this job's tables (it is the ci-observe store:
-    one place for what was read and what was not)."""
-    conn = sqlite3.connect(db_path)
+    one place for what was read and what was not). The connection waits
+    up to a minute for the write lock: the exporter's document reads and
+    the other rollups share this file, and a locked-out write must wait
+    its turn, not fail the pass (the DB runs in WAL mode, so readers do
+    not block writers; the timeout covers the checkpoint moments)."""
+    conn = sqlite3.connect(db_path, timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE IF NOT EXISTS artifact_logs ("
