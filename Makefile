@@ -69,7 +69,7 @@ OSAC_MONO_DIR ?= /opt/osac
 # full-ci enables all services. Run regular E2E plus the stretched test, serially.
 # networking/vmaas is one ordered module and must not be filtered; networking/bmaas
 # keeps PROTOCOL_ICMP rules, which the API rejects with cudn_evpn.
-FULL_TEST_IGNORE = --ignore=tests/e2e/networking/vmaas --ignore=tests/e2e/networking/bmaas
+FULL_TEST_IGNORE = --ignore=tests/e2e/networking/vmaas --ignore=tests/e2e/networking/bmaas --ignore=tests/e2e/networking/storage
 FULL_TEST_FILTER = not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name and not test_disabled_services and not external_ip
 test-full:
 	mkdir -p $(REPORTS_DIR)
@@ -121,7 +121,7 @@ _FWD_VM_KUBECONFIG = $(if $(OSAC_VM_KUBECONFIG),OSAC_VM_KUBECONFIG=$(abspath $(O
 _FWD_PULL_SECRET    = $(if $(OSAC_PULL_SECRET_PATH),OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH))
 _FWD_DEPLOY_SUITE   = DEPLOY_SUITE=$(DEPLOY_SUITE)
 
-.PHONY: e2e deploy-suite deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite prepare-suite run-tests \
+.PHONY: e2e deploy-suite deploy-setup setup-infra deploy-infra deploy-storage verify-storage deploy-ocp deploy-osac setup-suite prepare-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
         redeploy-osac _require-backend _validate-backend _validate-suite-contract
 
@@ -179,6 +179,12 @@ setup-infra: deploy-setup
 
 deploy-infra: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+
+deploy-storage: _validate-backend
+	$(MAKE) -C $(INFRA_DIR) deploy-storage EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+
+verify-storage: _validate-backend
+	$(MAKE) -C $(INFRA_DIR) verify-storage EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-ocp: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)

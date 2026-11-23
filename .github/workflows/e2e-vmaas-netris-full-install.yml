@@ -568,6 +568,22 @@ jobs:
           MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
           make deploy-osac INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${MERGED}"
 
+      - name: Deploy the lab storage endpoint
+        if: inputs.deploy-suite == 'full'
+        timeout-minutes: 30
+        shell: bash
+        env:
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
+        run: make deploy-storage INFRA=netris
+
+      - name: Verify storage over tenant SNAT
+        if: inputs.deploy-suite == 'full'
+        timeout-minutes: 120
+        shell: bash
+        env:
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
+        run: make verify-storage INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}"
+
       - name: Set up Netris test prerequisites
         shell: bash
         # setup-vmaas can spend up to 80 minutes in sequential readiness polling.

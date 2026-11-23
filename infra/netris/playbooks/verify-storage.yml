@@ -48,8 +48,10 @@
         path: "{{ osac_dir }}/tests/e2e/networking/storage/test_storage_nat.py"
       register: _lab_nfs_suite
 
-    - name: Run the storage-over-SNAT FR5-01 case
-      when: _lab_nfs_suite.stat.exists
+    - name: Run the full storage-over-SNAT suite
+      when:
+        - deploy_suite == 'full'
+        - _lab_nfs_suite.stat.exists
       ansible.builtin.command:
         argv:
           - make
@@ -57,11 +59,24 @@
           - INFRA=netris
           - "DEPLOY_SUITE={{ deploy_suite }}"
           - TEST_SUITE=storage-nat
-          - "TEST=fr5_01"
       args:
         chdir: "{{ playbook_dir }}/../.."
+      environment:
+        OSAC_MONO_DIR: "{{ osac_dir }}"
+        OSAC_STORAGE_NFS_SERVER: "{{ lab_nfs_server_ip }}"
+        OSAC_STORAGE_NFS_EXPORT: "{{ lab_nfs_export }}"
+        OSAC_STORAGE_SSH_HOST: "{{ lab_nfs_ssh_user }}@{{ lab_nfs_server_ip }}"
+        OSAC_STORAGE_SSH_IDENTITY: "{{ lab_nfs_ssh_key }}"
+        OSAC_STORAGE_LOG_PATH: "{{ lab_nfs_client_log }}"
       register: _lab_nfs_e2e
       changed_when: _lab_nfs_e2e.rc == 0
+
+    - name: Explain when the full suite does not run
+      when: deploy_suite != 'full'
+      ansible.builtin.debug:
+        msg: >-
+          The storage-over-SNAT suite needs VMaaS, CaaS and BMaaS; it runs
+          only with DEPLOY_SUITE=full. The endpoint checks above passed.
 
     - name: Explain when the suite is not in the checkout
       when: not _lab_nfs_suite.stat.exists
