@@ -213,6 +213,7 @@
            + (_netris_evpn.nodes | default([]) | map(attribute='uplinks') | flatten
               | selectattr('address', 'defined')
               | map(attribute='address') | list)
+           + ([netris_storage_endpoint_cidr] if netris_storage_endpoint_enabled | default(false) | bool else [])
            + netris_extra_excluded_cidrs)
           | map('ansible.utils.ipaddr', 'subnet') | unique | sort) }}
   vars:

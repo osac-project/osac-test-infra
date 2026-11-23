@@ -4,7 +4,7 @@ REPORTS_DIR ?= reports
 # defaults to the same name. See infra/netris/targets.md.
 .PHONY: test lint format test-vmaas test-stretched test-caas test-caas-networking \
         test-caas_networking test-maas test-maas-networking test-maas_networking \
-        test-storage test-bmaas test-metering test-references test-full
+        test-storage test-storage-nat test-bmaas test-metering test-references test-full
 
 test:
 	mkdir -p $(REPORTS_DIR)
@@ -52,6 +52,12 @@ test-caas:
 test-storage:
 	mkdir -p $(REPORTS_DIR)
 	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/storage/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/storage.xml
+
+# Storage over tenant SNAT: VM guest, default network, CaaS PVC, BMaaS host,
+# no-inbound, and two-tenants-same-CIDR. See tests/e2e/networking/storage/.
+test-storage-nat:
+	mkdir -p $(REPORTS_DIR)
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/storage/ -x -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/storage-nat.xml
 
 # -n 0 keeps the BMH-consuming networking tests serial.
 test-bmaas:

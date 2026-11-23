@@ -134,6 +134,11 @@
   ansible.builtin.include_role:
     name: verify
 
+- name: Deploy the vendor-neutral NFS storage endpoint
+  when: netris_storage_endpoint_enabled | default(false) | bool
+  ansible.builtin.include_role:
+    name: lab_nfs_storage
+
 - name: Set up BMC network and sushy-tools
   when: bare_metal_services | bool
   ansible.builtin.include_role:

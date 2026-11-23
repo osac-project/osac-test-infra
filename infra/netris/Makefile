@@ -27,6 +27,14 @@ export OSAC_PULL_SECRET_PATH
 KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
 
+# Vendor-neutral NFS endpoint (OSAC-8073). These are the role defaults; the
+# storage-over-SNAT suite reads them through .env.infra.
+LAB_NFS_SERVER_IP ?= 192.168.123.10
+LAB_NFS_EXPORT ?= /srv/osac-storage
+LAB_NFS_SSH_HOST ?= osac@$(LAB_NFS_SERVER_IP)
+LAB_NFS_SSH_IDENTITY ?= /root/.ssh/lab-nfs
+LAB_NFS_LOG_PATH ?= /var/log/osac-nfs-clients.log
+
 # Public Make inputs are translated here into Ansible variables. User
 # EXTRA_VARS comes first; backend-owned deployment context and path mappings
 # follow so each value has one canonical public input.
@@ -87,6 +95,13 @@ setup-infra: deploy-setup
 deploy-infra: _check-osac-images
 	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA) $(VMAAS_UNDERLAY_EXTRA)
 
+# Additive lab storage endpoint (OSAC-8073). Safe to run against a live lab.
+deploy-storage:
+	ansible-playbook playbooks/deploy-storage.yml $(ANSIBLE_EXTRA)
+
+verify-storage:
+	ansible-playbook playbooks/verify-storage.yml $(ANSIBLE_EXTRA)
+
 deploy-ocp:
 	@rm -f .evpn-values.yaml
 	ansible-playbook playbooks/deploy-ocp.yml $(OCP_ANSIBLE_EXTRA)
@@ -99,6 +114,11 @@ deploy-osac:
 		'OSAC_VM_KUBECONFIG=$(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),$(OSAC_VM_KUBECONFIG_ABS),$(KUBECONFIG_ABS))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		'OSAC_E2E_FABRIC_SNAPSHOT_CMD=$(abspath scripts/fabric-snapshot.sh)' \
+		'OSAC_STORAGE_NFS_SERVER=$(LAB_NFS_SERVER_IP)' \
+		'OSAC_STORAGE_NFS_EXPORT=$(LAB_NFS_EXPORT)' \
+		'OSAC_STORAGE_SSH_HOST=$(LAB_NFS_SSH_HOST)' \
+		'OSAC_STORAGE_SSH_IDENTITY=$(LAB_NFS_SSH_IDENTITY)' \
+		'OSAC_STORAGE_LOG_PATH=$(LAB_NFS_LOG_PATH)' \
 		> $(ENV_INFRA)
 
 # VMaaS setup/gather is read-only: tenant resources remain owned by the suite fixtures.
@@ -373,7 +393,7 @@ health-check:
 # ─── .PHONY ────────────────────────────────────────────────────────
 
 .PHONY: deploy \
-        deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac _check-osac-images \
+        deploy-setup setup-infra deploy-infra deploy-storage verify-storage deploy-ocp deploy-osac _check-osac-images \
         setup-caas deploy-caas setup-vmaas gather-vmaas destroy-vmaas \
         test-caas-networking test-caas_networking test-maas-networking test-maas_networking \
         prepare-suite deploy-suite \

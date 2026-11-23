@@ -340,3 +340,9 @@ netris_private_allocation_cidr: "10.0.0.0/8"
 # the provisioning SNAT range, the VTEP CIDR, the Netris loopbacks and the node
 # uplinks.
 netris_extra_excluded_cidrs: []
+
+# Lab-only vendor-neutral NFS endpoint (OSAC-8073). It lives on a host bridge
+# outside the fabric gateway and is reached through the tenant NATGateway. The
+# range is excluded so no tenant network can capture storage traffic.
+netris_storage_endpoint_enabled: true
+netris_storage_endpoint_cidr: "192.168.123.0/24"

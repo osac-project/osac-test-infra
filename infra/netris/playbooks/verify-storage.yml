@@ -1,0 +1,72 @@
+---
+# Verify the lab NFS endpoint from a tenant VM on its default network. The
+# mount and the NAT-address assertion live in the deployed E2E suite; this
+# playbook checks the endpoint itself and then runs the FR5-01 case through the
+# normal harness so the source-address evidence comes from the server log.
+- name: Verify the lab NFS storage endpoint
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Read the storage endpoint defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/lab_nfs_storage/defaults/main.yml"
+
+    - name: Wait for the NFS port
+      ansible.builtin.wait_for:
+        host: "{{ lab_nfs_server_ip }}"
+        port: 2049
+        timeout: 30
+
+    - name: Check the export, NFS version, and client logger
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - "{{ lab_nfs_ssh_key }}"
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - "{{ lab_nfs_ssh_user }}@{{ lab_nfs_server_ip }}"
+          - >-
+            exportfs -v && systemctl is-active nfs-server
+            && systemctl is-active osac-nfs-clients
+            && grep -q '+4.1' /proc/fs/nfsd/versions
+      register: _lab_nfs_verify
+      changed_when: false
+
+    - name: Report the endpoint
+      ansible.builtin.debug:
+        msg:
+          - "NFS server: {{ lab_nfs_server_ip }}:{{ lab_nfs_export }}"
+          - "Client log: {{ lab_nfs_client_log }}"
+          - "Excluded CIDR: {{ netris_storage_endpoint_cidr }}"
+
+    - name: Check that the deployed suite exists
+      ansible.builtin.stat:
+        path: "{{ osac_dir }}/tests/e2e/networking/storage/test_storage_nat.py"
+      register: _lab_nfs_suite
+
+    - name: Run the storage-over-SNAT FR5-01 case
+      when: _lab_nfs_suite.stat.exists
+      ansible.builtin.command:
+        argv:
+          - make
+          - run-tests
+          - INFRA=netris
+          - "DEPLOY_SUITE={{ deploy_suite }}"
+          - TEST_SUITE=storage-nat
+          - "TEST=fr5_01"
+      args:
+        chdir: "{{ playbook_dir }}/../.."
+      register: _lab_nfs_e2e
+      changed_when: _lab_nfs_e2e.rc == 0
+
+    - name: Explain when the suite is not in the checkout
+      when: not _lab_nfs_suite.stat.exists
+      ansible.builtin.debug:
+        msg: >-
+          The storage-over-SNAT suite is not in {{ osac_dir }} yet. The
+          endpoint checks passed; run the suite from an osac checkout that
+          contains tests/e2e/networking/storage/.
