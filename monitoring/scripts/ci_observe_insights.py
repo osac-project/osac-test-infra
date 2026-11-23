@@ -2015,4 +2015,3 @@ class CIObserveInsights:
         if unavailable:
             document["unavailable"] = unavailable
         return document
-
