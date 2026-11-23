@@ -58,6 +58,10 @@ Environment=JOBS_HISTORY_MAX_COUNT=400000
 # ci-observe keeps its own archive in trends.db and prs.db for 90 days: the
 # VMaaS, CaaS and BMaaS suite runs, their tests and their pull requests.
 Environment=CI_OBSERVE_KEEP_DAYS=90
+# The git-versioned incident records the insights endpoints read
+# (ci_observe_incidents.py): the file is mounted below, and the scripts'
+# repo-relative default cannot find it in this flat /app layout.
+Environment=CI_OBSERVE_INCIDENTS_FILE=/app/incidents.yml
 
 # Mount the exporter and its sibling modules into the container
 Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z
@@ -69,9 +73,17 @@ Volume=%h/.monitoring-server/scripts/ci_observe_history.py:/app/ci_observe_histo
 Volume=%h/.monitoring-server/scripts/ci_observe_prs.py:/app/ci_observe_prs.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_phases.py:/app/ci_observe_phases.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_insights.py:/app/ci_observe_insights.py:ro,Z
+# ci_observe_insights imports it: the incidents records and their rules.
+Volume=%h/.monitoring-server/scripts/ci_observe_incidents.py:/app/ci_observe_incidents.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_spans.py:/app/ci_observe_spans.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_logs.py:/app/ci_observe_logs.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_audit.py:/app/ci_observe_audit.py:ro,Z
+# The git-versioned incident records (the source of the /api/ci-observe/
+# incidents document and of the incident notes on the health and failure
+# documents). Bind-mounted like the scripts, so a repo change reaches the
+# container on the next restart; podman refuses a missing mount source, so
+# monitoring-setup.sh copies it in both install modes.
+Volume=%h/.monitoring-server/config/ci-observe/incidents.yml:/app/incidents.yml:ro,Z
 # Mount data directory for cache persistence across restarts
 Volume=%h/.monitoring-server/data:/data:Z
 Environment=CACHE_DIR=/data

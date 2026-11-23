@@ -930,6 +930,50 @@ def _dict_rows(value: object) -> list[dict]:
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+def _incidents(config: Config, arguments: dict) -> Answer:
+    """The recorded incidents whose window overlaps the asked window. The
+    records are git-versioned, not telemetry: the answer distinguishes a
+    window no incident overlaps from a file that could not be read."""
+    days = _need_int(arguments, "days", 1, INSIGHT_MAX_DAYS)
+    end = _need_end(arguments, days, INSIGHT_MAX_DAYS, "the suite-run archive")
+    params = {"days": str(days)}
+    question = f"Incidents overlapping the last {days} days"
+    if end:
+        params["end"] = end
+        question = f"Incidents overlapping the {days} days before {end}"
+    status, body = fetch_json(config, f"/api/ci-observe/incidents?{urllib.parse.urlencode(params)}")
+    rows: list[dict] = []
+    not_answerable = ""
+    notes: list[str] = []
+    total = 0
+    if status == 200 and isinstance(body, dict):
+        every = [row for row in body.get("incidents") or [] if isinstance(row, dict)]
+        total = len(every)
+        rows, cut = _capped(every, "incidents", "oldest window first")
+        notes = list(body.get("notes") or []) + cut
+        unavailable = body.get("unavailable")
+        if isinstance(unavailable, str) and unavailable:
+            not_answerable = unavailable
+        elif not rows:
+            not_answerable = "no recorded incident overlaps this window"
+    else:
+        not_answerable = f"the exporter answered HTTP {status} for the incidents document"
+    return Answer(
+        question=question,
+        rows=rows,
+        api_url=f"{config.exporter_url}/api/ci-observe/incidents?{urllib.parse.urlencode(params)}",
+        # No page of its own: the link opens Why runs fail over the same
+        # window, the page whose numbers the incidents explain.
+        grafana_url=(f"{config.grafana_url}/d/ci-observe-failures/ci-observe-e28094-why-runs-fail"
+                     f"?var-days={days}"),
+        about=(body.get("about") or [None])[0] if isinstance(body, dict) else None,
+        window=(body.get("window") or [None])[0] if isinstance(body, dict) else None,
+        not_answerable=not_answerable,
+        notes=notes,
+        rows_total=total,
+    )
+
+
 def _pull_request_stats(config: Config, arguments: dict) -> Answer:
     repo = _need_str(arguments, "repo", REPOS)
     days = _need_int(arguments, "days", 1, PRS_MAX_DAYS)
@@ -1198,6 +1242,28 @@ TOOLS.extend([
             "required": ["number", "repo"],
         },
         handler=_pull_request_detail,
+    ),
+    Tool(
+        name="incidents",
+        description="The recorded incidents whose window overlaps the asked window: what broke,"
+                    " the root-cause chain, evidence links and follow-ups, from the git-versioned"
+                    " incidents file a person writes after a post-mortem. Ask this when a window"
+                    " looks bad, or when another answer notes it overlaps an incident. The records"
+                    " are not telemetry: a window with no incident answers 'no recorded incident"
+                    " overlaps this window', never 'nothing broke'. The Grafana link opens Why runs"
+                    " fail with the same window, the page whose numbers an incident explains.",
+        schema={
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "minimum": 1, "maximum": INSIGHT_MAX_DAYS,
+                         "description": "The window length in days (the archive keeps 90)."},
+                "end": {"type": "string",
+                        "description": "Optional window end, a UTC date (2026-11-01) or time"
+                                       " (2026-11-01T12:00:00Z). Without it the window ends now."},
+            },
+            "required": ["days"],
+        },
+        handler=_incidents,
     ),
 ])
 

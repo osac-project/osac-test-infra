@@ -1,0 +1,92 @@
+# The incidents ci-observe knows the root cause of.
+#
+# One record per diagnosed incident: what broke, why, and the evidence. A
+# person writes these after diagnosis; the serving layer reads this file as
+# it is (no database, no sync). See monitoring/scripts/ci_observe_incidents.py
+# for the rules and monitoring/INSTALL-FAILURES.md for the story of the
+# incident below.
+#
+# Fields:
+#   id        stable, INC-<year>-<month>-<slug>
+#   title     one line, what the incident was
+#   window    from (UTC timestamp, required) and to (UTC timestamp; null or
+#             left out while the incident is ongoing)
+#   areas     where it hurt, e.g. install, test
+#   suites    vmaas, caas, bmaas
+#   repos     the repositories whose CI it hurt
+#   status    identified (cause known, fix not in), fixed, ongoing (still
+#             being diagnosed)
+#   summary   what broke, in two to four sentences
+#   cause     the root-cause chain, concise
+#   evidence  links: post-mortems, PRs, example runs. Quote a label holding
+#             # or : (a plain scalar would take them for a comment or a
+#             mapping)
+#   follow_ups  what is left to do
+#
+# The incidents MCP tool serves the records whose window overlaps the asked
+# window, and the health and failure answers note the overlap in one line.
+# An incident whose `to` is set stops appearing in windows that start after
+# it.
+
+incidents:
+- id: INC-2026-11-install
+  title: Install failures from defective cluster snapshots rolled out by the flavor-refresh fix
+  window:
+    from: 2026-11-05T00:00:00Z
+    to: null
+  areas:
+    - install
+  suites:
+    - vmaas
+    - caas
+    - bmaas
+  repos:
+    - osac
+    - osac-test-infra
+  status: identified
+  summary: >-
+    Install failures doubled weekly in the osac mono-repo CI from Nov 5 and are
+    still ongoing (~25-40% of full-install runs failing at the Install OSAC step
+    as of Nov 23). They were not caused by any PR: the e2e clusters boot from
+    the mutable flavor tag quay.io/osac-project/cluster-flavors:sno-4-22, and
+    new snapshots pushed to that tag in early November (rebuilt with larger
+    disks to mitigate runner disk pressure, cluster-tool PR #45) carried broken
+    state.
+  cause: >-
+    The flavor freshness check in the e2e workflows ran skopeo without
+    credentials against the private Quay repo, failed silently, and runners
+    kept cached snapshots from July. Regime 1 (Nov 6-15): runners that lost
+    their local flavor (disk-pressure cleanups, new machines) fresh-pulled the
+    new snapshot and failed with kubevirt-migration-controller reconcile errors
+    and optimistic-locking storms (30 failed runs, 0 passing show the
+    signature; first-seen 2026-11-06T16:46:35Z, run 42255503074). Regime 2 (Nov
+    16 onward): osac-test-infra PR #797 (merged 2026-11-16T01:20Z) fixed the
+    digest check, every runner re-pulled the current snapshot (digest
+    sha256:e58fe43c367aa8f32c310cbd2a4a2e7b040897abbb7dcea9397e2ad43014ab71),
+    and installs began failing with cert-manager unable to take its
+    leader-election lease, no default-ca ClusterIssuer, no certificates
+    issued, and every TLS-mounting pod failing to start (58 failed runs, 0
+    passing; first-seen 2026-11-16T09:37:53Z). The failure is intermittent
+    because the snapshot's defect is a boot-time race: a failing run
+    (43865187352, Nov 16 12:17) and a passing run (44193072179, Nov 17 22:45)
+    booted the identical flavor digest. A separate CaaS CI configuration issue
+    had independently caused ~50% of CaaS merge-queue runs to fail for weeks
+    before this (post-mortem point 4).
+  evidence:
+    - label: "Post-mortem in #wg-infra (iskornya, 2026-11-16 08:59 UTC)"
+      url: https://redhat-internal.slack.com/archives/C0B8KR3HK16/p1794819597154149
+    - label: "osac-test-infra PR #797 — the flavor-refresh fix that triggered the mass rollout"
+      url: https://github.com/osac-project/osac-test-infra/pull/797
+    - label: "cluster-tool PR #45 — snapshot disk sizes (created 2026-11-06 14:30, hours before onset)"
+      url: https://github.com/osac-project/cluster-tool/pull/45
+    - label: "First regime-1 run 42255503074 (2026-11-06 16:46:35Z)"
+      url: https://github.com/osac-project/osac/actions/runs/42255503074
+    - label: "First regime-2 failure window — osac runs of 2026-11-16"
+      url: https://github.com/osac-project/osac/actions/runs/43865187352
+    - label: "ci-observe: failure signatures, vmaas merge-queue, Nov 6-15 and Nov 16-23 windows"
+      url: https://osac-ci.redhat.com:3000/d/ci-observe-failures/ci-observe-e28094-why-runs-fail
+  follow_ups:
+    - Rebuild the sno-4-22 snapshot from a known-good cluster (verify cert-manager leader election and the default-ca ClusterIssuer after boot).
+    - Test new snapshots with the full regression suite before pushing to the flavor tag, and alert when runners are not picking up the current digest (from the post-mortem).
+    - Move the flavor tag to versioned, immutable references with an explicit rollout, instead of one mutable tag.
+    - Exact Quay push timestamps still unverified (registry API requires auth).

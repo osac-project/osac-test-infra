@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import yaml
 
 import ci_observe_seed
 
@@ -83,6 +84,10 @@ class Stores:
     def __init__(self, directory):
         self.jobs_db = str(directory / "workflow-exporter.db")
         self.trends_db = str(directory / "trends.db")
+        self.incidents_file = str(directory / "incidents.yml")
+        # No recorded incident until a test writes one: the documents' notes
+        # stay about the stores the test built.
+        self.write_incidents([])
         with sqlite3.connect(self.jobs_db) as conn:
             conn.execute(
                 "CREATE TABLE jobs (id INTEGER PRIMARY KEY, run_id TEXT, repo TEXT, workflow TEXT, category TEXT,"
@@ -149,7 +154,12 @@ class Stores:
             conn.close()
 
     def api(self, now=NOW):
-        return insights.CIObserveInsights(self.jobs_db, self.trends_db, clock=lambda: now)
+        return insights.CIObserveInsights(self.jobs_db, self.trends_db, clock=lambda: now,
+                                          incidents_file=self.incidents_file)
+
+    def write_incidents(self, records):
+        """Replace the incidents file the api() reads."""
+        Path(self.incidents_file).write_text(yaml.safe_dump({"incidents": records}), encoding="utf-8")
 
 
 @pytest.fixture
@@ -671,7 +681,10 @@ def test_an_unreadable_rollup_pass_table_is_unknown_freshness_not_a_crash(stores
 
 
 def test_missing_stores_are_notes_never_errors(tmp_path):
-    api = insights.CIObserveInsights(str(tmp_path / "none.db"), str(tmp_path / "none-trends.db"), clock=lambda: NOW)
+    # No incidents file either: every kind, the incidents document included,
+    # must answer with a note rather than an error.
+    api = insights.CIObserveInsights(str(tmp_path / "none.db"), str(tmp_path / "none-trends.db"),
+                                     clock=lambda: NOW, incidents_file=str(tmp_path / "no-incidents.yml"))
 
     for kind in insights.CIObserveInsights.KINDS:
         document = get(api, kind, test="anything")
@@ -684,7 +697,7 @@ def test_missing_stores_are_notes_never_errors(tmp_path):
 def test_every_document_says_what_it_counts_and_when(stores):
     stores.run(NOW - timedelta(hours=5))
 
-    for kind in ("health", "time", "failures", "tests", "waits"):
+    for kind in ("health", "time", "failures", "tests", "waits", "incidents"):
         about = get(stores.api(), kind, days=14)["about"][0]
         assert about["population"], kind
         assert about["window"] == "2026-10-24 12:00 to 2026-11-07 12:00 UTC", kind
@@ -919,7 +932,10 @@ def test_the_waits_page_answers_when_a_phase_was_not_measured(stores):
 def seeded(tmp_path_factory):
     directory = tmp_path_factory.mktemp("seed")
     paths = ci_observe_seed.seed(directory, now=NOW)
-    return insights.CIObserveInsights(paths["jobs_db"], paths["trends_db"], clock=lambda: NOW)
+    incidents_file = directory / "incidents.yml"
+    incidents_file.write_text("incidents: []\n", encoding="utf-8")
+    return insights.CIObserveInsights(paths["jobs_db"], paths["trends_db"], clock=lambda: NOW,
+                                      incidents_file=str(incidents_file))
 
 
 @pytest.mark.parametrize("days", [7, 30])

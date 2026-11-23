@@ -1,5 +1,6 @@
 FROM python:3.12-slim
-RUN pip install --no-cache-dir prometheus_client requests
+# pyyaml reads the git-versioned incident records (ci_observe_incidents.py).
+RUN pip install --no-cache-dir prometheus_client requests pyyaml
 WORKDIR /app
 ENTRYPOINT ["python3"]
 CMD ["/app/workflow-exporter.py"]

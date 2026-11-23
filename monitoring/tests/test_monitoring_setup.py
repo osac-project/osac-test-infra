@@ -126,6 +126,22 @@ def test_every_script_a_container_mounts_is_copied_by_both_central_modes():
             assert source in full, f"--central does not copy {script} ({quadlet.name} mounts it)"
 
 
+def test_the_incidents_file_reaches_the_exporter_container():
+    """The incidents layer is a config file the exporter reads, not a script:
+    the quadlet mounts it (podman refuses a missing source, so a mode that
+    does not copy it stops the exporter on restart) and points the reader at
+    it, and the image carries the YAML parser it reads with."""
+    quadlet = (QUADLETS / "workflow-exporter.container").read_text()
+    assert "config/ci-observe/incidents.yml:/app/incidents.yml:ro,Z" in quadlet
+    assert "Environment=CI_OBSERVE_INCIDENTS_FILE=/app/incidents.yml" in quadlet
+    copy = 'cp "${MONITORING_REPO_DIR}/config/ci-observe/incidents.yml"'
+    for name, block in (("--update-central", update_central_block()),
+                        ("--central", full_install_block())):
+        assert copy in block, f"{name} does not copy the incidents file"
+    containerfile = (MONITORING / "containers" / "Containerfile.workflow-exporter").read_text()
+    assert "pyyaml" in containerfile, "the exporter reads YAML incidents records"
+
+
 def test_both_central_modes_install_the_same_containers():
     update = update_central_block()
     loop = re.search(r"(?ms)for unit in (.*?); do", update).group(1)

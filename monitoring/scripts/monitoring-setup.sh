@@ -650,6 +650,11 @@ if [[ "${MODE}" == "update-central" ]]; then
     fi
     cp "${MONITORING_REPO_DIR}/config/grafana/datasources.yml" "${MONITORING_HOME}/config/grafana/datasources.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
+    # The git-versioned incident records the exporter container bind-mounts;
+    # the restart below is what makes the container see a new revision.
+    mkdir -p "${MONITORING_HOME}/config/ci-observe"
+    cp "${MONITORING_REPO_DIR}/config/ci-observe/incidents.yml" \
+       "${MONITORING_HOME}/config/ci-observe/incidents.yml"
     deploy_tempo210_config
     deploy_caddyfile
     deploy_dashboards
@@ -688,6 +693,9 @@ if [[ "${MODE}" == "update-central" ]]; then
        "${MONITORING_HOME}/scripts/ci_observe_phases.py"
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_insights.py" \
        "${MONITORING_HOME}/scripts/ci_observe_insights.py"
+    # The incident records and their rules; ci_observe_insights imports it.
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_incidents.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_incidents.py"
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_spans.py" \
        "${MONITORING_HOME}/scripts/ci_observe_spans.py"
     chmod +x "${MONITORING_HOME}/scripts/ci_observe_spans.py"
@@ -873,6 +881,12 @@ if [[ "${MODE}" == "central" ]]; then
     cp "${MONITORING_REPO_DIR}/config/alertmanager.yml" "${MONITORING_HOME}/config/alertmanager.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/datasources.yml" "${MONITORING_HOME}/config/grafana/datasources.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
+    # The git-versioned incident records the exporter container bind-mounts
+    # (workflow-exporter.container). podman refuses a missing mount source,
+    # so an update that skips this would stop the container on restart.
+    mkdir -p "${MONITORING_HOME}/config/ci-observe"
+    cp "${MONITORING_REPO_DIR}/config/ci-observe/incidents.yml" \
+       "${MONITORING_HOME}/config/ci-observe/incidents.yml"
     deploy_tempo210_config
     deploy_caddyfile
 
@@ -969,6 +983,10 @@ cp "${MONITORING_REPO_DIR}/scripts/ci_observe_phases.py" \
    "${MONITORING_HOME}/scripts/ci_observe_phases.py"
 cp "${MONITORING_REPO_DIR}/scripts/ci_observe_insights.py" \
    "${MONITORING_HOME}/scripts/ci_observe_insights.py"
+# The incident records and their rules; ci_observe_insights imports it, and
+# the exporter quadlet bind-mounts it.
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_incidents.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_incidents.py"
 info "Installed workflow-exporter and its ci-observe modules"
 
 ###############################################################################

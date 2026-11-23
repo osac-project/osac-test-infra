@@ -15,6 +15,11 @@ a note in the document, never an error):
                                goes and what it waits for
     /api/ci-observe/waits      what the tests wait for in the product, by
                                resource kind and by wait, and shared fixtures
+    /api/ci-observe/incidents  the recorded incidents whose window overlaps
+                               the asked window, from the git-versioned
+                               incidents file (no store); the health and
+                               failures documents carry a one-line note for
+                               each incident their window overlaps
 
 Common parameters: days (7 by default, at most KEEP_DAYS), suite (all,
 vmaas, caas, bmaas), repo (all, osac, osac-test-infra), trigger (all, pr,
@@ -62,6 +67,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ci_observe_incidents as incidents
 import ci_observe_phases as phases
 import ci_observe_spans
 
@@ -660,10 +666,13 @@ class CIObserveInsights:
     """The insights endpoints. Built once per exporter; reads the stores on
     every uncached request."""
 
-    KINDS = ("health", "time", "failures", "tests", "test", "waits")
+    KINDS = ("health", "time", "failures", "tests", "test", "waits", "incidents")
 
-    def __init__(self, jobs_db, trends_db, clock=None):
+    def __init__(self, jobs_db, trends_db, clock=None, incidents_file=None):
         self.stores = Stores(jobs_db, trends_db)
+        # The git-versioned incident records, read where the documents that
+        # need them are built (see _incident_notes and _incidents).
+        self.incidents_file = incidents_file or incidents.incidents_file()
         self._clock = clock or (lambda: datetime.now(UTC))
         self._cache = {}
         self._inflight = {}
@@ -695,11 +704,20 @@ class CIObserveInsights:
                 event.wait(timeout=60)
                 continue
             try:
-                self._limit_to_stored_history(filters)
+                if kind != "incidents":
+                    # The incidents document reads no run store: the runs'
+                    # coverage and freshness are not its concern.
+                    self._limit_to_stored_history(filters)
                 document = getattr(self, f"_{kind}")(filters, params)
                 document.setdefault("notes", [])
-                sources, stale = self._freshness(now)
-                document["notes"] = filters.notes + document["notes"] + stale + self._test_history_notes(kind, filters)
+                if kind == "incidents":
+                    sources = f"Incidents: {self.incidents_file} (git-versioned)"
+                    stale = []
+                else:
+                    sources, stale = self._freshness(now)
+                document["notes"] = (filters.notes + document["notes"] + stale
+                                     + self._test_history_notes(kind, filters)
+                                     + self._incident_notes(kind, filters))
                 document["window"] = [filters.window()]
                 document["generated_at"] = iso(now)
                 # The one row a page's "About these numbers" panel reads: what
@@ -773,6 +791,26 @@ class CIObserveInsights:
         if first is None or first <= start:
             return []
         return [f"test results are stored from {first}: the test numbers do not cover {start} to {first}"]
+
+    # The documents whose MCP tools answer "why did runs break": the Overview's
+    # health (suite_health) and Why runs fail (failure_causes,
+    # failure_signatures). A window that overlaps a recorded incident says so
+    # in one line, because the numbers it shows are that incident's work --
+    # without the line, a 30% install failure rate reads as a mystery every
+    # time it is asked about again.
+    INCIDENT_KINDS = ("health", "failures")
+
+    def _incident_notes(self, kind, filters):
+        if kind not in self.INCIDENT_KINDS:
+            return []
+        records, notes, unavailable = incidents.load_incidents(self.incidents_file)
+        if unavailable:
+            return [f"{unavailable}, so no incident context is noted"]
+        return notes + [
+            incidents.note_line(record)
+            for record in records
+            if incidents.overlaps(record, filters.window_from, filters.window_to)
+        ]
 
     # -- freshness ---------------------------------------------------------
     def _freshness(self, now):
@@ -1949,3 +1987,32 @@ class CIObserveInsights:
             for index, part in enumerate(("setup", "waits", "actions", "teardown")):
                 rows[-1][f"{part}_share"] = ratio(sum(known(index)), total)
         return rows
+
+    # -- incidents -----------------------------------------------------------
+    def _incidents(self, filters, params):
+        """The recorded incidents whose window overlaps this window: the
+        root-cause answers behind a bad-looking pass rate. No store is read;
+        `unavailable` says why the records could not be, so an answer of no
+        rows never reads as "nothing ever broke" over a file that was not
+        there."""
+        records, notes, unavailable = incidents.load_incidents(self.incidents_file)
+        rows = [
+            incidents.row(record)
+            for record in records
+            if incidents.overlaps(record, filters.window_from, filters.window_to)
+        ]
+        end = f" ending {filters.end}" if filters.end else ""
+        if unavailable:
+            notes = [*notes, unavailable]
+        document = {
+            "population": (
+                f"recorded CI incidents whose window overlaps the last {filters.days} days{end},"
+                " from the git-versioned incidents file"
+            ),
+            "incidents": rows,
+            "notes": notes,
+        }
+        if unavailable:
+            document["unavailable"] = unavailable
+        return document
+

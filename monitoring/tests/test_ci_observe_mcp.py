@@ -171,12 +171,15 @@ def test_tools_list_names_every_tool_with_its_required_parameters(config):
     assert set(tools) == {
         "suite_health", "failing_tests", "flaky_tests", "failure_causes", "failure_signatures",
         "time_to_result", "slowest_tests", "time_phases", "waits", "test_history", "run_failed_tests",
-        "list_runs", "pull_request_stats", "pull_requests", "pull_request_detail",
+        "list_runs", "pull_request_stats", "pull_requests", "pull_request_detail", "incidents",
     }
     # Every population dimension is required with no default: the agent
     # must ask which suite, trigger, repository and window it means.
     assert tools["suite_health"]["inputSchema"]["required"] == ["suite", "trigger", "repo", "days"]
     assert "enum" in tools["suite_health"]["inputSchema"]["properties"]["suite"]
+    # The incidents tool asks for a window only: an incident is not per
+    # suite, trigger or repository.
+    assert tools["incidents"]["inputSchema"]["required"] == ["days"]
 
 
 def test_a_notification_answers_nothing(config):
@@ -488,6 +491,91 @@ def test_the_pull_request_numbers_include_the_real_document_kpis(config, web):
     web.add("http://exporter/api/ci-observe/prs?days=30&repo=osac", document)
     answer = tool_call(config, "pull_request_stats", {"repo": "osac", "days": 30})
     assert "lead_median_s" in answer["rows"][0]
+
+
+# -- the incidents tool ------------------------------------------------------------------
+
+
+def seeded_incident():
+    """One incident record as the exporter's incidents document serves it."""
+    return {
+        "id": "INC-2026-11-install", "title": "Install failures from defective snapshots",
+        "status": "identified", "window_from": "2026-11-05T00:00:00Z", "window_to": "",
+        "areas": ["install"], "suites": ["vmaas", "caas", "bmaas"], "repos": ["osac", "osac-test-infra"],
+        "summary": "Install failures doubled weekly from Nov 5.",
+        "cause": "The flavor freshness check failed silently.",
+        "evidence": [{"label": "the post-mortem", "url": "https://example.com/pm"}],
+        "follow_ups": ["rebuild the snapshot"],
+    }
+
+
+def incidents_document(rows, unavailable=""):
+    document = {
+        "incidents": rows,
+        "about": [{"population": "recorded CI incidents whose window overlaps"}],
+        "window": [{"days": 7}],
+        "notes": [],
+    }
+    if unavailable:
+        document["unavailable"] = unavailable
+    return document
+
+
+def test_an_incidents_question_returns_rows_urls_and_the_about_row(config, web):
+    web.add("http://exporter/api/ci-observe/incidents?days=7",
+            incidents_document([seeded_incident()]))
+    answer = tool_call(config, "incidents", {"days": 7})
+    assert answer["rows"] == [seeded_incident()]
+    assert answer["rows_total"] == 1
+    assert answer["api_url"] == "http://exporter/api/ci-observe/incidents?days=7"
+    assert answer["grafana_url"] == ("https://grafana/d/ci-observe-failures/ci-observe-e28094-why-runs-fail"
+                                     "?var-days=7")
+    assert answer["about"] == {"population": "recorded CI incidents whose window overlaps"}
+    assert answer["not_answerable"] == ""
+    assert answer["question"] == "Incidents overlapping the last 7 days"
+
+
+def test_an_incidents_window_may_end_in_the_past_and_is_checked(config, web):
+    end = days_ago(3)
+    web.add(f"http://exporter/api/ci-observe/incidents?days=7&end={end}T00%3A00%3A00Z",
+            incidents_document([]))
+    answer = tool_call(config, "incidents", {"days": 7, "end": end})
+    assert answer["question"] == f"Incidents overlapping the 7 days before {end}T00:00:00Z"
+    assert answer["not_answerable"] == "no recorded incident overlaps this window"
+    for bad in (0, 91):
+        with pytest.raises(mcp.ToolError, match="days"):
+            tool_call(config, "incidents", {"days": bad})
+    assert web.calls == [f"http://exporter/api/ci-observe/incidents?days=7&end={end}T00%3A00%3A00Z"]
+
+
+def test_an_incidents_file_that_cannot_be_read_is_not_answerable(config, web):
+    web.add("http://exporter/api/ci-observe/incidents?days=7",
+            incidents_document([], unavailable="the incidents file /app/incidents.yml cannot be read"))
+    answer = tool_call(config, "incidents", {"days": 7})
+    assert answer["rows"] == []
+    assert answer["not_answerable"] == "the incidents file /app/incidents.yml cannot be read"
+
+
+def test_the_incident_note_reaches_the_failure_answers(config, web):
+    """The exporter writes the one-line incident context into the health and
+    failure documents; the tools carry the documents' notes, so the answers
+    a window-overlap question lands on say what the numbers are."""
+    line = ("this window overlaps incident INC-2026-11-install: Install failures from defective snapshots"
+            " — Install failures doubled weekly from Nov 5. (see the incidents tool)")
+    web.add("http://exporter/api/ci-observe/failures?days=7&suite=vmaas&trigger=pr&repo=osac", {
+        "causes": [{"cause": "install"}], "signatures": [{"signature": "cert-manager cannot get lease"}],
+        "about": [{}], "window": [{}], "notes": [line],
+    })
+    web.add("http://exporter/api/ci-observe/health?days=7&suite=vmaas&trigger=pr&repo=osac", {
+        "suites": [{"suite": "vmaas", "pass_rate": 0.6}], "about": [{}], "window": [{}], "notes": [line],
+    })
+    population = {"suite": "vmaas", "trigger": "pr", "repo": "osac", "days": 7}
+    answer = tool_call(config, "failure_causes", population)
+    assert line in answer["notes"]
+    signatures = tool_call(config, "failure_signatures", population)
+    assert line in signatures["notes"]
+    health = tool_call(config, "suite_health", population)
+    assert line in health["notes"]
 
 
 # -- the HTTP server and the OAuth gate ----------------------------------------------
