@@ -335,12 +335,13 @@ def test_the_repos_incidents_file_holds_the_seeded_incident():
         "https://github.com/osac-project/osac/pull/2407",
         "https://github.com/osac-project/osac-test-infra/pull/828",
         "https://github.com/osac-project/osac-test-infra/pull/825",
+        "https://github.com/osac-project/osac/pull/2590",
         "https://osac-ci.redhat.com:3000/d/ci-observe-failures/ci-observe-e28094-why-runs-fail",
     ]
     # A label holds text a plain YAML scalar cannot (# and : start comments
     # and mappings): quoted, it loads whole.
     assert only["evidence"][0]["label"] == "Post-mortem in #wg-infra (iskornya, 2026-11-16 08:59 UTC)"
-    assert only["evidence"][8]["label"].startswith("ci-observe: failure signatures")
+    assert only["evidence"][9]["label"].startswith("ci-observe: failure signatures")
     assert len(only["follow_ups"]) == 8
 
 

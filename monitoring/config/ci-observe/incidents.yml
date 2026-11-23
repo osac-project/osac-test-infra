@@ -66,8 +66,12 @@ incidents:
     16 the whole fleet booted the new snapshot at once, colliding with the
     merge-queue backlog, and install failures jumped. The Install OSAC
     failure then and now is the AAP race above; Nov 16-20 runs also showed
-    AAP project git checkouts failing for fork PR-head SHAs ("fatal: unable
-    to read tree"). The failures subsided on Nov 20 18:29 UTC by timing
+    the AAP project update failing with "fatal: unable to read tree": the
+    project pin is a commit SHA, and the ref holding it was deleted or
+    rewritten mid-install (a force-push to the PR's fork branch, or a
+    merge-queue entry rebuild dropping a gh-readonly-queue ref), so the
+    default-refspec fetch never retrieved it — fixed by fetching the pin by
+    SHA via scm_refspec (osac PR #2590). The failures subsided on Nov 20 18:29 UTC by timing
     convergence, not by a fix. The Nov 9 snapshot itself is healthy: a bare
     OCP 4.22.14 SNO, clean recert, no cert-manager in it at all; its one real
     latent defect is OVN's br-ex landing on the secondary network with
@@ -104,12 +108,14 @@ incidents:
       url: https://github.com/osac-project/osac-test-infra/pull/828
     - label: "osac-test-infra PR #825 — the AWS-credentials rotation fix"
       url: https://github.com/osac-project/osac-test-infra/pull/825
+    - label: "osac PR #2590 — fetch the AAP project pin by SHA via scm_refspec (fixes the git-tree failure)"
+      url: https://github.com/osac-project/osac/pull/2590
     - label: "ci-observe: failure signatures, vmaas merge-queue, Nov 6-15 and Nov 16-23 windows"
       url: https://osac-ci.redhat.com:3000/d/ci-observe-failures/ci-observe-e28094-why-runs-fail
   follow_ups:
     - "Pre-cache the AAP images in the cluster flavor; the readiness race window is the registry pull time."
     - "Make osac-aap-bootstrap wait for the AAP gateway's actual health instead of in-cluster pings, or raise its retry budget."
-    - "Fix the AAP project's git fetch so fork PR-head SHAs resolve (fatal: unable to read tree)."
+    - "Land osac PR #2590: fetch the AAP project pin by SHA via scm_refspec, so a force-push or merge-queue rebuild cannot orphan it mid-install."
     - "Fix the ci-observe signature selection bias: gatherer boilerplate scores as a perfect failure discriminator because only failed runs are fully gathered; filter those lines or gather passing runs too. Done: the artifact-log rollup now filters the gatherer's own line shapes (the oc logs --previous BadRequest text, the tolerations every pod describe prints) at index time and counts what it filtered; the gather-on-failure behavior is unchanged."
     - "Fix the snapshot's OVN br-ex secondary-network placement, or clean the ovnk interface hints in cluster-tool's restore."
     - "Test new snapshots with the full regression suite before pushing them to the flavor tag, and alert when runners are not picking up the current digest (from the post-mortem)."
