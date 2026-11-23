@@ -3,8 +3,7 @@
 # One record per diagnosed incident: what broke, why, and the evidence. A
 # person writes these after diagnosis; the serving layer reads this file as
 # it is (no database, no sync). See monitoring/scripts/ci_observe_incidents.py
-# for the rules and monitoring/INSTALL-FAILURES.md for the story of the
-# incident below.
+# for the rules. Each record's summary and cause carry the story.
 #
 # Fields:
 #   id        stable, INC-<year>-<month>-<slug>
