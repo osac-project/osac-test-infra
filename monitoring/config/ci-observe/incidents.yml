@@ -77,7 +77,11 @@ incidents:
     latent defect is OVN's br-ex landing on the secondary network with
     ip_forward=0, which breaks externally-facing MetalLB VIPs (the CaaS guest
     API; mitigated for caas and full-regression by PRs #828 and #832) but not
-    pod egress and not the install path. Overlapping causes in the same
+    pod egress and not the install path; on two of the three failing bundles
+    examined, kubelet kept the primary network as the node IP while OVN's
+    node-primary-ifaddr recorded the secondary — a first-boot race
+    divergence between the nodeip chain and the default-route chain, not a
+    source-hint collision. Overlapping causes in the same
     period, all fixed: the July-era CaaS ingress coin flip OSAC-7419 (osac
     PR #2407, Nov 16 21:52), the AWS-credentials rotation outage (PR #825,
     Nov 15) and the OVN forwarding defect (#828, #832). The cert-manager
@@ -87,10 +91,12 @@ incidents:
     pod describes) scores 100 percent of failed and 0 percent of passing
     runs, while cert-manager's 20-30 second leader-election RBAC lag is a
     normal transient of every fresh install, reproduced on a healthy clone of
-    the exact flavor digest. Unconfirmed co-candidate for the Nov 16 jump:
-    the aap-operator v2.6.0-0.1787258256 channel promotion, already present
-    in the Nov 16 failing bundles; its promotion date is not discoverable
-    from Quay.
+    the exact flavor digest. Confirmed co-candidate for the Nov 16 jump: the
+    aap-operator v2.6.0-0.1787258256 channel promotion (CSV built 2026-08-20,
+    AAP 2.6-12) — CI saw the previous CSV the day before and this one from
+    the first failing run, so the live OCP index promotion landed just
+    before 2026-11-16 09:37 UTC; the CI subscriptions carry no startingCSV
+    pin, so clones track the live index head.
   evidence:
     - label: "Post-mortem in #wg-infra (iskornya, 2026-11-16 08:59 UTC)"
       url: https://redhat-internal.slack.com/archives/C0B8KR3HK16/p1794819597154149
@@ -117,7 +123,7 @@ incidents:
     - "Make osac-aap-bootstrap wait for the AAP gateway's actual health instead of in-cluster pings, or raise its retry budget."
     - "Land osac PR #2590: fetch the AAP project pin by SHA via scm_refspec, so a force-push or merge-queue rebuild cannot orphan it mid-install."
     - "Fix the ci-observe signature selection bias: gatherer boilerplate scores as a perfect failure discriminator because only failed runs are fully gathered; filter those lines or gather passing runs too. Done: the artifact-log rollup now filters the gatherer's own line shapes (the oc logs --previous BadRequest text, the tolerations every pod describe prints) at index time and counts what it filtered; the gather-on-failure behavior is unchanged."
-    - "Fix the snapshot's OVN br-ex secondary-network placement, or clean the ovnk interface hints in cluster-tool's restore."
+    - "Pin why 4.22.14 clones place br-ex on the secondary: on a Nov-flavor clone, capture the first-boot nodeip journal, /run/nodeip-configuration/primary-ip and OVN's node-primary-ifaddr — the failing clones show kubelet on the primary and OVN on the secondary, a first-boot race divergence. Requires flavor pull permission; the CI robot currently has none on osac-project/cluster-flavors."
     - "Test new snapshots with the full regression suite before pushing them to the flavor tag, and alert when runners are not picking up the current digest (from the post-mortem)."
-    - "Determine whether the aap-operator v2.6.0-0.1787258256 promotion contributed to the Nov 16 jump."
+    - "Pin the AAP operator CSV in the CI subscriptions (startingCSV), so catalog promotions cannot change install behavior mid-flight."
     - "Move the flavor tag to versioned, immutable references with an explicit rollout, instead of one mutable tag."
