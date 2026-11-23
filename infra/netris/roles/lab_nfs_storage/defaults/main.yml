@@ -6,10 +6,18 @@
 # sees the tenant's `default-nat` address as the client. The range is added to
 # global.networking.excludedIpv4Cidrs by prep-osac.
 #
+# This file is the single source of truth for the endpoint values. The Netris
+# Makefile reads lab_nfs_server_ip, lab_nfs_export, lab_nfs_ssh_user,
+# lab_nfs_ssh_key, and lab_nfs_client_log from here when it writes .env.infra,
+# and verify-storage loads the same defaults through this role.
+#
 # Inputs (inventory/group_vars/all.yml):
-#   netris_storage_endpoint_enabled  enable the endpoint
+#   netris_storage_endpoint_enabled  enable the endpoint (default false)
 #   netris_storage_endpoint_cidr     CIDR reserved for the endpoint
 #   osac_external_ip_pool_cidr       NAT pool the export admits
+#   bmaas_provisioning_snat_cidr     BMaaS first-boot SNAT range the export admits
+#   lab_nfs_isp_ip                   netris-lab's isp-server address
+#   lab_nfs_isp_gateway              the host's virbr0 gateway
 #
 # Outputs:
 #   lab_nfs_server_ip                NFS endpoint address
@@ -19,25 +27,34 @@
 lab_nfs_bridge: "br-storage"
 lab_nfs_bridge_ip: "192.168.123.1"
 lab_nfs_server_ip: "192.168.123.10"
-lab_nfs_mac: "52:54:00:12:34:56"
 lab_nfs_vm_name: "lab-nfs"
 lab_nfs_vcpu: 2
 lab_nfs_memory_mb: 4096
 lab_nfs_disk_gb: 20
-lab_nfs_base_image: "/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
-lab_nfs_image_dir: "/var/lib/libvirt/images"
+# Derive the libvirt paths from netris-lab when it is loaded; keep the standard
+# locations as a fallback for a direct role run.
+lab_nfs_image_dir: "{{ libvirt_images_dir | default('/var/lib/libvirt/images') }}"
+lab_nfs_base_image: >-
+  {{ lab_nfs_image_dir }}/{{ ubuntu_image_name | default('ubuntu-24.04-server-cloudimg-amd64.img') }}
 lab_nfs_export: "/srv/osac-storage"
 lab_nfs_client_log: "/var/log/osac-nfs-clients.log"
 lab_nfs_ssh_user: "osac"
 lab_nfs_ssh_key: "/root/.ssh/lab-nfs"
-lab_nfs_isp_ip: "192.168.122.15"
-lab_nfs_isp_gateway: "192.168.122.1"
+# netris-lab's isp-server has a fixed address on virbr0; the host gateway is
+# the libvirt default. Override both in inventory for a different lab.
+lab_nfs_isp_ip: "{{ netris_isp_server_ip | default('192.168.122.15') }}"
+lab_nfs_isp_gateway: "{{ netris_isp_server_gateway | default('192.168.122.1') }}"
 # Resolver for the storage VM. The lab default `dns_server` (8.8.8.8) is the
 # bare-metal resolver and is often blocked; override this per lab with a
-# reachable resolver without changing the Netris DHCP option set.
+# reachable resolver without changing the Netris DHCP option set. The CI full
+# job supplies the same resolver it gives bare metal.
 lab_nfs_dns_server: "{{ dns_server }}"
-# The NAT pool plus the provisioning SNAT range, so first-boot BMaaS mounts
-# and tenant mounts both work. Keep this in step with the lab pools.
+# Only the pools this lab actually uses: tenant NAT addresses (the default
+# NATGateway allocates from the lab ExternalIPPool) and the BMaaS first-boot
+# provisioning SNAT range. Do not widen these to a shared RFC1918 range.
 lab_nfs_client_cidrs:
-  - "{{ osac_external_ip_pool_cidr }}"
-  - "{{ bmaas_provisioning_snat_cidr }}"
+  - "{{ osac_external_ip_pool_cidr | ansible.utils.ipaddr('subnet') }}"
+  - "{{ bmaas_provisioning_snat_cidr | ansible.utils.ipaddr('subnet') }}"
+# Where the verify tasks may run the OSAC suite from.
+lab_nfs_repo_dir: "{{ playbook_dir }}/../.."
+lab_nfs_suite_path: "tests/e2e/networking/storage/test_storage_nat.py"

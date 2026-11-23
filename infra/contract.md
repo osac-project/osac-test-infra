@@ -20,6 +20,8 @@ select a deployment scenario explicitly.
 | `deploy-infra` | Provision the lab infrastructure |
 | `deploy-ocp` | Deploy an OpenShift cluster |
 | `deploy-osac` | Deploy OSAC on the cluster, write `.env.infra` |
+| `deploy-storage` | Optional backend-owned storage endpoint on an existing lab, gated by the backend's enable flag |
+| `verify-storage` | Verify the optional storage endpoint and run its one test suite when the deployment supports it |
 | `setup-<deploy-suite>` | Prepare the selected deployment scenario (can be no-op) |
 | `prepare-suite` | Suite-specific setup before pytest; tests create their own tenant prerequisites |
 | `deploy-suite` | Prepare the suite, then create persistent tenants, suite networking, and workloads |
@@ -27,7 +29,8 @@ select a deployment scenario explicitly.
 | `destroy-osac` | Tear down OSAC only |
 | `destroy-suite` | Tear down resources owned by the selected deployment scenario; a backend may reject aggregate scenarios that would destroy shared infrastructure |
 | `destroy-setup` | Remove host-side setup installed by `setup-infra`, or no-op if none is needed |
-| `destroy-infra` | Tear down everything |
+| `destroy-infra` | Tear down everything, including optional backend-owned endpoints |
+| `destroy-storage` | Remove only the optional backend storage endpoint and leave the lab running |
 | `gather-infra` | Collect infrastructure diagnostics |
 | `gather-<deploy-suite>` | Collect diagnostics for the selected deployment scenario |
 
@@ -41,6 +44,11 @@ OSAC_NAMESPACE=<namespace>
 OSAC_VM_KUBECONFIG=<path>          # when selected tests need a separate workload cluster
 OSAC_PULL_SECRET_PATH=<path>       # when deployment or tests need the pull secret
 OSAC_E2E_FABRIC_SNAPSHOT_CMD=<abs path>  # optional, see below
+OSAC_STORAGE_NFS_SERVER=<address>        # optional, when the backend publishes a storage endpoint
+OSAC_STORAGE_NFS_EXPORT=<path>
+OSAC_STORAGE_SSH_HOST=<user@host>
+OSAC_STORAGE_SSH_IDENTITY=<private key path>
+OSAC_STORAGE_LOG_PATH=<server log path>
 ```
 
 `OSAC_E2E_FABRIC_SNAPSHOT_CMD` is optional and is never a `REQUIRED_VARS` entry.
@@ -65,12 +73,12 @@ REQUIRED_VARS="KUBECONFIG OSAC_NAMESPACE OSAC_VM_KUBECONFIG"
 ```
 
 Before `run-tests`, the top-level Makefile sources `.env.infra` and checks each
-variable listed by `contracts/<test-selection>`. The Netris `bmaas`, `full`, and
-`stretched` contracts also require the BMaaS SSH host map, instance type, and
-guest-visible interface name published by setup. A backend owns these
-contracts because required connection details depend on its deployment. Keeping
-them beside the backend avoids coupling the infrastructure interface to test
-implementation details in the OSAC mono-repo.
+variable listed by `contracts/<test-selection>`. The Netris `bmaas`, `full`,
+`stretched`, and `storage-nat` contracts also require the BMaaS SSH host map,
+instance type, and guest-visible interface name published by setup. A backend
+owns these contracts because required connection details depend on its
+deployment. Keeping them beside the backend avoids coupling the infrastructure
+interface to test implementation details in the OSAC mono-repo.
 
 ## Variables
 

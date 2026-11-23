@@ -1,0 +1,145 @@
+---
+# Remove everything the lab_nfs_storage role creates. Safe to run against a
+# lab where the endpoint was never enabled: every step tolerates absent state.
+# Used by destroy-storage and by destroy-infra so a later deploy starts from a
+# clean host.
+
+- name: Check the lab NFS domain
+  ansible.builtin.command:
+    argv: [virsh, dominfo, "{{ lab_nfs_vm_name }}"]
+  register: _lab_nfs_domain
+  changed_when: false
+  failed_when: false
+
+- name: Destroy the lab NFS domain
+  ansible.builtin.command:
+    argv: [virsh, destroy, "{{ lab_nfs_vm_name }}"]
+  when: _lab_nfs_domain.rc == 0
+  changed_when: true
+  failed_when: false
+
+- name: Undefine the lab NFS domain and remove its disks
+  ansible.builtin.command:
+    argv: [virsh, undefine, "{{ lab_nfs_vm_name }}", --remove-all-storage]
+  when: _lab_nfs_domain.rc == 0
+  changed_when: true
+  failed_when: false
+
+- name: Remove the seed ISO, seed directory, and overlay
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed.iso"
+    - "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed"
+    - "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}.qcow2"
+
+- name: Read the NetworkManager connection names
+  ansible.builtin.command:
+    argv: [nmcli, -t, -f, NAME, con, show]
+  register: _lab_nfs_nm_connections
+  changed_when: false
+  failed_when: false
+
+- name: Delete the storage bridge connection
+  ansible.builtin.command:
+    argv: [nmcli, con, delete, "{{ lab_nfs_bridge }}"]
+  when: lab_nfs_bridge in _lab_nfs_nm_connections.stdout_lines | default([])
+  changed_when: true
+  failed_when: false
+
+- name: Remove the storage bridge link if it is orphaned
+  ansible.builtin.command:
+    argv: [ip, link, delete, "{{ lab_nfs_bridge }}"]
+  failed_when: false
+  changed_when: true
+
+- name: Get firewalld state
+  ansible.builtin.command: firewall-cmd --state
+  register: _lab_nfs_firewalld
+  changed_when: false
+  failed_when: false
+
+- name: Define whether firewalld is running
+  ansible.builtin.set_fact:
+    _lab_nfs_firewalld_running: >-
+      {{ _lab_nfs_firewalld.rc == 0
+         and _lab_nfs_firewalld.stdout | trim == 'running' }}
+
+- name: Define the host uplink for firewall cleanup
+  ansible.builtin.set_fact:
+    _lab_nfs_host_uplink: "{{ ansible_default_ipv4.interface | default('') }}"
+
+- name: Remove the firewalld masquerade rule
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - --direct
+      - --remove-rule
+      - ipv4
+      - nat
+      - POSTROUTING
+      - "0"
+      - -s
+      - "{{ netris_storage_endpoint_cidr | ansible.utils.ipaddr('subnet') }}"
+      - -o
+      - "{{ _lab_nfs_host_uplink }}"
+      - -j
+      - MASQUERADE
+  when:
+    - _lab_nfs_firewalld_running | bool
+    - _lab_nfs_host_uplink | length > 0
+  changed_when: true
+  failed_when: false
+
+- name: Remove the storage bridge trust from firewalld
+  ansible.posix.firewalld:
+    zone: trusted
+    interface: "{{ lab_nfs_bridge }}"
+    permanent: true
+    immediate: true
+    state: disabled
+  when: _lab_nfs_firewalld_running | bool
+  failed_when: false
+
+- name: Reload firewalld after cleanup
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: false
+  when: _lab_nfs_firewalld_running | bool
+
+- name: Remove the iptables masquerade rule when firewalld is inactive
+  ansible.builtin.iptables:
+    table: nat
+    chain: POSTROUTING
+    source: "{{ netris_storage_endpoint_cidr | ansible.utils.ipaddr('subnet') }}"
+    out_interface: "{{ _lab_nfs_host_uplink }}"
+    jump: MASQUERADE
+    state: absent
+  when:
+    - not (_lab_nfs_firewalld_running | bool)
+    - _lab_nfs_host_uplink | length > 0
+  failed_when: false
+
+- name: Remove the storage CIDR route from the ISP server
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=10
+      - "root@{{ lab_nfs_isp_ip }}"
+      - "ip route del {{ netris_storage_endpoint_cidr | ansible.utils.ipaddr('subnet') }}"
+  changed_when: true
+  failed_when: false
+
+- name: Remove the lab NFS SSH key
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ lab_nfs_ssh_key }}"
+    - "{{ lab_nfs_ssh_key }}.pub"

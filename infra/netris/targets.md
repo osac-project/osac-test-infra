@@ -145,11 +145,17 @@ the root `make e2e` does not wire up.
 | `vmaas` | `tests/e2e/networking/vmaas/test_vmaas_networking.py`, then its billing files | `vmaas` |
 | `bmaas` | `tests/e2e/networking/bmaas/` | `bmaas` only: its `PROTOCOL_ICMP` rules are rejected with cudn_evpn |
 | `stretched` | `tests/e2e/networking/stretched/` | `full` |
-| `full` | `tests/e2e/` minus `networking/vmaas` and `networking/bmaas`, serial | `full` |
+| `storage-nat` | `tests/e2e/networking/storage/` | `full` only; one suite for FR-5, NFR-2, and NFR-3 |
+| `full` | `tests/e2e/` minus `networking/vmaas`, `networking/bmaas`, and `networking/storage`, serial | `full` |
 | `caas` | `tests/e2e/caas/` | `caas`, `full` |
 
 `maas`, `caas_networking`, `maas_networking`, `storage`, `metering` and
-`references` also exist as `test-<suite>` targets. `tests/e2e/networking/vmaas/`
+`references` also exist as `test-<suite>` targets. `test-full` intentionally
+ignores `tests/e2e/networking/storage`; the full CI job runs the single
+`storage-nat` suite as one extra step after setup and the main suite:
+`make verify-storage INFRA=netris DEPLOY_SUITE=full EXTRA_VARS="netris_storage_endpoint_enabled=true"`.
+`verify-storage` fails when a `full` run cannot find
+`tests/e2e/networking/storage/test_storage_nat.py`. `tests/e2e/networking/vmaas/`
 holds one ordered module whose tests depend on each other: `test-vmaas` runs
 `test_vmaas_networking.py` (`test_00` to `test_14`) with `-x` (stops at the first failure; the
 fixture finalizers clean up) and `TEST=` (`-k`) must never slice it. A second
@@ -215,6 +221,27 @@ The MaaS wrappers have additional Make variables:
 
 `setup-maas` and `deploy-maas` are backend wrappers over the CaaS playbooks;
 `maas` is a supported `DEPLOY_SUITE`.
+
+The optional lab storage endpoint adds these variables:
+
+| Variable | Default | Used by |
+|---|---|---|
+| `netris_storage_endpoint_enabled` | `false` | `deploy-infra`, `deploy-storage`, `verify-storage`, `prep-osac` |
+| `netris_storage_endpoint_cidr` | `192.168.123.0/24` | `lab_nfs_storage`, `prep-osac` excluded ranges |
+| `LAB_NFS_SERVER_IP` | `192.168.123.10` | `lab_nfs_storage`, `.env.infra` |
+| `LAB_NFS_EXPORT` | `/srv/osac-storage` | `lab_nfs_storage`, `.env.infra` |
+| `LAB_NFS_SSH_USER` / `LAB_NFS_SSH_HOST` | `osac` / `osac@192.168.123.10` | `lab_nfs_storage`, `.env.infra` |
+| `LAB_NFS_SSH_IDENTITY` | `/root/.ssh/lab-nfs` | `lab_nfs_storage`, `.env.infra` |
+| `LAB_NFS_LOG_PATH` | `/var/log/osac-nfs-clients.log` | `lab_nfs_storage`, `.env.infra` |
+| `lab_nfs_dns_server` | `dns_server` | `lab_nfs_storage` storage-VM resolver |
+
+The `LAB_NFS_*` defaults come from
+`roles/lab_nfs_storage/defaults/main.yml`; the Makefile reads them when it
+writes `.env.infra`, and `verify-storage` loads the same role defaults. Set the
+Make variables for a per-lab override. `deploy-storage` fails unless
+`netris_storage_endpoint_enabled=true`. `destroy-storage` removes the VM,
+bridge, key, firewall rule, and ISP route; `destroy-infra` runs the same
+cleanup.
 
 ## Environment, config file, and local files
 
@@ -538,16 +565,17 @@ target-specific and should be checked at the referenced playbook/role.
 
 ## Lab facts
 
-Tenant CIDRs: prep-osac always adds all of `10.0.0.0/8` (the lab's Netris private allocation, `netris_private_allocation_cidr`) to `global.networking.excludedIpv4Cidrs` and asserts that the default tenant network and subnet are outside it. The lab sets no 10.x tenant network; the E2E suites use 172.16-172.31 except 172.27 (ExternalIP test pools) and 172.30 (OpenShift services). Keep any you add inside that set.
+Tenant CIDRs: prep-osac always adds all of `10.0.0.0/8` (the lab's Netris private allocation, `netris_private_allocation_cidr`) to `global.networking.excludedIpv4Cidrs` and asserts that the default tenant network and subnet are outside it. The lab sets no 10.x tenant network; the E2E suites use 172.16-172.31 except 172.27 (ExternalIP test pools) and 172.30 (OpenShift services). Keep any you add inside that set. When `netris_storage_endpoint_enabled=true`, prep-osac also adds the canonical `netris_storage_endpoint_cidr` (`192.168.123.0/24`) and asserts the canonical form is present, so a non-network address such as `192.168.123.5/24` still passes.
 
 The VMaaS and stretched tests reach guests through a helper Pod, not `virtctl`. The pytest host needs `kubectl` or `oc`, `ssh` and `ssh-keygen`; the cluster must be able to pull `OSAC_E2E_SSH_HELPER_IMAGE` (default: the digest-pinned `ghcr.io/osac-project/osac-aap` image the cluster already pulls for AAP jobs; the lab exports nothing, set it to the deployed tag or a mirror only when ghcr.io is unreachable).
 
 `prep-osac` patches the cloned aap chart (`osac-aap/charts/aap/templates/config-as-code-secret.yaml`) to accept the lab's plain-HTTP Netris controller URL. There are no DNS settings: VMs use the cluster DNS that OVN-K DHCP gives, and bare metal uses the Netris default DHCP option set.
 
-`deploy-osac` writes `infra/netris/.env.infra` with `KUBECONFIG`, `OSAC_NAMESPACE`, `OSAC_VM_KUBECONFIG` and
-`OSAC_PULL_SECRET_PATH`. `setup-bmaas` appends the BMaaS keys (`OSAC_BMH_SSH_HOSTS`, `OSAC_BMI_INSTANCE_TYPE`,
-`OSAC_BMI_NETWORK_INTERFACE`) that the contracts in `infra/netris/contracts/<test-suite>` require (`bmaas`,
-`stretched`, `full`; `vmaas` needs only `KUBECONFIG`, `OSAC_NAMESPACE`, `OSAC_VM_KUBECONFIG`). `setup-vmaas` adds `OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED=true` only when the `172.27.0.0/16`
+`deploy-osac` writes `infra/netris/.env.infra` with `KUBECONFIG`, `OSAC_NAMESPACE`, `OSAC_VM_KUBECONFIG`,
+`OSAC_PULL_SECRET_PATH`, and the `OSAC_STORAGE_*` endpoint values. `setup-bmaas` appends the BMaaS keys
+(`OSAC_BMH_SSH_HOSTS`, `OSAC_BMI_INSTANCE_TYPE`, `OSAC_BMI_NETWORK_INTERFACE`) that the contracts in
+`infra/netris/contracts/<test-suite>` require (`bmaas`, `stretched`, `full`, and `storage-nat`; `vmaas`
+needs only `KUBECONFIG`, `OSAC_NAMESPACE`, `OSAC_VM_KUBECONFIG`). `setup-vmaas` adds `OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED=true` only when the `172.27.0.0/16`
 return path is acknowledged; only older osac checkouts read it.
 
 ## Old names

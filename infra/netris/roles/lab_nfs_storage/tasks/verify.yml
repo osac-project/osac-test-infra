@@ -1,0 +1,106 @@
+---
+# Verify the lab NFS endpoint itself, then run the storage-over-SNAT E2E suite.
+# The suite owns the VM-tenant, CaaS and BMaaS mounts, the source-address
+# evidence, and the NFR-2/NFR-3 cases; this role only proves the endpoint and
+# that the suite exists in a full run.
+
+- name: Require the storage endpoint to be enabled
+  ansible.builtin.assert:
+    that:
+      - netris_storage_endpoint_enabled | default(false) | bool
+    fail_msg: >-
+      netris_storage_endpoint_enabled is false. Enable the endpoint and deploy
+      it with 'make deploy-storage INFRA=netris EXTRA_VARS=...' before
+      verifying it.
+
+- name: Wait for the NFS port
+  ansible.builtin.wait_for:
+    host: "{{ lab_nfs_server_ip }}"
+    port: 2049
+    timeout: 30
+
+- name: Check the export, NFS versions, and client logger
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_nfs_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - "{{ lab_nfs_ssh_user }}@{{ lab_nfs_server_ip }}"
+      - >-
+        set -eu &&
+        exportfs -v &&
+        systemctl is-active --quiet nfs-server &&
+        systemctl is-active --quiet osac-nfs-clients &&
+        grep -Eq '(^| )\+4\.1( |$)' /proc/fs/nfsd/versions &&
+        grep -Eq '(^| )-3( |$)' /proc/fs/nfsd/versions &&
+        grep -Eq '(^| )-4\.0( |$)' /proc/fs/nfsd/versions &&
+        grep -Eq '(^| )-4\.2( |$)' /proc/fs/nfsd/versions &&
+        grep -q 'root_squash' /etc/exports &&
+        ! grep -q 'no_root_squash' /etc/exports &&
+        grep -q 'insecure' /etc/exports
+  register: _lab_nfs_verify
+  changed_when: false
+
+- name: Require the export to admit only the pools the lab uses
+  ansible.builtin.assert:
+    that:
+      - (osac_external_ip_pool_cidr | ansible.utils.ipaddr('subnet')) in lab_nfs_client_cidrs
+      - (bmaas_provisioning_snat_cidr | ansible.utils.ipaddr('subnet')) in lab_nfs_client_cidrs
+      - lab_nfs_client_cidrs | difference([
+          osac_external_ip_pool_cidr | ansible.utils.ipaddr('subnet'),
+          bmaas_provisioning_snat_cidr | ansible.utils.ipaddr('subnet')]) | length == 0
+    fail_msg: >-
+      The tenant default-nat address comes from
+      {{ osac_external_ip_pool_cidr }} (and BMaaS first boot from
+      {{ bmaas_provisioning_snat_cidr }}), but the export admits
+      {{ lab_nfs_client_cidrs | join(', ') }}.
+
+- name: Check that the deployed suite exists
+  ansible.builtin.stat:
+    path: "{{ osac_dir }}/{{ lab_nfs_suite_path }}"
+  register: _lab_nfs_suite
+
+- name: Fail when a full run has no storage suite
+  ansible.builtin.assert:
+    that:
+      - _lab_nfs_suite.stat.exists
+    fail_msg: >-
+      {{ osac_dir }}/{{ lab_nfs_suite_path }} is missing. A full run must not
+      pass on endpoint checks alone; check out the osac revision that contains
+      tests/e2e/networking/storage/.
+  when: deploy_suite | default('') == 'full'
+
+- name: Run the full storage-over-SNAT suite
+  when: deploy_suite | default('') == 'full'
+  ansible.builtin.command:
+    argv:
+      - make
+      - run-tests
+      - INFRA=netris
+      - "DEPLOY_SUITE={{ deploy_suite }}"
+      - TEST_SUITE=storage-nat
+  args:
+    chdir: "{{ lab_nfs_repo_dir }}"
+  environment:
+    OSAC_MONO_DIR: "{{ osac_dir }}"
+  register: _lab_nfs_e2e
+  changed_when: false
+
+- name: Explain when the full suite does not run
+  when: deploy_suite | default('') != 'full'
+  ansible.builtin.debug:
+    msg: >-
+      The storage-over-SNAT suite needs VMaaS, CaaS and BMaaS; it runs only
+      with DEPLOY_SUITE=full. The endpoint checks above passed.
+
+- name: Report the endpoint
+  ansible.builtin.debug:
+    msg:
+      - "NFS server: {{ lab_nfs_server_ip }}:{{ lab_nfs_export }}"
+      - "Client log: {{ lab_nfs_client_log }}"
+      - "Admitted CIDRs: {{ lab_nfs_client_cidrs | join(', ') }}"
+      - "Excluded CIDR: {{ netris_storage_endpoint_cidr }}"

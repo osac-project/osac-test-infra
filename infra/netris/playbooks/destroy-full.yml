@@ -1,13 +1,18 @@
 ---
 - name: Full destroy — nuke all VMs, wipe data disk, clean services and DNS
   hosts: all
-  gather_facts: false
+  gather_facts: true
   vars:
     netris_lab_dir: "{{ inventory_dir }}/../netris-lab"
   pre_tasks:
     - name: Load netris-lab variables
       ansible.builtin.include_vars:
         file: "{{ netris_lab_dir }}/group_vars/all.yml"
+
+    - name: Remove the optional lab NFS endpoint state
+      ansible.builtin.include_role:
+        name: lab_nfs_storage
+        tasks_from: cleanup
 
   tasks:
     # --- Phase 1: Route53 DNS cleanup (needs AWS CLI before K3s teardown) ---
@@ -299,6 +304,7 @@
       loop:
         - br-mgmt
         - br-public
+        - br-storage
       failed_when: false
       changed_when: true
 

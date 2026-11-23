@@ -1,3 +1,11 @@
+# Lab-only NFS export for OSAC-8073. This is test infrastructure, not a
+# production storage configuration.
+#
+# root_squash keeps client root mapped to nobody. `insecure` is required
+# because tenant traffic crosses the VirtualNetwork NATGateway SNAT, which may
+# remap the client's privileged source port. Do not copy this export to a
+# production server; a production NFS path needs `secure` and a NAT that
+# preserves privileged ports.
 {% for cidr in lab_nfs_client_cidrs %}
-{{ lab_nfs_export }} {{ cidr }}(rw,sync,no_subtree_check,insecure,no_root_squash)
+{{ lab_nfs_export }} {{ cidr }}(rw,sync,no_subtree_check,insecure,root_squash)
 {% endfor %}

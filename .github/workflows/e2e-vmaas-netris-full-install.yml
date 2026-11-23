@@ -381,6 +381,12 @@ jobs:
             sudo dnf install -y jq
           fi
           EXTRA_VARS='{"dns_server":"8.8.8.8","bare_metal_services":true}'
+          # The lab storage endpoint is opt-in. Enable it for the full job only;
+          # the other suites must not create the VM, bridge, or excluded CIDR.
+          if [ "${DEPLOY_SUITE}" = "full" ]; then
+            EXTRA_VARS=$(echo "${EXTRA_VARS}" | jq -c \
+              '. + {"netris_storage_endpoint_enabled": true, "lab_nfs_dns_server": "8.8.8.8"}')
+          fi
           declare -A OVERRIDES=(
             [osac_repo]="$OSAC_REPO"
             [osac_branch]="$OSAC_BRANCH"
@@ -568,22 +574,6 @@ jobs:
           MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
           make deploy-osac INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${MERGED}"
 
-      - name: Deploy the lab storage endpoint
-        if: inputs.deploy-suite == 'full'
-        timeout-minutes: 30
-        shell: bash
-        env:
-          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
-        run: make deploy-storage INFRA=netris
-
-      - name: Verify storage over tenant SNAT
-        if: inputs.deploy-suite == 'full'
-        timeout-minutes: 120
-        shell: bash
-        env:
-          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
-        run: make verify-storage INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}"
-
       - name: Set up Netris test prerequisites
         shell: bash
         # setup-vmaas can spend up to 80 minutes in sequential readiness polling.
@@ -600,6 +590,17 @@ jobs:
         env:
           DEPLOY_SUITE: ${{ inputs.deploy-suite }}
         run: make run-tests INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}"
+
+      # Runs after setup-suite and the main suite: the storage suite needs the
+      # provisioned ExternalIPPool, tenant default networking, and BMaaS hosts.
+      - name: Run Netris storage-over-SNAT E2E tests
+        if: inputs.deploy-suite == 'full'
+        timeout-minutes: 120
+        shell: bash
+        env:
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make verify-storage INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Gather infra diagnostics
         if: always()

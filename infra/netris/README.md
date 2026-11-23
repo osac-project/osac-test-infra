@@ -152,6 +152,56 @@ does not run pytest; use the root `make e2e` command for the complete pipeline.
 | `make deploy-infra` | Deploy netris-lab (K3s, topology, VMs, connectivity) | ~12 min |
 | `make deploy-ocp` | Configure Netris networking and restore OCP SNO from the OCP-only snapshot | ~15 min |
 | `make deploy-osac` | Prepare profile values and install OSAC with Helm | ~30-60 min |
+| `make deploy-storage` | Opt-in lab NFS endpoint on `br-storage` for `OSAC-8073`; fails unless `netris_storage_endpoint_enabled=true` | ~2 min |
+| `make verify-storage` | Check the endpoint (NFSv4.1-only, `root_squash`, admitted pools) and, for `DEPLOY_SUITE=full`, run the storage-over-SNAT suite | ~5 min + suite |
+| `make destroy-storage` | Remove `lab-nfs`, `br-storage`, the SSH key, the firewalld/iptables rule, and the ISP route | ~1 min |
+
+The storage endpoint is off by default. `deploy-infra` creates it only when
+`netris_storage_endpoint_enabled=true`; the full CI job sets that in
+`EXTRA_VARS`, and the `rdu06` lab inventory sets it explicitly. For
+`caas`, `maas`, `vmaas`, and `bmaas` the VM, bridge, host route, and excluded
+CIDR must not exist.
+
+### Lab storage endpoint (OSAC-8073)
+
+`lab_nfs_storage` creates one plain Ubuntu NFS server on the host bridge
+`br-storage` outside the fabric gateway. Tenant traffic reaches it through the
+VirtualNetwork `NATGateway`, so the server sees the tenant `default-nat`
+address. The endpoint is lab-only test infrastructure; it is not a production
+storage configuration.
+
+The role defaults are the single source for the endpoint values. The Netris
+Makefile reads them when it writes `.env.infra`, and `verify-storage` loads the
+same defaults. Override the `LAB_NFS_*` Make variables for a per-lab change:
+
+| Input | Default (role default) | Meaning |
+|---|---|---|
+| `netris_storage_endpoint_enabled` | `false` | Create the VM, bridge, route, and excluded CIDR |
+| `netris_storage_endpoint_cidr` | `192.168.123.0/24` | Reserved storage range |
+| `LAB_NFS_SERVER_IP` | `192.168.123.10` | NFS server address |
+| `LAB_NFS_EXPORT` | `/srv/osac-storage` | Export path |
+| `LAB_NFS_SSH_USER` / `LAB_NFS_SSH_HOST` | `osac` / `osac@192.168.123.10` | SSH user and host |
+| `LAB_NFS_SSH_IDENTITY` | `/root/.ssh/lab-nfs` | SSH key |
+| `LAB_NFS_LOG_PATH` | `/var/log/osac-nfs-clients.log` | Client-address log |
+| `lab_nfs_dns_server` | `dns_server` | Resolver for the storage VM's apt path |
+
+The export admits only `osac_external_ip_pool_cidr` and
+`bmaas_provisioning_snat_cidr`, uses `root_squash`, and adds `insecure` only
+because tenant traffic crosses the NATGateway SNAT. The storage CIDR is added
+to `global.networking.excludedIpv4Cidrs` only when the endpoint is enabled.
+The NFR-2 no-inbound evidence comes from the suite; this repository does not
+claim it independently.
+
+To run the storage suite against an existing full lab, run the main suite and
+then the one storage target:
+
+```bash
+IMG='osac_branch=<branch> fulfillment_service_image=<reg>/fulfillment-service:<tag> osac_operator_image=<reg>/osac-operator:<tag> osac_aap_image=<reg>/osac-aap:<tag>'
+make e2e INFRA=netris DEPLOY_SUITE=full EXTRA_VARS="$IMG netris_storage_endpoint_enabled=true"
+make verify-storage INFRA=netris DEPLOY_SUITE=full \
+  EXTRA_VARS="netris_storage_endpoint_enabled=true"
+```
+
 
 ### CaaS (run after deploy)
 
@@ -209,6 +259,14 @@ The test-suite targets are:
 | `bmaas` | `test-bmaas` | `tests/e2e/networking/bmaas/` |
 | `full` | `test-full` | `tests/e2e/` minus `networking/vmaas` and `networking/bmaas`, serial |
 | `stretched` | `test-stretched` | `tests/e2e/networking/stretched/` |
+| `storage-nat` | `test-storage-nat` | `tests/e2e/networking/storage/` (single suite; `DEPLOY_SUITE=full` only) |
+
+`test-full` deliberately ignores `tests/e2e/networking/storage`, so the full
+CI job runs it as one extra step after setup and the main suite:
+`make verify-storage INFRA=netris DEPLOY_SUITE=full EXTRA_VARS="netris_storage_endpoint_enabled=true"`.
+`verify-storage` fails when a `full` run cannot find
+`tests/e2e/networking/storage/test_storage_nat.py`; endpoint checks alone are
+not a pass.
 
 The PR E2E commands use the same split:
 
@@ -373,7 +431,7 @@ VMaaS EVPN runs the OSAC Netris Fabric Manager (`osac.templates.netris`) and the
 | `fabricManager: netris` | `netris-runtime.yaml`, generated after the optional profile overlay for all deployment suites |
 | `global.networking.k8sManager` | `netris.yaml`: `cudn_evpn` for vmaas and full, `""` for bmaas; caas-ci's profile value otherwise (prep-osac asserts vmaas, full and bmaas) |
 | `global.networking.networkClass.defaults` | `virtualNetworkIPv4CIDR` and `subnetIPv4CIDR` from `netris_tenant_network_cidr` / `netris_tenant_subnet_cidr` (`192.168.101.0/24`, the CaaS tenant default network) |
-| `global.networking.excludedIpv4Cidrs` | computed: all of `10.0.0.0/8` (the Netris private allocation; tenant networks must not use 10.x, the E2E suites use 172.16-172.31 except 172.27 and 172.30), the bare-metal resolver `/32` (`dns_server`, handed to bare metal by the Netris default DHCP option set), OCP SNAT/DNAT `/32`, node subnet, `192.168.16.0/20`, BMC network, provisioning SNAT range, then from `.evpn-values.yaml` the VTEP CIDR, the Netris loopbacks (`acceptPrefixes`) and the node uplink networks, plus `netris_extra_excluded_cidrs` |
+| `global.networking.excludedIpv4Cidrs` | computed: all of `10.0.0.0/8` (the Netris private allocation; tenant networks must not use 10.x, the E2E suites use 172.16-172.31 except 172.27 and 172.30), the bare-metal resolver `/32` (`dns_server`, handed to bare metal by the Netris default DHCP option set), OCP SNAT/DNAT `/32`, node subnet, `192.168.16.0/20`, BMC network, provisioning SNAT range, then from `.evpn-values.yaml` the VTEP CIDR, the Netris loopbacks (`acceptPrefixes`) and the node uplink networks, plus `netris_extra_excluded_cidrs`. When `netris_storage_endpoint_enabled=true`, it also adds `netris_storage_endpoint_cidr` (`192.168.123.0/24`) as a canonical subnet |
 | `aap.instanceGroups.networkFulfillment.config` | `NETRIS_CONTROLLER_URL` (HTTP NodePort), `NETRIS_USERNAME`, `NETRIS_VALIDATE_CERTS: "false"`, `NETRIS_SITE_ID`, `NETRIS_TENANT_ID: "1"`, `NETRIS_TENANT_NAME`, `NETRIS_MGMT_VPC_ID`, `NETRIS_MGMT_VPC_NAME`, `NETRIS_BM_PROVISIONING_VNET`, `NETRIS_RESOURCE_CLASS_MAP` (the FabricDomain needs it). There is no DNS key: OSAC has no per-resource DNS |
 | `aap.instanceGroups.clusterFulfillment.config` | CaaS profiles only: `NETWORK_CLASS: netris` and `NETWORK_STEPS_COLLECTION: netris.steps` (the controller URL, TLS and CA are bridged from `networkFulfillment.config` by the chart). Other keys: `NETRIS_USERNAME`, `NETRIS_SITE_ID`, `NETRIS_TENANT_ID`, `NETRIS_TENANT_NAME`, `NETRIS_MGMT_VPC_ID`, `NETRIS_MGMT_VPC_NAME`, `NETRIS_RESOURCE_CLASS_MAP` |
 | `aap.instanceGroups.networkFulfillment.secret.NETRIS_PASSWORD` | `netris-runtime.yaml`, passed to `install-osac` through `INSTANCE_VALUES_EXTRA` |

@@ -344,5 +344,14 @@ netris_extra_excluded_cidrs: []
 # Lab-only vendor-neutral NFS endpoint (OSAC-8073). It lives on a host bridge
 # outside the fabric gateway and is reached through the tenant NATGateway. The
 # range is excluded so no tenant network can capture storage traffic.
-netris_storage_endpoint_enabled: true
+#
+# Off by default: the VM, bridge, host route, and excluded CIDR only exist when
+# a lab or CI job enables it explicitly (the full CI job and the rdu06 lab
+# inventory set it to true). Future suites therefore keep their previous shape.
+netris_storage_endpoint_enabled: false
 netris_storage_endpoint_cidr: "192.168.123.0/24"
+
+# netris-lab's isp-server has a fixed address on virbr0. The lab_nfs_storage
+# role routes the storage CIDR through it and must not hard-code these paths.
+netris_isp_server_ip: "192.168.122.15"
+netris_isp_server_gateway: "192.168.122.1"

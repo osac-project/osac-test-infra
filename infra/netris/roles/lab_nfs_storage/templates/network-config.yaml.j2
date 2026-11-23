@@ -1,12 +1,14 @@
 version: 2
 ethernets:
   storage0:
+    # Match by name: libvirt assigns a unique MAC so two lab runs cannot
+    # collide, and this VM has exactly one NIC.
     match:
-      macaddress: "{{ lab_nfs_mac }}"
+      name: "en*"
     set-name: storage0
     dhcp4: false
     addresses:
-      - {{ lab_nfs_server_ip }}/24
+      - {{ lab_nfs_server_ip }}/{{ netris_storage_endpoint_cidr | ansible.utils.ipaddr('prefix') }}
     routes:
       - to: default
         via: {{ lab_nfs_bridge_ip }}

@@ -7,6 +7,13 @@
   ansible.builtin.include_role:
     name: lab_destroy
 
+# Remove the optional lab NFS endpoint's bridge, key, firewall rule, and ISP
+# route. The lab_destroy role removes the VM, but not these host-side pieces.
+- name: Remove the optional lab NFS endpoint
+  ansible.builtin.include_role:
+    name: lab_nfs_storage
+    tasks_from: cleanup
+
 # bmc-net is created by Pulumi (cloudsim), so pulumi destroy above handles it.
 # Clean up any orphans left if Pulumi state was already cleared.
 - name: Destroy bmc-net if orphaned

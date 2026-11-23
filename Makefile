@@ -53,8 +53,11 @@ test-storage:
 	mkdir -p $(REPORTS_DIR)
 	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/storage/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/storage.xml
 
-# Storage over tenant SNAT: VM guest, default network, CaaS PVC, BMaaS host,
-# no-inbound, and two-tenants-same-CIDR. See tests/e2e/networking/storage/.
+# Storage over tenant SNAT: the FR-5, NFR-2, and NFR-3 cases in the single
+# suite at tests/e2e/networking/storage/ (VM guest, default network, CaaS PVC,
+# BMaaS host, no inbound through the NATGateway, two tenants with the same
+# CIDR). Run it with a full deployment; the full CI job does not include it in
+# test-full.
 test-storage-nat:
 	mkdir -p $(REPORTS_DIR)
 	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/storage/ -x -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/storage-nat.xml
@@ -121,7 +124,7 @@ _FWD_VM_KUBECONFIG = $(if $(OSAC_VM_KUBECONFIG),OSAC_VM_KUBECONFIG=$(abspath $(O
 _FWD_PULL_SECRET    = $(if $(OSAC_PULL_SECRET_PATH),OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH))
 _FWD_DEPLOY_SUITE   = DEPLOY_SUITE=$(DEPLOY_SUITE)
 
-.PHONY: e2e deploy-suite deploy-setup setup-infra deploy-infra deploy-storage verify-storage deploy-ocp deploy-osac setup-suite prepare-suite run-tests \
+.PHONY: e2e deploy-suite deploy-setup setup-infra deploy-infra deploy-storage verify-storage destroy-storage deploy-ocp deploy-osac setup-suite prepare-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
         redeploy-osac _require-backend _validate-backend _validate-suite-contract
 
@@ -185,6 +188,9 @@ deploy-storage: _validate-backend
 
 verify-storage: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) verify-storage EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+
+destroy-storage: _require-backend
+	$(MAKE) -C $(INFRA_DIR) destroy-storage EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-ocp: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)

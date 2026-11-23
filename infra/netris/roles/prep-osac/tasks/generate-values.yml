@@ -147,7 +147,7 @@
       - deploy_suite | default('') not in netris_k8s_manager_suites or _final_values.global.networking.k8sManager == 'cudn_evpn'
       - _final_values.global.networking.excludedIpv4Cidrs | length > 0
       - netris_private_allocation_cidr in _final_values.global.networking.excludedIpv4Cidrs
-      - not (netris_storage_endpoint_enabled | default(false) | bool) or netris_storage_endpoint_cidr in _final_values.global.networking.excludedIpv4Cidrs
+      - not (netris_storage_endpoint_enabled | default(false) | bool) or (netris_storage_endpoint_cidr | ansible.utils.ipaddr('subnet')) in _final_values.global.networking.excludedIpv4Cidrs
       - (netris_tenant_network_cidr | split('.'))[0] != '10'
       - (netris_tenant_subnet_cidr | split('.'))[0] != '10'
       - _final_values.aap.instanceGroups.networkFulfillment.enabled | bool

@@ -1,7 +1,26 @@
 ---
 # Deploy a plain Linux NFS server on a host bridge outside the fabric gateway.
-# Additive: it creates `br-storage`, the `lab-nfs` domain, and one host route.
-# It never touches the SNO, the softgates, or the existing lab VMs.
+# Additive: it creates `br-storage`, the `lab-nfs` domain, and routes only the
+# storage CIDR through netris-lab's ISP server. It never touches the SNO, the
+# softgates, or the existing lab VMs.
+
+- name: Validate the storage endpoint address plan
+  ansible.builtin.assert:
+    that:
+      - netris_storage_endpoint_enabled | default(false) | bool
+      - netris_storage_endpoint_cidr | ansible.utils.ipaddr('subnet') is not none
+      - lab_nfs_server_ip | ansible.utils.ipaddr(netris_storage_endpoint_cidr) is not none
+      - lab_nfs_bridge_ip | ansible.utils.ipaddr(netris_storage_endpoint_cidr) is not none
+      - lab_nfs_client_cidrs | difference([
+          osac_external_ip_pool_cidr | ansible.utils.ipaddr('subnet'),
+          bmaas_provisioning_snat_cidr | ansible.utils.ipaddr('subnet')]) | length == 0
+      - (osac_external_ip_pool_cidr | ansible.utils.ipaddr('subnet')) in lab_nfs_client_cidrs
+      - (bmaas_provisioning_snat_cidr | ansible.utils.ipaddr('subnet')) in lab_nfs_client_cidrs
+    fail_msg: >-
+      Storage endpoint values are inconsistent. The endpoint must be enabled,
+      the server and bridge addresses must be inside
+      {{ netris_storage_endpoint_cidr }}, and the export must admit exactly the
+      tenant NAT pool and the BMaaS provisioning SNAT range.
 
 - name: Require the Ubuntu cloud image
   ansible.builtin.stat:
@@ -16,7 +35,14 @@
       {{ lab_nfs_base_image }} is missing. Provision it with the netris-lab
       prerequisites before enabling the storage endpoint.
 
-- name: Ensure the storage bridge exists
+- name: Read the NetworkManager connection names
+  ansible.builtin.command:
+    argv: [nmcli, -t, -f, NAME, con, show]
+  register: _lab_nfs_nm_connections
+  changed_when: false
+  failed_when: false
+
+- name: Create the storage bridge connection
   ansible.builtin.command:
     argv:
       - nmcli
@@ -28,23 +54,28 @@
       - "{{ lab_nfs_bridge }}"
       - con-name
       - "{{ lab_nfs_bridge }}"
+  when: lab_nfs_bridge not in _lab_nfs_nm_connections.stdout_lines | default([])
+  changed_when: true
+
+# Run the modify on every pass so a changed bridge address or CIDR wins over a
+# stale profile: `nmcli con add` alone only sets the address on first creation.
+- name: Ensure the storage bridge address and bridge options are current
+  ansible.builtin.command:
+    argv:
+      - nmcli
+      - con
+      - mod
+      - "{{ lab_nfs_bridge }}"
       - ipv4.method
       - manual
       - ipv4.addresses
-      - "{{ lab_nfs_bridge_ip }}/24"
+      - "{{ lab_nfs_bridge_ip }}/{{ netris_storage_endpoint_cidr | ansible.utils.ipaddr('prefix') }}"
       - bridge.stp
       - "no"
       - ipv6.method
       - disabled
-  register: _lab_nfs_bridge_add
-  changed_when: _lab_nfs_bridge_add.rc == 0
-  failed_when:
-    - _lab_nfs_bridge_add.rc != 0
-    - "'already exists' not in _lab_nfs_bridge_add.stderr"
-
-- name: Disable STP on the storage bridge
-  ansible.builtin.command:
-    argv: [nmcli, con, mod, "{{ lab_nfs_bridge }}", bridge.stp, "no"]
+      - connection.autoconnect
+      - "yes"
   changed_when: false
 
 - name: Bring the storage bridge up
@@ -53,10 +84,16 @@
   changed_when: false
 
 - name: Get firewalld state
-  ansible.builtin.command: systemctl is-active firewalld
+  ansible.builtin.command: firewall-cmd --state
   register: _lab_nfs_firewalld
   changed_when: false
   failed_when: false
+
+- name: Define whether firewalld is running
+  ansible.builtin.set_fact:
+    _lab_nfs_firewalld_running: >-
+      {{ _lab_nfs_firewalld.rc == 0
+         and _lab_nfs_firewalld.stdout | trim == 'running' }}
 
 - name: Trust the storage bridge in firewalld
   ansible.posix.firewalld:
@@ -65,11 +102,9 @@
     permanent: true
     immediate: true
     state: enabled
-  when:
-    - _lab_nfs_firewalld is defined
-    - _lab_nfs_firewalld.stdout | trim in ['active', 'running']
+  when: _lab_nfs_firewalld_running | bool
 
-- name: Masquerade storage-VM internet traffic, never lab traffic
+- name: Masquerade storage-VM internet traffic, never lab traffic (firewalld)
   ansible.builtin.command:
     argv:
       - firewall-cmd
@@ -81,7 +116,7 @@
       - POSTROUTING
       - "0"
       - -s
-      - "{{ netris_storage_endpoint_cidr }}"
+      - "{{ netris_storage_endpoint_cidr | ansible.utils.ipaddr('subnet') }}"
       - -o
       - "{{ ansible_default_ipv4.interface }}"
       - -j
@@ -91,16 +126,31 @@
   failed_when:
     - _lab_nfs_masq.rc != 0
     - "'ALREADY_ENABLED' not in _lab_nfs_masq.stdout"
-  when:
-    - _lab_nfs_firewalld is defined
-    - _lab_nfs_firewalld.stdout | trim in ['active', 'running']
+  when: _lab_nfs_firewalld_running | bool
 
 - name: Reload firewalld after the masquerade rule
   ansible.builtin.command: firewall-cmd --reload
   changed_when: false
-  when:
-    - _lab_nfs_firewalld is defined
-    - _lab_nfs_firewalld.stdout | trim in ['active', 'running']
+  when: _lab_nfs_firewalld_running | bool
+
+# The lab host is not guaranteed to run firewalld. Without the masquerade the
+# storage VM cannot reach apt, so fall back to an idempotent iptables rule.
+- name: Masquerade storage-VM internet traffic, never lab traffic (iptables)
+  ansible.builtin.iptables:
+    table: nat
+    chain: POSTROUTING
+    source: "{{ netris_storage_endpoint_cidr | ansible.utils.ipaddr('subnet') }}"
+    out_interface: "{{ ansible_default_ipv4.interface }}"
+    jump: MASQUERADE
+  when: not (_lab_nfs_firewalld_running | bool)
+
+- name: Ensure IPv4 forwarding is enabled for the storage bridge
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
 
 - name: Generate the lab NFS SSH key when absent
   ansible.builtin.command:
@@ -153,10 +203,25 @@
     dest: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed/{{ item.dest }}"
     mode: "0600"
   loop:
-    - {src: user-data.yaml.j2, dest: user-data}
-    - {src: meta-data.yaml.j2, dest: meta-data}
-    - {src: network-config.yaml.j2, dest: network-config}
+    - { src: user-data.yaml.j2, dest: user-data }
+    - { src: meta-data.yaml.j2, dest: meta-data }
+    - { src: network-config.yaml.j2, dest: network-config }
 
+- name: Check the rendered cloud-init seed files
+  ansible.builtin.stat:
+    path: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed/{{ item.dest }}"
+  loop:
+    - { dest: user-data }
+    - { dest: meta-data }
+    - { dest: network-config }
+  register: _lab_nfs_seed_files
+
+- name: Check the cloud-init seed ISO
+  ansible.builtin.stat:
+    path: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed.iso"
+  register: _lab_nfs_seed_iso
+
+# Rebuild only when the ISO is missing or older than a rendered seed file.
 - name: Build the cloud-init seed ISO
   ansible.builtin.command:
     argv:
@@ -172,7 +237,14 @@
       - network-config
   args:
     chdir: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed"
+  when: >-
+    not _lab_nfs_seed_iso.stat.exists
+    or _lab_nfs_seed_files.results | map(attribute='stat') | map(attribute='mtime') | max
+       > _lab_nfs_seed_iso.stat.mtime
+  changed_when: true
 
+# libvirt assigns a unique MAC per domain, so two lab runs cannot collide; the
+# netplan file matches by interface name instead of a hard-coded address.
 - name: Define and start the lab NFS domain
   ansible.builtin.command:
     argv:
@@ -188,7 +260,7 @@
       - --disk
       - "path={{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed.iso,device=cdrom"
       - --network
-      - "bridge={{ lab_nfs_bridge }},model=virtio,mac={{ lab_nfs_mac }}"
+      - "bridge={{ lab_nfs_bridge }},model=virtio"
       - --osinfo
       - ubuntu24.04
       - --import
@@ -199,7 +271,6 @@
       - pty,target_type=serial
   args:
     creates: "/etc/libvirt/qemu/{{ lab_nfs_vm_name }}.xml"
-  register: _lab_nfs_define
 
 - name: Ensure the lab NFS domain is running
   ansible.builtin.command:
@@ -359,13 +430,21 @@
   delegate_to: lab_nfs_server
   become: true
 
-- name: Verify NFSv4.1 and the client-address logger
-  ansible.builtin.shell: >-
-    set -e
-    && exportfs -v
-    && systemctl is-active nfs-server
-    && systemctl is-active osac-nfs-clients
-    && grep -q '+4.1' /proc/fs/nfsd/versions
+- name: Verify NFSv4.1-only and the client-address logger
+  ansible.builtin.shell: |
+    set -eu
+    exportfs -v
+    systemctl is-active --quiet nfs-server
+    systemctl is-active --quiet osac-nfs-clients
+    versions=$(cat /proc/fs/nfsd/versions)
+    echo "nfsd versions: ${versions}"
+    grep -Eq '(^| )\+4\.1( |$)' <<< "${versions}"
+    grep -Eq '(^| )-3( |$)' <<< "${versions}"
+    grep -Eq '(^| )-4\.0( |$)' <<< "${versions}"
+    grep -Eq '(^| )-4\.2( |$)' <<< "${versions}"
+    grep -q 'root_squash' /etc/exports
+    ! grep -q 'no_root_squash' /etc/exports
+    grep -q 'insecure' /etc/exports
   delegate_to: lab_nfs_server
   become: true
   register: _lab_nfs_verify
@@ -374,7 +453,8 @@
   delay: 10
   until: _lab_nfs_verify.rc == 0
 
-- name: Route the storage bridge through the ISP server
+# netris-lab's isp-server forwards the storage CIDR to the host default route.
+- name: Route the storage CIDR through the ISP server
   ansible.builtin.command:
     argv:
       - ssh
@@ -383,7 +463,9 @@
       - -o
       - StrictHostKeyChecking=no
       - "root@{{ lab_nfs_isp_ip }}"
-      - "ip route replace {{ netris_storage_endpoint_cidr }} via {{ lab_nfs_isp_gateway }}"
+      - >-
+        ip route replace {{ netris_storage_endpoint_cidr | ansible.utils.ipaddr('subnet') }}
+        via {{ lab_nfs_isp_gateway }}
   changed_when: false
 
 - name: Show the endpoint
@@ -391,4 +473,5 @@
     msg:
       - "NFS server: {{ lab_nfs_server_ip }}:{{ lab_nfs_export }}"
       - "Client log: {{ lab_nfs_client_log }}"
+      - "Admitted CIDRs: {{ lab_nfs_client_cidrs | join(', ') }}"
       - "Excluded CIDR: {{ netris_storage_endpoint_cidr }}"

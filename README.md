@@ -108,7 +108,8 @@ The test targets run pytest from the OSAC mono-repo checkout. Set
 | `test-vmaas` | `tests/e2e/networking/vmaas/` | VMaaS networking tests; one ordered module, then the billing files, never filtered with `TEST` |
 | `test-bmaas` | `tests/e2e/networking/bmaas/` | BMaaS networking tests |
 | `test-stretched` | `tests/e2e/networking/stretched/` | Stretched networking tests |
-| `test-full` | `tests/e2e/` | Serial run of the full profile; ignores `networking/vmaas` and `networking/bmaas` and filters the external-IP cases |
+| `test-full` | `tests/e2e/` | Serial run of the full profile; ignores `networking/vmaas`, `networking/bmaas`, and `networking/storage`, and filters the external-IP cases |
+| `test-storage-nat` | `tests/e2e/networking/storage/` | Single storage-over-SNAT suite for a full deployment; run it separately because `test-full` ignores it |
 | `test-maas` | Dedicated OSAC path, when it exists | MaaS tests; fails when the path is absent |
 | `test-caas_networking`, `test-maas_networking` | Dedicated OSAC paths, when they exist | CaaS and MaaS networking tests; fail when the path is absent |
 | `test-storage` | `tests/e2e/storage/` | Storage E2E tests |

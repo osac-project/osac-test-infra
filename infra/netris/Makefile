@@ -27,13 +27,18 @@ export OSAC_PULL_SECRET_PATH
 KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
 
-# Vendor-neutral NFS endpoint (OSAC-8073). These are the role defaults; the
-# storage-over-SNAT suite reads them through .env.infra.
-LAB_NFS_SERVER_IP ?= 192.168.123.10
-LAB_NFS_EXPORT ?= /srv/osac-storage
-LAB_NFS_SSH_HOST ?= osac@$(LAB_NFS_SERVER_IP)
-LAB_NFS_SSH_IDENTITY ?= /root/.ssh/lab-nfs
-LAB_NFS_LOG_PATH ?= /var/log/osac-nfs-clients.log
+# Vendor-neutral NFS endpoint (OSAC-8073). The role defaults are the single
+# source for the endpoint values: the .env.infra contract below and the
+# verify-storage playbook both consume them, and a per-lab override uses the
+# public LAB_NFS_* Make variables.
+LAB_NFS_ROLE_DEFAULTS := $(abspath roles/lab_nfs_storage/defaults/main.yml)
+_lab_nfs_role_value = $(shell sed -n 's/^$(1):[[:space:]]*"\([^"]*\)"[[:space:]]*$$/\1/p' $(LAB_NFS_ROLE_DEFAULTS))
+LAB_NFS_SERVER_IP ?= $(call _lab_nfs_role_value,lab_nfs_server_ip)
+LAB_NFS_EXPORT ?= $(call _lab_nfs_role_value,lab_nfs_export)
+LAB_NFS_SSH_USER ?= $(call _lab_nfs_role_value,lab_nfs_ssh_user)
+LAB_NFS_SSH_HOST ?= $(LAB_NFS_SSH_USER)@$(LAB_NFS_SERVER_IP)
+LAB_NFS_SSH_IDENTITY ?= $(call _lab_nfs_role_value,lab_nfs_ssh_key)
+LAB_NFS_LOG_PATH ?= $(call _lab_nfs_role_value,lab_nfs_client_log)
 
 # Public Make inputs are translated here into Ansible variables. User
 # EXTRA_VARS comes first; backend-owned deployment context and path mappings
@@ -101,6 +106,9 @@ deploy-storage:
 
 verify-storage:
 	ansible-playbook playbooks/verify-storage.yml $(ANSIBLE_EXTRA)
+
+destroy-storage:
+	ansible-playbook playbooks/destroy-storage.yml $(ANSIBLE_EXTRA)
 
 deploy-ocp:
 	@rm -f .evpn-values.yaml
@@ -393,7 +401,7 @@ health-check:
 # ─── .PHONY ────────────────────────────────────────────────────────
 
 .PHONY: deploy \
-        deploy-setup setup-infra deploy-infra deploy-storage verify-storage deploy-ocp deploy-osac _check-osac-images \
+        deploy-setup setup-infra deploy-infra deploy-storage verify-storage destroy-storage deploy-ocp deploy-osac _check-osac-images \
         setup-caas deploy-caas setup-vmaas gather-vmaas destroy-vmaas \
         test-caas-networking test-caas_networking test-maas-networking test-maas_networking \
         prepare-suite deploy-suite \

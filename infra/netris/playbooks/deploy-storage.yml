@@ -1,7 +1,18 @@
 ---
+# Deploy the lab NFS endpoint on an existing lab without redeploying infra.
+# Fresh installs get it from deploy-infra when netris_storage_endpoint_enabled
+# is true; do not run both in the same CI job.
 - name: Deploy the lab NFS storage endpoint
   hosts: all
   gather_facts: true
   become: true
+  pre_tasks:
+    - name: Require the storage endpoint to be enabled
+      ansible.builtin.assert:
+        that:
+          - netris_storage_endpoint_enabled | default(false) | bool
+        fail_msg: >-
+          netris_storage_endpoint_enabled is false. Set it to true in
+          EXTRA_VARS or in the lab inventory before running deploy-storage.
   roles:
     - lab_nfs_storage

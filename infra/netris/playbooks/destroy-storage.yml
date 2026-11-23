@@ -1,0 +1,13 @@
+---
+# Remove the lab NFS endpoint from an existing lab. destroy-infra also runs this
+# cleanup, so this target is for removing the endpoint without destroying the
+# rest of the lab.
+- name: Destroy the lab NFS storage endpoint
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Remove the endpoint, bridge, firewall rule, route, and key
+      ansible.builtin.include_role:
+        name: lab_nfs_storage
+        tasks_from: cleanup

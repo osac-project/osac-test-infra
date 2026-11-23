@@ -1,6 +1,6 @@
 ---
 - name: Destroy infrastructure
   hosts: all
-  gather_facts: false
+  gather_facts: true
   roles:
     - destroy-infra
