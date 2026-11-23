@@ -664,6 +664,7 @@ jobs:
           # default BMaaS test hosts.
           BMH_CPU: "8"
           BMH_MEMORY_MIB: "12288"
+          BMH_DATA_DISK_SIZE: "50G"
         run: bash .github/scripts/setup-virtual-bmh.sh
 
       - name: Install OSAC
