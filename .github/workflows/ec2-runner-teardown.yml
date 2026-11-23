@@ -12,6 +12,11 @@ name: EC2 Ephemeral Runner Teardown
 on:
   workflow_call:
     inputs:
+      run-key:
+        description: "Tells apart the runners of two suites in one workflow run (the merge queue runs bmaas-netris and vmaas-netris side by side): it joins the run id in the runner name and label, the instance name and tags, and the known-hosts file. Empty: the run id alone, as before. The value given to ec2-runner-provision.yml."
+        required: false
+        type: string
+        default: ""
       instance-id:
         description: "EC2 instance id to terminate (from ec2-runner-provision.yml's instance-id output) -- may be empty if provisioning failed before an instance was created"
         required: false
@@ -58,7 +63,7 @@ jobs:
       # Must match ec2-runner-provision.yml's derivation exactly -- see that
       # file's provision job for why this is computed independently rather
       # than passed as an output.
-      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}${{ inputs.run-key != '' && format('-{0}', inputs.run-key) || '' }}-${{ github.run_attempt }}
     steps:
       # Every step below is if: always(): the job-level if: always() a
       # caller sets on this job only guarantees the job STARTS regardless of

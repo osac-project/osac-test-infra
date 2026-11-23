@@ -191,6 +191,7 @@ jobs:
     permissions:
       contents: read
     with:
+      run-key: vmaas-netris  # the merge queue runs both Netris suites in one run: their runners must not share a name
       instance-type: ${{ inputs.instance-type }}
       aws-region: ${{ inputs.aws-region }}
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
@@ -206,7 +207,7 @@ jobs:
     permissions:
       contents: read
     env:
-      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-vmaas-netris-${{ github.run_attempt }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -293,7 +294,7 @@ jobs:
           QUAY_PASSWORD: ${{ steps.vault-secrets.outputs.QUAY_PASSWORD }}
           AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
           PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
-          LAB_NAME: ci-${{ github.run_id }}
+          LAB_NAME: ci-${{ github.run_id }}-vmaas  # one lab per suite: two labs of one name collide in DNS
         run: |
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
           ./scripts/ec2-runner/push-netris-secrets.sh
@@ -641,6 +642,8 @@ jobs:
       - name: Gather EC2 runner artifacts
         if: always()
         uses: ./.github/actions/gather-ec2-runner-artifacts
+        with:
+          artifact-name: vmaas-netris-ec2-runner-logs  # one per suite: the merge queue runs both in one run
 
   teardown:
     needs: [provision, push-secrets, e2e]
@@ -649,6 +652,7 @@ jobs:
     permissions:
       contents: read
     with:
+      run-key: vmaas-netris  # the same as provision
       instance-id: ${{ needs.provision.outputs.instance-id }}
       runner-id: ${{ needs.provision.outputs.runner-id }}
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}

@@ -11,6 +11,11 @@ name: EC2 Ephemeral Runner Provision
 on:
   workflow_call:
     inputs:
+      run-key:
+        description: "Tells apart the runners of two suites in one workflow run (the merge queue runs bmaas-netris and vmaas-netris side by side): it joins the run id in the runner name and label, the instance name and tags, and the known-hosts file. Empty: the run id alone, as before. The same value must go to ec2-runner-teardown.yml."
+        required: false
+        type: string
+        default: ""
       instance-type:
         description: "EC2 instance type"
         required: false
@@ -70,9 +75,9 @@ jobs:
       # stale cached host key in a shared file). Deterministically derived
       # here (rather than passed as a job output) so the teardown workflow,
       # which needs the identical path to clean it up, can compute the same
-      # value independently -- it only depends on github.run_id/run_attempt,
+      # value independently -- it only depends on github.run_id/run_attempt and the run-key input,
       # available in any job regardless of which file it lives in.
-      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}${{ inputs.run-key != '' && format('-{0}', inputs.run-key) || '' }}-${{ github.run_attempt }}
     outputs:
       instance-id: ${{ steps.provision.outputs.instance-id }}
       public-ip: ${{ steps.provision.outputs.public-ip }}
@@ -139,7 +144,7 @@ jobs:
           # run_attempt (not just run_id) so a re-run after a failed teardown
           # never collides with a still-registered runner/instance from the
           # previous attempt.
-          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}${{ inputs.run-key != '' && format('-{0}', inputs.run-key) || '' }}-${{ github.run_attempt }}
           AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
@@ -155,7 +160,7 @@ jobs:
         env:
           SSH_USER: ${{ steps.provision.outputs.ssh-user }}
           PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
-          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}${{ inputs.run-key != '' && format('-{0}', inputs.run-key) || '' }}-${{ github.run_attempt }}
           GH_TOKEN: ${{ steps.gh-pat.outputs.GH_TOKEN }}
           TOOLING_CHECK_CMDS: ${{ inputs.tooling-check-cmds }}
         run: |

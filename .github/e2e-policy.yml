@@ -40,13 +40,13 @@ jobs:
     check: "E2E / BMaaS Netris Full Install"
     suite: bmaas-netris
     workflow: e2e-pr-bmaas-netris.yml  # a run of its own, started by the decision
-    manual_only: true
+    filters: [netris-infra]  # a change to the Netris backend (it also runs in the merge queue: e2e-queue.yml)
   e2e-vmaas-netris:
     kind: e2e
     check: "E2E / VMaaS Netris Full Install"
     suite: vmaas-netris
     workflow: e2e-pr-vmaas-netris.yml  # a run of its own, started by the decision
-    manual_only: true
+    filters: [netris-infra]  # a change to the Netris backend (it also runs in the merge queue: e2e-queue.yml)
   e2e-stretched-netris:
     kind: e2e
     check: "E2E / Stretched Netris Full Install"

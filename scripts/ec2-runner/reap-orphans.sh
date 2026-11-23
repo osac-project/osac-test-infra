@@ -94,13 +94,15 @@ while IFS=$'\t' read -r INSTANCE_ID LAUNCH_TIME RUN_ID_TAG; do
 
     RUN_STATUS="unknown"
     if [ "$RUN_ID_TAG" != "unknown" ]; then
-        PLAIN_RUN_ID="${RUN_ID_TAG%-*}"
+        # The tag is <run id>-<attempt>, or <run id>-<run key>-<attempt> when two suites share a run (see the run-key
+        # input of ec2-runner-provision.yml): the run id is the leading number.
+        PLAIN_RUN_ID="${RUN_ID_TAG%%[!0-9]*}"
         RUN_STATUS=$(gh run view "$PLAIN_RUN_ID" --json status -q '.status' 2>/dev/null || echo "unknown")
     fi
 
     ORPHAN_REASON=""
     if [ "$RUN_STATUS" = "completed" ]; then
-        ORPHAN_REASON="run ${RUN_ID_TAG%-*} (attempt tag ${RUN_ID_TAG}) is completed but instance is still ${LAUNCH_TIME}"
+        ORPHAN_REASON="run ${PLAIN_RUN_ID} (attempt tag ${RUN_ID_TAG}) is completed but instance is still ${LAUNCH_TIME}"
     elif [ "$AGE_MINUTES" -ge "$MAX_INSTANCE_AGE_MINUTES" ]; then
         ORPHAN_REASON="age ${AGE_MINUTES}m exceeds MAX_INSTANCE_AGE_MINUTES=${MAX_INSTANCE_AGE_MINUTES}m (run status: ${RUN_STATUS})"
     fi
