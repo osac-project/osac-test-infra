@@ -315,30 +315,33 @@ def test_the_repos_incidents_file_holds_the_seeded_incident():
     assert unavailable == "" and notes == []
     [only] = records
     assert only["id"] == "INC-2026-11-install"
-    assert only["title"] == ("Install failures from defective cluster snapshots rolled out"
-                             " by the flavor-refresh fix")
+    assert only["title"] == ("Install failures from an AAP readiness race after"
+                             " the fleet-wide snapshot refresh")
     assert only["window"]["from"] == "2026-11-05T00:00:00Z"
     assert only["window"].get("to") is None, "ongoing as of 2026-11-23"
     assert only["status"] == "identified"
     assert only["areas"] == ["install"]
     assert only["suites"] == ["vmaas", "caas", "bmaas"]
     assert only["repos"] == ["osac", "osac-test-infra"]
-    assert only["summary"].startswith("Install failures doubled weekly in the osac mono-repo CI from Nov 5")
-    assert "quay.io/osac-project/cluster-flavors:sno-4-22" in only["summary"]
+    assert only["summary"].startswith("Install failures in the osac mono-repo CI rose sharply from Nov 5")
+    assert "no healthy upstream" in only["summary"]
     assert "sha256:e58fe43c367aa8f32c310cbd2a4a2e7b040897abbb7dcea9397e2ad43014ab71" in only["cause"]
     assert [item["url"] for item in only["evidence"]] == [
         "https://redhat-internal.slack.com/archives/C0B8KR3HK16/p1794819597154149",
         "https://github.com/osac-project/osac-test-infra/pull/797",
         "https://github.com/osac-project/cluster-tool/pull/45",
-        "https://github.com/osac-project/osac/actions/runs/42255503074",
+        "https://github.com/osac-project/osac/actions/runs/44967627752",
         "https://github.com/osac-project/osac/actions/runs/43865187352",
+        "https://github.com/osac-project/osac/pull/2407",
+        "https://github.com/osac-project/osac-test-infra/pull/828",
+        "https://github.com/osac-project/osac-test-infra/pull/825",
         "https://osac-ci.redhat.com:3000/d/ci-observe-failures/ci-observe-e28094-why-runs-fail",
     ]
     # A label holds text a plain YAML scalar cannot (# and : start comments
     # and mappings): quoted, it loads whole.
     assert only["evidence"][0]["label"] == "Post-mortem in #wg-infra (iskornya, 2026-11-16 08:59 UTC)"
-    assert only["evidence"][5]["label"].startswith("ci-observe: failure signatures")
-    assert len(only["follow_ups"]) == 4
+    assert only["evidence"][8]["label"].startswith("ci-observe: failure signatures")
+    assert len(only["follow_ups"]) == 8
 
 
 def test_the_seeded_incident_serves_the_windows_it_hurt():
@@ -351,7 +354,7 @@ def test_the_seeded_incident_serves_the_windows_it_hurt():
     line = incidents.note_line(only)
     assert line.startswith("this window overlaps incident INC-2026-11-install:")
     assert line.endswith("(see the incidents tool)")
-    assert "Install failures doubled weekly in the osac mono-repo CI from Nov 5" in line
+    assert "Install failures in the osac mono-repo CI rose sharply from Nov 5" in line
 
 
 def test_the_default_path_points_at_the_repo_file():

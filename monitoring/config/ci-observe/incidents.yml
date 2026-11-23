@@ -30,7 +30,7 @@
 
 incidents:
 - id: INC-2026-11-install
-  title: Install failures from defective cluster snapshots rolled out by the flavor-refresh fix
+  title: Install failures from an AAP readiness race after the fleet-wide snapshot refresh
   window:
     from: 2026-11-05T00:00:00Z
     to: null
@@ -45,48 +45,74 @@ incidents:
     - osac-test-infra
   status: identified
   summary: >-
-    Install failures doubled weekly in the osac mono-repo CI from Nov 5 and are
-    still ongoing (~25-40% of full-install runs failing at the Install OSAC step
-    as of Nov 23). They were not caused by any PR: the e2e clusters boot from
-    the mutable flavor tag quay.io/osac-project/cluster-flavors:sno-4-22, and
-    new snapshots pushed to that tag in early November (rebuilt with larger
-    disks to mitigate runner disk pressure, cluster-tool PR #45) carried broken
-    state.
+    Install failures in the osac mono-repo CI rose sharply from Nov 5, peaked
+    Nov 16-20 (merge-queue pass rate 57 percent), and continue in PR-suite
+    retest bursts as of Nov 23. The dominant cause is a readiness race in the
+    AAP stack: the osac-aap-bootstrap job queries the AAP API through the
+    gateway's envoy proxy before the gateway container behind it is healthy
+    (HTTP 503, "no healthy upstream"), retried within a bounded budget (Job
+    backoffLimit 15, helm --wait 40m). Whether a run passes depends on the AAP
+    rollout time, which is dominated by multi-gigabyte registry pulls the
+    cluster snapshot does not pre-cache, so failures cluster in retest bursts
+    and under concurrent load while serial scheduled runs on the same
+    snapshot pass.
   cause: >-
     The flavor freshness check in the e2e workflows ran skopeo without
-    credentials against the private Quay repo, failed silently, and runners
-    kept cached snapshots from July. Regime 1 (Nov 6-15): runners that lost
-    their local flavor (disk-pressure cleanups, new machines) fresh-pulled the
-    new snapshot and failed with kubevirt-migration-controller reconcile errors
-    and optimistic-locking storms (30 failed runs, 0 passing show the
-    signature; first-seen 2026-11-06T16:46:35Z, run 42255503074). Regime 2 (Nov
-    16 onward): osac-test-infra PR #797 (merged 2026-11-16T01:20Z) fixed the
-    digest check, every runner re-pulled the current snapshot (digest
+    credentials against the private Quay repo, failed silently for months,
+    and runners kept July-era snapshots (which carried a 250-pod limit). New
+    snapshots, an OCP 4.22.14 rebuild built 2026-11-09T15:07Z (digest
     sha256:e58fe43c367aa8f32c310cbd2a4a2e7b040897abbb7dcea9397e2ad43014ab71),
-    and installs began failing with cert-manager unable to take its
-    leader-election lease, no default-ca ClusterIssuer, no certificates
-    issued, and every TLS-mounting pod failing to start (58 failed runs, 0
-    passing; first-seen 2026-11-16T09:37:53Z). The failure is intermittent
-    because the snapshot's defect is a boot-time race: a failing run
-    (43865187352, Nov 16 12:17) and a passing run (44193072179, Nov 17 22:45)
-    booted the identical flavor digest. A separate CaaS CI configuration issue
-    had independently caused ~50% of CaaS merge-queue runs to fail for weeks
-    before this (post-mortem point 4).
+    were published in early November and sat unadopted. osac-test-infra PR
+    #797 (OSAC-5886, merged the night of Nov 15-16) fixed the refresh; on Nov
+    16 the whole fleet booted the new snapshot at once, colliding with the
+    merge-queue backlog, and install failures jumped. The Install OSAC
+    failure then and now is the AAP race above; Nov 16-20 runs also showed
+    AAP project git checkouts failing for fork PR-head SHAs ("fatal: unable
+    to read tree"). The failures subsided on Nov 20 18:29 UTC by timing
+    convergence, not by a fix. The Nov 9 snapshot itself is healthy: a bare
+    OCP 4.22.14 SNO, clean recert, no cert-manager in it at all; its one real
+    latent defect is OVN's br-ex landing on the secondary network with
+    ip_forward=0, which breaks externally-facing MetalLB VIPs (the CaaS guest
+    API; mitigated for caas and full-regression by PRs #828 and #832) but not
+    pod egress and not the install path. Overlapping causes in the same
+    period, all fixed: the July-era CaaS ingress coin flip OSAC-7419 (osac
+    PR #2407, Nov 16 21:52), the AWS-credentials rotation outage (PR #825,
+    Nov 15) and the OVN forwarding defect (#828, #832). The cert-manager
+    death signatures that first pointed elsewhere are a telemetry artifact:
+    full log gathers exist only for failed runs, so gatherer boilerplate (oc
+    logs --previous errors on never-restarted pods, toleration lines from
+    pod describes) scores 100 percent of failed and 0 percent of passing
+    runs, while cert-manager's 20-30 second leader-election RBAC lag is a
+    normal transient of every fresh install, reproduced on a healthy clone of
+    the exact flavor digest. Unconfirmed co-candidate for the Nov 16 jump:
+    the aap-operator v2.6.0-0.1787258256 channel promotion, already present
+    in the Nov 16 failing bundles; its promotion date is not discoverable
+    from Quay.
   evidence:
     - label: "Post-mortem in #wg-infra (iskornya, 2026-11-16 08:59 UTC)"
       url: https://redhat-internal.slack.com/archives/C0B8KR3HK16/p1794819597154149
-    - label: "osac-test-infra PR #797 — the flavor-refresh fix that triggered the mass rollout"
+    - label: "osac-test-infra PR #797 — the flavor-refresh fix that rolled the Nov 9 snapshot out to every runner"
       url: https://github.com/osac-project/osac-test-infra/pull/797
-    - label: "cluster-tool PR #45 — snapshot disk sizes (created 2026-11-06 14:30, hours before onset)"
+    - label: "cluster-tool PR #45 — snapshot disk sizes (created 2026-11-06 14:30, during the snapshot rebuild work)"
       url: https://github.com/osac-project/cluster-tool/pull/45
-    - label: "First regime-1 run 42255503074 (2026-11-06 16:46:35Z)"
-      url: https://github.com/osac-project/osac/actions/runs/42255503074
-    - label: "First regime-2 failure window — osac runs of 2026-11-16"
+    - label: "Run 44967627752 — a PASSING run whose bundle contains four failed osac-aap-bootstrap pods with the 503 (the intermittency proof)"
+      url: https://github.com/osac-project/osac/actions/runs/44967627752
+    - label: "Run 43865187352 — a failing run on the same flavor digest as passing run 44193072179"
       url: https://github.com/osac-project/osac/actions/runs/43865187352
+    - label: "osac PR #2407 — the OSAC-7419 CaaS ingress fix (the weeks-old ~50 percent CaaS failure)"
+      url: https://github.com/osac-project/osac/pull/2407
+    - label: "osac-test-infra PR #828 — the OVN forwarding mitigation for the snapshot's networking defect"
+      url: https://github.com/osac-project/osac-test-infra/pull/828
+    - label: "osac-test-infra PR #825 — the AWS-credentials rotation fix"
+      url: https://github.com/osac-project/osac-test-infra/pull/825
     - label: "ci-observe: failure signatures, vmaas merge-queue, Nov 6-15 and Nov 16-23 windows"
       url: https://osac-ci.redhat.com:3000/d/ci-observe-failures/ci-observe-e28094-why-runs-fail
   follow_ups:
-    - Rebuild the sno-4-22 snapshot from a known-good cluster (verify cert-manager leader election and the default-ca ClusterIssuer after boot).
-    - Test new snapshots with the full regression suite before pushing to the flavor tag, and alert when runners are not picking up the current digest (from the post-mortem).
-    - Move the flavor tag to versioned, immutable references with an explicit rollout, instead of one mutable tag.
-    - Exact Quay push timestamps still unverified (registry API requires auth).
+    - "Pre-cache the AAP images in the cluster flavor; the readiness race window is the registry pull time."
+    - "Make osac-aap-bootstrap wait for the AAP gateway's actual health instead of in-cluster pings, or raise its retry budget."
+    - "Fix the AAP project's git fetch so fork PR-head SHAs resolve (fatal: unable to read tree)."
+    - "Fix the ci-observe signature selection bias: gatherer boilerplate scores as a perfect failure discriminator because only failed runs are fully gathered; filter those lines or gather passing runs too."
+    - "Fix the snapshot's OVN br-ex secondary-network placement, or clean the ovnk interface hints in cluster-tool's restore."
+    - "Test new snapshots with the full regression suite before pushing them to the flavor tag, and alert when runners are not picking up the current digest (from the post-mortem)."
+    - "Determine whether the aap-operator v2.6.0-0.1787258256 promotion contributed to the Nov 16 jump."
+    - "Move the flavor tag to versioned, immutable references with an explicit rollout, instead of one mutable tag."
