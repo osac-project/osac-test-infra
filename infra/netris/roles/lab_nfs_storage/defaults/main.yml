@@ -1,0 +1,39 @@
+---
+# Vendor-neutral NFS endpoint for the Netris lab (OSAC-8073).
+#
+# The endpoint lives on a host bridge outside the fabric gateway. Tenant
+# traffic reaches it through the VirtualNetwork NATGateway, so the NFS server
+# sees the tenant's `default-nat` address as the client. The range is added to
+# global.networking.excludedIpv4Cidrs by prep-osac.
+#
+# Inputs (inventory/group_vars/all.yml):
+#   netris_storage_endpoint_enabled  enable the endpoint
+#   netris_storage_endpoint_cidr     CIDR reserved for the endpoint
+#   osac_external_ip_pool_cidr       NAT pool the export admits
+#
+# Outputs:
+#   lab_nfs_server_ip                NFS endpoint address
+#   lab_nfs_export                   export path
+#   lab_nfs_client_log               client-address log on the server
+
+lab_nfs_bridge: "br-storage"
+lab_nfs_bridge_ip: "192.168.123.1"
+lab_nfs_server_ip: "192.168.123.10"
+lab_nfs_mac: "52:54:00:12:34:56"
+lab_nfs_vm_name: "lab-nfs"
+lab_nfs_vcpu: 2
+lab_nfs_memory_mb: 4096
+lab_nfs_disk_gb: 20
+lab_nfs_base_image: "/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
+lab_nfs_image_dir: "/var/lib/libvirt/images"
+lab_nfs_export: "/srv/osac-storage"
+lab_nfs_client_log: "/var/log/osac-nfs-clients.log"
+lab_nfs_ssh_user: "osac"
+lab_nfs_ssh_key: "/root/.ssh/lab-nfs"
+lab_nfs_isp_ip: "192.168.122.15"
+lab_nfs_isp_gateway: "192.168.122.1"
+# The NAT pool plus the provisioning SNAT range, so first-boot BMaaS mounts
+# and tenant mounts both work. Keep this in step with the lab pools.
+lab_nfs_client_cidrs:
+  - "{{ osac_external_ip_pool_cidr }}"
+  - "{{ bmaas_provisioning_snat_cidr }}"

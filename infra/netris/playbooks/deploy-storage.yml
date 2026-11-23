@@ -1,0 +1,7 @@
+---
+- name: Deploy the lab NFS storage endpoint
+  hosts: all
+  gather_facts: true
+  become: true
+  roles:
+    - lab_nfs_storage

@@ -1,0 +1,15 @@
+version: 2
+ethernets:
+  storage0:
+    match:
+      macaddress: "{{ lab_nfs_mac }}"
+    set-name: storage0
+    dhcp4: false
+    addresses:
+      - {{ lab_nfs_server_ip }}/24
+    routes:
+      - to: default
+        via: {{ lab_nfs_bridge_ip }}
+    nameservers:
+      addresses:
+        - {{ dns_server }}
