@@ -32,6 +32,8 @@
       - manual
       - ipv4.addresses
       - "{{ lab_nfs_bridge_ip }}/24"
+      - bridge.stp
+      - "no"
       - ipv6.method
       - disabled
   register: _lab_nfs_bridge_add
@@ -39,6 +41,11 @@
   failed_when:
     - _lab_nfs_bridge_add.rc != 0
     - "'already exists' not in _lab_nfs_bridge_add.stderr"
+
+- name: Disable STP on the storage bridge
+  ansible.builtin.command:
+    argv: [nmcli, con, mod, "{{ lab_nfs_bridge }}", bridge.stp, "no"]
+  changed_when: false
 
 - name: Bring the storage bridge up
   ansible.builtin.command:
@@ -60,7 +67,7 @@
     state: enabled
   when:
     - _lab_nfs_firewalld is defined
-    - _lab_nfs_firewalld.stdout | trim == 'running'
+    - _lab_nfs_firewalld.stdout | trim in ['active', 'running']
 
 - name: Masquerade storage-VM internet traffic, never lab traffic
   ansible.builtin.command:
@@ -86,14 +93,14 @@
     - "'ALREADY_ENABLED' not in _lab_nfs_masq.stdout"
   when:
     - _lab_nfs_firewalld is defined
-    - _lab_nfs_firewalld.stdout | trim == 'running'
+    - _lab_nfs_firewalld.stdout | trim in ['active', 'running']
 
 - name: Reload firewalld after the masquerade rule
   ansible.builtin.command: firewall-cmd --reload
   changed_when: false
   when:
     - _lab_nfs_firewalld is defined
-    - _lab_nfs_firewalld.stdout | trim == 'running'
+    - _lab_nfs_firewalld.stdout | trim in ['active', 'running']
 
 - name: Generate the lab NFS SSH key when absent
   ansible.builtin.command:
@@ -131,23 +138,24 @@
     creates: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}.qcow2"
   register: _lab_nfs_overlay
 
-- name: Render the cloud-init user data
-  ansible.builtin.template:
-    src: user-data.yaml.j2
-    dest: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-user-data.yaml"
-    mode: "0600"
+- name: Create the cloud-init seed directory
+  ansible.builtin.file:
+    path: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed"
+    state: directory
+    mode: "0700"
 
-- name: Render the cloud-init meta data
+# NoCloud requires the files at the ISO root, named exactly user-data,
+# meta-data, and network-config. Rendering them through a staging directory
+# keeps the names right and stops genisoimage from embedding absolute paths.
+- name: Render the cloud-init seed files
   ansible.builtin.template:
-    src: meta-data.yaml.j2
-    dest: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-meta-data.yaml"
+    src: "{{ item.src }}"
+    dest: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed/{{ item.dest }}"
     mode: "0600"
-
-- name: Render the cloud-init network config
-  ansible.builtin.template:
-    src: network-config.yaml.j2
-    dest: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-network-config.yaml"
-    mode: "0600"
+  loop:
+    - {src: user-data.yaml.j2, dest: user-data}
+    - {src: meta-data.yaml.j2, dest: meta-data}
+    - {src: network-config.yaml.j2, dest: network-config}
 
 - name: Build the cloud-init seed ISO
   ansible.builtin.command:
@@ -159,11 +167,11 @@
       - cidata
       - -joliet
       - -rock
-      - "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-user-data.yaml"
-      - "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-meta-data.yaml"
-      - "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-network-config.yaml"
+      - user-data
+      - meta-data
+      - network-config
   args:
-    creates: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed.iso"
+    chdir: "{{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed"
 
 - name: Define and start the lab NFS domain
   ansible.builtin.command:
@@ -181,6 +189,8 @@
       - "path={{ lab_nfs_image_dir }}/{{ lab_nfs_vm_name }}-seed.iso,device=cdrom"
       - --network
       - "bridge={{ lab_nfs_bridge }},model=virtio,mac={{ lab_nfs_mac }}"
+      - --osinfo
+      - ubuntu24.04
       - --import
       - --noautoconsole
       - --graphics
@@ -200,6 +210,23 @@
     - _lab_nfs_start.rc != 0
     - "'already active' not in _lab_nfs_start.stderr"
 
+- name: Read the NFS VM interfaces
+  ansible.builtin.command:
+    argv: [virsh, domiflist, "{{ lab_nfs_vm_name }}"]
+  register: _lab_nfs_iflist
+  changed_when: false
+
+- name: Attach the NFS VM tap to the storage bridge
+  ansible.builtin.command:
+    argv: [ip, link, set, "{{ item }}", master, "{{ lab_nfs_bridge }}"]
+  loop: "{{ _lab_nfs_iflist.stdout | regex_findall('(?m)^\\s*(\\w+)\\s+bridge\\s+') }}"
+  changed_when: false
+
+- name: Bring the storage bridge up after attaching the tap
+  ansible.builtin.command:
+    argv: [ip, link, set, "{{ lab_nfs_bridge }}", up]
+  changed_when: false
+
 - name: Wait for the NFS server SSH port
   ansible.builtin.wait_for:
     host: "{{ lab_nfs_server_ip }}"
@@ -207,39 +234,140 @@
     delay: 5
     timeout: 900
 
-- name: Wait for cloud-init to finish
-  ansible.builtin.command:
-    argv:
-      - ssh
-      - -i
-      - "{{ lab_nfs_ssh_key }}"
-      - -o
-      - StrictHostKeyChecking=no
-      - -o
-      - UserKnownHostsFile=/dev/null
-      - "{{ lab_nfs_ssh_user }}@{{ lab_nfs_server_ip }}"
-      - cloud-init status --wait
+- name: Add the NFS server to the in-memory inventory
+  ansible.builtin.add_host:
+    name: lab_nfs_server
+    ansible_host: "{{ lab_nfs_server_ip }}"
+    ansible_user: "{{ lab_nfs_ssh_user }}"
+    ansible_ssh_private_key_file: "{{ lab_nfs_ssh_key }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+  changed_when: false
+
+# Cloud-init only creates the user and network; package install is an Ansible
+# task so a slow mirror cannot hold the whole play in cloud-init.
+- name: Wait for cloud-init to settle
+  ansible.builtin.command: cloud-init status --wait
+  delegate_to: lab_nfs_server
+  become: true
   register: _lab_nfs_cloud_init
   changed_when: false
-  retries: 30
-  delay: 10
-  until: _lab_nfs_cloud_init.rc == 0
+  failed_when: false
+
+- name: Check the NFS server packages
+  ansible.builtin.command: dpkg -s nfs-kernel-server nfs-common tcpdump
+  delegate_to: lab_nfs_server
+  become: true
+  register: _lab_nfs_packages
+  changed_when: false
+  failed_when: false
+
+- name: Install the NFS server packages
+  ansible.builtin.apt:
+    name:
+      - nfs-kernel-server
+      - nfs-common
+      - tcpdump
+    state: present
+    update_cache: true
+  delegate_to: lab_nfs_server
+  become: true
+  when: _lab_nfs_packages.rc != 0
+
+- name: Create the export directory
+  ansible.builtin.file:
+    path: "{{ lab_nfs_export }}"
+    state: directory
+    mode: "0777"
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Install the NFS exports
+  ansible.builtin.template:
+    src: exports.j2
+    dest: /etc/exports
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Create the nfs.conf drop-in directory
+  ansible.builtin.file:
+    path: /etc/nfs.conf.d
+    state: directory
+    mode: "0755"
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Restrict the server to NFSv4.1
+  ansible.builtin.template:
+    src: nfs.conf.j2
+    dest: /etc/nfs.conf.d/99-osac.conf
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Install the client-address logger
+  ansible.builtin.template:
+    src: osac-nfs-clients.service.j2
+    dest: /etc/systemd/system/osac-nfs-clients.service
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Create the client-address log
+  ansible.builtin.file:
+    path: "{{ lab_nfs_client_log }}"
+    state: touch
+    mode: "0644"
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Reload the NFS exports
+  ansible.builtin.command: exportfs -ra
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Restart the NFS server with the v4.1 setting
+  ansible.builtin.systemd_service:
+    name: nfs-server
+    state: restarted
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Restart the client-address logger
+  ansible.builtin.systemd_service:
+    name: osac-nfs-clients
+    state: restarted
+    daemon_reload: true
+  delegate_to: lab_nfs_server
+  become: true
+
+- name: Enable and start NFS and the client-address logger
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - nfs-server
+    - osac-nfs-clients
+  delegate_to: lab_nfs_server
+  become: true
 
 - name: Verify NFSv4.1 and the client-address logger
-  ansible.builtin.command:
-    argv:
-      - ssh
-      - -i
-      - "{{ lab_nfs_ssh_key }}"
-      - -o
-      - StrictHostKeyChecking=no
-      - -o
-      - UserKnownHostsFile=/dev/null
-      - "{{ lab_nfs_ssh_user }}@{{ lab_nfs_server_ip }}"
-      - >-
-        exportfs -v && systemctl is-active nfs-server
-        && systemctl is-active osac-nfs-clients
-        && grep -q '+4.1' /proc/fs/nfsd/versions
+  ansible.builtin.shell: >-
+    set -e
+    && exportfs -v
+    && systemctl is-active nfs-server
+    && systemctl is-active osac-nfs-clients
+    && grep -q '+4.1' /proc/fs/nfsd/versions
+  delegate_to: lab_nfs_server
+  become: true
   register: _lab_nfs_verify
   changed_when: false
   retries: 12

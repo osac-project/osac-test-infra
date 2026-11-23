@@ -1,0 +1,3 @@
+{% for cidr in lab_nfs_client_cidrs %}
+{{ lab_nfs_export }} {{ cidr }}(rw,sync,no_subtree_check,insecure,no_root_squash)
+{% endfor %}

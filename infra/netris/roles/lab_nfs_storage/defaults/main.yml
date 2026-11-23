@@ -32,6 +32,10 @@ lab_nfs_ssh_user: "osac"
 lab_nfs_ssh_key: "/root/.ssh/lab-nfs"
 lab_nfs_isp_ip: "192.168.122.15"
 lab_nfs_isp_gateway: "192.168.122.1"
+# Resolver for the storage VM. The lab default `dns_server` (8.8.8.8) is the
+# bare-metal resolver and is often blocked; override this per lab with a
+# reachable resolver without changing the Netris DHCP option set.
+lab_nfs_dns_server: "{{ dns_server }}"
 # The NAT pool plus the provisioning SNAT range, so first-boot BMaaS mounts
 # and tenant mounts both work. Keep this in step with the lab pools.
 lab_nfs_client_cidrs:

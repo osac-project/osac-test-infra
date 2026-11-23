@@ -1,0 +1,11 @@
+[Unit]
+Description=Log NFS client source addresses
+After=network-online.target nfs-server.service
+Wants=network-online.target
+[Service]
+ExecStart=/usr/bin/tcpdump -nn -l -i any 'tcp port 2049 and tcp[tcpflags] & tcp-syn != 0'
+StandardOutput=append:{{ lab_nfs_client_log }}
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
