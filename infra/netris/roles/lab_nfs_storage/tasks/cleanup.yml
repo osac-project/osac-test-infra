@@ -93,6 +93,30 @@
   changed_when: true
   failed_when: false
 
+- name: Remove the forwarded traffic acceptance rules
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - --direct
+      - --remove-rule
+      - ipv4
+      - filter
+      - FORWARD
+      - "0"
+      - -i
+      - "{{ item.in }}"
+      - -o
+      - "{{ item.out }}"
+      - -j
+      - ACCEPT
+  loop:
+    - { in: "{{ lab_nfs_tenant_uplink }}", out: "{{ lab_nfs_bridge }}" }
+    - { in: "{{ lab_nfs_bridge }}", out: "{{ lab_nfs_tenant_uplink }}" }
+  when: _lab_nfs_firewalld_running | bool
+  changed_when: true
+  failed_when: false
+
 - name: Remove the storage bridge trust from firewalld
   ansible.posix.firewalld:
     zone: trusted
@@ -119,6 +143,25 @@
   when:
     - not (_lab_nfs_firewalld_running | bool)
     - _lab_nfs_host_uplink | length > 0
+  failed_when: false
+
+- name: Remove the storage reverse-path-filtering drop-in
+  ansible.builtin.file:
+    path: /etc/sysctl.d/99-osac-lab-nfs.conf
+    state: absent
+
+- name: Restore strict reverse-path filtering on the storage path
+  ansible.builtin.command:
+    argv:
+      - sysctl
+      - -w
+      - "net.ipv4.conf.{{ item }}.rp_filter=1"
+  loop:
+    - all
+    - default
+    - "{{ lab_nfs_bridge }}"
+    - "{{ lab_nfs_tenant_uplink }}"
+  changed_when: true
   failed_when: false
 
 - name: Remove the storage CIDR route from the ISP server

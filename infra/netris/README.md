@@ -153,7 +153,7 @@ does not run pytest; use the root `make e2e` command for the complete pipeline.
 | `make deploy-ocp` | Configure Netris networking and restore OCP SNO from the OCP-only snapshot | ~15 min |
 | `make deploy-osac` | Prepare profile values and install OSAC with Helm | ~30-60 min |
 | `make deploy-storage` | Opt-in lab NFS endpoint on `br-storage` for `OSAC-8073`; fails unless `netris_storage_endpoint_enabled=true` | ~2 min |
-| `make verify-storage` | Check the endpoint (NFSv4.1-only, `root_squash`, admitted pools) and, for `DEPLOY_SUITE=full`, run the storage-over-SNAT suite | ~5 min + suite |
+| `make verify-storage` | Check the endpoint (NFSv4.1-only, `root_squash`, admitted pools, host forwarding) and, for `DEPLOY_SUITE=full`, run the storage-over-SNAT suite | ~5 min + suite |
 | `make destroy-storage` | Remove `lab-nfs`, `br-storage`, the SSH key, the firewalld/iptables rule, and the ISP route | ~1 min |
 
 The storage endpoint is off by default. `deploy-infra` creates it only when
@@ -184,6 +184,7 @@ same defaults. Override the `LAB_NFS_*` Make variables for a per-lab change:
 | `LAB_NFS_SSH_IDENTITY` | `/root/.ssh/lab-nfs` | SSH key |
 | `LAB_NFS_LOG_PATH` | `/var/log/osac-nfs-clients.log` | Client-address log |
 | `lab_nfs_dns_server` | `dns_server` | Resolver for the storage VM's apt path |
+| `lab_nfs_tenant_uplink` | `virbr0` | Host bridge carrying tenant ExternalIP traffic |
 
 The export admits only `osac_external_ip_pool_cidr` and
 `bmaas_provisioning_snat_cidr`, uses `root_squash`, and adds `insecure` only
@@ -191,6 +192,16 @@ because tenant traffic crosses the NATGateway SNAT. The storage CIDR is added
 to `global.networking.excludedIpv4Cidrs` only when the endpoint is enabled.
 The NFR-2 no-inbound evidence comes from the suite; this repository does not
 claim it independently.
+
+Tenant traffic is source-NATed before it reaches the host, so the request and
+reply take asymmetric paths. The role therefore puts both `br-storage` and
+`virbr0` in firewalld's `trusted` zone, removes `br-storage` from `public`,
+adds direct `FORWARD` accepts between the two interfaces in both directions,
+and sets loose (`2`) `rp_filter` on `all`, `default`, `br-storage`, and
+`virbr0` through `/etc/sysctl.d/99-osac-lab-nfs.conf`. `verify-storage` checks
+those values and the trusted/forwarding rules, and opens TCP 2049 from the ISP
+server through the host. `destroy-storage` removes the forwarding rules and
+the sysctl drop-in and restores strict `rp_filter`.
 
 To run the storage suite against an existing full lab, run the main suite and
 then the one storage target:

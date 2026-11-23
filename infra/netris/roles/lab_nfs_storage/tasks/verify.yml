@@ -19,6 +19,60 @@
     port: 2049
     timeout: 30
 
+- name: Get firewalld state
+  ansible.builtin.command: firewall-cmd --state
+  register: _lab_nfs_firewalld
+  changed_when: false
+  failed_when: false
+
+- name: Define whether firewalld is running
+  ansible.builtin.set_fact:
+    _lab_nfs_firewalld_running: >-
+      {{ _lab_nfs_firewalld.rc == 0
+         and _lab_nfs_firewalld.stdout | trim == 'running' }}
+
+- name: Check loose reverse-path filtering on the storage path
+  ansible.builtin.shell: |
+    set -eu
+    for iface in all default {{ lab_nfs_bridge }} {{ lab_nfs_tenant_uplink }}; do
+      value=$(sysctl -n "net.ipv4.conf.${iface}.rp_filter")
+      test "${value}" = "2" || {
+        echo "net.ipv4.conf.${iface}.rp_filter=${value}, expected 2"
+        exit 1
+      }
+    done
+  changed_when: false
+
+- name: Check the trusted zones and forwarding rules
+  ansible.builtin.shell: |
+    set -eu
+    firewall-cmd --zone=trusted --query-interface={{ lab_nfs_bridge }}
+    firewall-cmd --zone=trusted --query-interface={{ lab_nfs_tenant_uplink }}
+    firewall-cmd --direct --query-rule ipv4 filter FORWARD 0 \
+      -i {{ lab_nfs_tenant_uplink }} -o {{ lab_nfs_bridge }} -j ACCEPT
+    firewall-cmd --direct --query-rule ipv4 filter FORWARD 0 \
+      -i {{ lab_nfs_bridge }} -o {{ lab_nfs_tenant_uplink }} -j ACCEPT
+  changed_when: false
+  when: _lab_nfs_firewalld_running | bool
+
+# The tenant source address is only allocated by the suite fixtures, so this
+# checks the external side of the same forwarding path: the ISP server must
+# reach the NFS port through the host.
+- name: Check the storage port from the ISP server
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=10
+      - "root@{{ lab_nfs_isp_ip }}"
+      - >-
+        timeout 5 bash -c '</dev/tcp/{{ lab_nfs_server_ip }}/2049'
+  changed_when: false
+
 - name: Check the export, NFS versions, and client logger
   ansible.builtin.command:
     argv:

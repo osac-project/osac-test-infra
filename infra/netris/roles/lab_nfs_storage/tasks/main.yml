@@ -95,13 +95,29 @@
       {{ _lab_nfs_firewalld.rc == 0
          and _lab_nfs_firewalld.stdout | trim == 'running' }}
 
-- name: Trust the storage bridge in firewalld
+- name: Trust the tenant and storage bridges in firewalld
   ansible.posix.firewalld:
     zone: trusted
-    interface: "{{ lab_nfs_bridge }}"
+    interface: "{{ item }}"
     permanent: true
     immediate: true
     state: enabled
+  loop:
+    - "{{ lab_nfs_bridge }}"
+    - "{{ lab_nfs_tenant_uplink }}"
+  when: _lab_nfs_firewalld_running | bool
+
+# br-storage is created outside firewalld and can already belong to the public
+# zone on a live host. A trusted assignment normally moves it, but remove the
+# public assignment explicitly so a stale runtime/public connection cannot
+# leave the bridge on the strict public path.
+- name: Remove the storage bridge from the firewalld public zone
+  ansible.posix.firewalld:
+    zone: public
+    interface: "{{ lab_nfs_bridge }}"
+    permanent: true
+    immediate: true
+    state: disabled
   when: _lab_nfs_firewalld_running | bool
 
 - name: Masquerade storage-VM internet traffic, never lab traffic (firewalld)
@@ -128,7 +144,33 @@
     - "'ALREADY_ENABLED' not in _lab_nfs_masq.stdout"
   when: _lab_nfs_firewalld_running | bool
 
-- name: Reload firewalld after the masquerade rule
+# Tenant traffic arrives on virbr0 from the ISP with the tenant NAT source
+# address and is forwarded to br-storage. Accept both directions explicitly so
+# a pre-existing public-zone bridge cannot drop it on the FORWARD chain.
+- name: Accept forwarded traffic between the tenant and storage bridges
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - --direct
+      - --add-rule
+      - ipv4
+      - filter
+      - FORWARD
+      - "0"
+      - -i
+      - "{{ item.in }}"
+      - -o
+      - "{{ item.out }}"
+      - -j
+      - ACCEPT
+  loop:
+    - { in: "{{ lab_nfs_tenant_uplink }}", out: "{{ lab_nfs_bridge }}" }
+    - { in: "{{ lab_nfs_bridge }}", out: "{{ lab_nfs_tenant_uplink }}" }
+  changed_when: false
+  when: _lab_nfs_firewalld_running | bool
+
+- name: Reload firewalld after the storage rules
   ansible.builtin.command: firewall-cmd --reload
   changed_when: false
   when: _lab_nfs_firewalld_running | bool
@@ -151,6 +193,25 @@
     sysctl_set: true
     state: present
     reload: true
+
+# Tenant traffic is source-NATed before it reaches this host, so the reply
+# leaves through a different-looking path than the request. Strict rp_filter
+# drops that asymmetric flow. Loose mode (2) still rejects impossible sources
+# but accepts the SNATed tenant address; keep it in a drop-in so removal is
+# clean.
+- name: Use loose reverse-path filtering on the storage path
+  ansible.posix.sysctl:
+    name: "net.ipv4.conf.{{ item }}.rp_filter"
+    value: "2"
+    sysctl_set: true
+    sysctl_file: /etc/sysctl.d/99-osac-lab-nfs.conf
+    state: present
+    reload: true
+  loop:
+    - all
+    - default
+    - "{{ lab_nfs_bridge }}"
+    - "{{ lab_nfs_tenant_uplink }}"
 
 - name: Generate the lab NFS SSH key when absent
   ansible.builtin.command:

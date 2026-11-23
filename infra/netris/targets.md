@@ -234,14 +234,19 @@ The optional lab storage endpoint adds these variables:
 | `LAB_NFS_SSH_IDENTITY` | `/root/.ssh/lab-nfs` | `lab_nfs_storage`, `.env.infra` |
 | `LAB_NFS_LOG_PATH` | `/var/log/osac-nfs-clients.log` | `lab_nfs_storage`, `.env.infra` |
 | `lab_nfs_dns_server` | `dns_server` | `lab_nfs_storage` storage-VM resolver |
+| `lab_nfs_tenant_uplink` | `virbr0` | `lab_nfs_storage` forwarding and `rp_filter` path |
 
 The `LAB_NFS_*` defaults come from
 `roles/lab_nfs_storage/defaults/main.yml`; the Makefile reads them when it
 writes `.env.infra`, and `verify-storage` loads the same role defaults. Set the
 Make variables for a per-lab override. `deploy-storage` fails unless
-`netris_storage_endpoint_enabled=true`. `destroy-storage` removes the VM,
-bridge, key, firewall rule, and ISP route; `destroy-infra` runs the same
-cleanup.
+`netris_storage_endpoint_enabled=true`. The role puts `br-storage` and
+`lab_nfs_tenant_uplink` in firewalld's trusted zone, adds direct `FORWARD`
+accepts both ways, and sets loose `rp_filter` on `all`, `default`,
+`br-storage`, and `virbr0` because the tenant source is SNATed.
+`verify-storage` checks those values and opens TCP 2049 from the ISP server.
+`destroy-storage` removes the forwarding rules, the sysctl drop-in, the VM,
+bridge, key, and ISP route; `destroy-infra` runs the same cleanup.
 
 ## Environment, config file, and local files
 

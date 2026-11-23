@@ -18,6 +18,7 @@
 #   bmaas_provisioning_snat_cidr     BMaaS first-boot SNAT range the export admits
 #   lab_nfs_isp_ip                   netris-lab's isp-server address
 #   lab_nfs_isp_gateway              the host's virbr0 gateway
+#   lab_nfs_tenant_uplink            host bridge carrying tenant ExternalIP traffic
 #
 # Outputs:
 #   lab_nfs_server_ip                NFS endpoint address
@@ -27,6 +28,9 @@
 lab_nfs_bridge: "br-storage"
 lab_nfs_bridge_ip: "192.168.123.1"
 lab_nfs_server_ip: "192.168.123.10"
+# Tenant ExternalIP traffic reaches the host on netris-lab's virbr0 (the ISP
+# bridge), so that interface is the other side of the forwarding path.
+lab_nfs_tenant_uplink: "virbr0"
 lab_nfs_vm_name: "lab-nfs"
 lab_nfs_vcpu: 2
 lab_nfs_memory_mb: 4096
