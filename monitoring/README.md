@@ -489,7 +489,7 @@ firing critical alert inhibits warnings for the same `instance`.
 | `DiskAlmostFull` | critical | Root filesystem >80% full for 5m |
 | `HighMemoryUsage` | warning | Available memory <10% for 5m |
 | `GitHubRunnerOffline` | critical | A registered GitHub Actions runner shows offline for 5m |
-| `SustainedQueueBacklog` | warning | Any queued workflow runs for 10m |
+| `SustainedQueueBacklog` | warning | Workflow queue depth stays at 10 or more runs for 10m |
 | `HighQueueDepth` | critical | 5+ queued workflow runs for 5m |
 | `ExporterDown` | warning | Any scrape target down for 5m |
 | `ServiceDown` | critical | A textfile-collector-tracked service (haproxy, podman, libvirt, runner agent) inactive for 5m |
