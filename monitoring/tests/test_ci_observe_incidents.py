@@ -1,11 +1,15 @@
 """The incidents layer (ci_observe_incidents.py): root-cause records a
 person wrote, served where a window asks for them.
 
-Hand-built files pin each rule: what a record must hold, which windows a
-record's window overlaps, the one line the health and failure answers carry
-for an overlap, and the degradation when the file cannot be read (a note,
-never an error, never a silent empty answer). The repo's own incidents file
-is pinned too: it is the seed data the layer serves in production.
+Hand-built files pin each rule: what a record must hold (the diagnosis
+confidence, the terminal-status and follow-up gates, the vague-verb and
+human-error lints), which windows a record's window overlaps, the one line
+the health and failure answers carry for an overlap -- and only for the
+suites and repositories the query counts -- and the degradation when the
+file cannot be read (a note, never an error, never a silent empty answer).
+The repo's own incidents file is pinned too: it is the seed data the layer
+serves in production, and its migration to the record structure is part of
+what the layer promises to read.
 """
 
 from __future__ import annotations
@@ -55,14 +59,16 @@ def record(**overrides):
         "id": "INC-1",
         "title": "Installs fail on a broken snapshot",
         "status": "identified",
+        "diagnosis_confidence": "confirmed",
         "window": {"from": "2026-11-05T00:00:00Z"},
         "areas": ["install"],
         "suites": ["vmaas", "caas", "bmaas"],
         "repos": ["osac", "osac-test-infra"],
         "summary": "Install failures doubled from Nov 5. The snapshots were broken.",
-        "cause": "The freshness check failed silently, so broken snapshots rolled out.",
+        "contributing_factors": ["The freshness check failed silently, so broken snapshots rolled out."],
         "evidence": [{"label": "the post-mortem", "url": "https://example.com/pm"}],
-        "follow_ups": ["rebuild the snapshot"],
+        "follow_ups": [{"text": "rebuild the snapshot", "owner": "", "due": "", "ticket": "",
+                        "state": "open"}],
     }
     base.update(overrides)
     return base
@@ -77,15 +83,39 @@ def moment(text):
 
 def test_a_record_loads_with_its_optionals_defaulted(tmp_path):
     path = tmp_path / "incidents.yml"
-    write(path, [{"id": "INC-1", "title": "t", "status": "fixed",
+    write(path, [{"id": "INC-1", "title": "t", "status": "identified",
+                  "diagnosis_confidence": "suspected",
                   "window": {"from": "2026-11-05"},
-                  "summary": "s"}])
+                  "summary": "s",
+                  "evidence": [{"label": "the post-mortem", "url": "https://example.com/pm"}]}])
     records, notes, unavailable = incidents.load_incidents(str(path))
     assert unavailable == "" and notes == []
     [only] = records
     assert only["_to"] is None, "no window.to means ongoing"
     assert (only["areas"], only["suites"], only["repos"]) == ([], [], [])
-    assert (only["cause"], only["evidence"], only["follow_ups"]) == ("", [], [])
+    assert only["contributing_factors"] == []
+    assert only["follow_ups"] == []
+
+
+def test_an_old_records_single_cause_and_plain_follow_ups_still_load(tmp_path):
+    """A record written before the structure is not re-diagnosed to be read:
+    the single `cause` line is one contributing factor, a plain follow-up
+    line is an open one with the rest empty."""
+    path = tmp_path / "incidents.yml"
+    write(path, [{"id": "INC-1", "title": "t", "status": "identified",
+                  "diagnosis_confidence": "suspected",
+                  "window": {"from": "2026-11-05"},
+                  "summary": "s",
+                  "cause": "The freshness check failed silently.",
+                  "evidence": [{"label": "the post-mortem", "url": "https://example.com/pm"}],
+                  "follow_ups": ["rebuild the snapshot"]}])
+    records, notes, unavailable = incidents.load_incidents(str(path))
+    assert unavailable == "" and notes == []
+    [only] = records
+    assert only["contributing_factors"] == ["The freshness check failed silently."]
+    assert "cause" not in only, "the old spelling is folded into the list it became"
+    assert only["follow_ups"] == [{"text": "rebuild the snapshot", "owner": "", "due": "",
+                                   "ticket": "", "state": "open", "declined_reason": ""}]
 
 
 def test_records_are_served_oldest_window_first(tmp_path):
@@ -152,24 +182,154 @@ def test_a_record_recorded_twice_keeps_the_first(tmp_path):
     assert any("recorded twice" in note for note in notes)
 
 
+# -- the validator gates ----------------------------------------------------------------
+
+
+def test_a_record_needs_its_diagnosis_confidence(tmp_path):
+    path = tmp_path / "incidents.yml"
+    write(path, [record(id="INC-none", diagnosis_confidence=None),
+                 record(id="INC-likely", diagnosis_confidence="likely"),
+                 record(id="INC-suspected", diagnosis_confidence="suspected")])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert [one["id"] for one in records] == ["INC-suspected"]
+    assert "diagnosis_confidence None is none of confirmed, suspected, superseded" in notes[0]
+    assert "diagnosis_confidence 'likely' is none of confirmed, suspected, superseded" in notes[1]
+
+
+def test_a_terminal_record_must_say_when_it_ended(tmp_path):
+    path = tmp_path / "incidents.yml"
+    write(path, [record(id="INC-open-end", status="fixed"),
+                 record(id="INC-closed-end", status="closed",
+                        window={"from": "2026-11-05T00:00:00Z", "to": "2026-11-10T00:00:00Z"},
+                        follow_ups=[{"text": "rebuild the snapshot", "state": "done"}])])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert [one["id"] for one in records] == ["INC-closed-end"]
+    assert ("incident INC-open-end is not usable and was left out: status 'fixed' is terminal, so"
+            " window.to must say when the incident ended (UTC)") in notes[0]
+
+
+def test_a_terminal_record_may_not_leave_an_open_follow_up(tmp_path):
+    path = tmp_path / "incidents.yml"
+    ended = {"from": "2026-11-05T00:00:00Z", "to": "2026-11-10T00:00:00Z"}
+    write(path, [record(id="INC-left-open", status="fixed", window=ended),
+                 record(id="INC-wrapped-up", status="fixed", window=ended,
+                        follow_ups=[{"text": "rebuild the snapshot", "state": "done"},
+                                    {"text": "alert on stale snapshots", "state": "declined",
+                                     "declined_reason": "the flavor-tag move covers it"}])])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert [one["id"] for one in records] == ["INC-wrapped-up"]
+    assert ("incident INC-left-open is not usable and was left out: status 'fixed' is terminal, but"
+            " follow-up 1 is still open: mark it done, decline it with a declined_reason, or the"
+            " incident is not over") in notes[0]
+    assert records[0]["follow_ups"][1]["declined_reason"] == "the flavor-tag move covers it"
+
+
+def test_a_declined_follow_up_needs_its_reason(tmp_path):
+    path = tmp_path / "incidents.yml"
+    write(path, [record(id="INC-why-not", follow_ups=[{"text": "rebuild the snapshot",
+                                                       "state": "declined"}]),
+                 record(id="INC-said-why", follow_ups=[{"text": "rebuild the snapshot",
+                                                        "state": "declined",
+                                                        "declined_reason": "the flavor is gone"}])])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert [one["id"] for one in records] == ["INC-said-why"]
+    assert ("incident INC-why-not is not usable and was left out: follow-up 1 is declined without"
+            " a declined_reason: say why the work is not wanted") in notes[0]
+
+
+def test_a_follow_up_that_is_only_a_verb_is_left_out(tmp_path):
+    """The vague-verb lint: "improve" alone names no work, while the verb
+    with an object does ("Investigate why 4.22.14 clones place br-ex on the
+    secondary network")."""
+    path = tmp_path / "incidents.yml"
+    write(path, [record(id="INC-improve", follow_ups=["improve"]),
+                 record(id="INC-investigate", follow_ups=["Investigate"]),
+                 record(id="INC-review", follow_ups=["review."]),
+                 record(id="INC-object",
+                        follow_ups=["Investigate why 4.22.14 clones place br-ex on the secondary"
+                                    " network"])])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert [one["id"] for one in records] == ["INC-object"]
+    assert len(notes) == 3
+    assert all("is a verb with no object: say what to improve, investigate or review" in note
+               for note in notes)
+
+
+def test_human_error_is_not_a_contributing_factor(tmp_path):
+    path = tmp_path / "incidents.yml"
+    write(path, [record(id="INC-blame", contributing_factors=["Human error in the release checklist"]),
+                 record(id="INC-check", contributing_factors=["The release checklist had no step"
+                                                              " for the credential rotation"])])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert [one["id"] for one in records] == ["INC-check"]
+    assert ("incident INC-blame is not usable and was left out: contributing factor 1 says"
+            " 'human error': name the missing check or the wrong assumption that let the mistake"
+            " through, not the person") in notes[0]
+
+
+def test_a_record_needs_a_link_for_its_evidence(tmp_path):
+    path = tmp_path / "incidents.yml"
+    write(path, [record(id="INC-no-evidence", evidence=[]),
+                 record(id="INC-empty-url", evidence=[{"label": "no url", "url": ""}]),
+                 record(id="INC-linked", evidence=[{"label": "the post-mortem",
+                                                    "url": "https://example.com/pm"}])])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert [one["id"] for one in records] == ["INC-linked"]
+    assert len(notes) == 2
+    assert all("evidence holds no link: a record needs at least one url" in note for note in notes)
+
+
+def test_an_evidence_window_must_be_a_utc_span(tmp_path):
+    path = tmp_path / "incidents.yml"
+    the_link = {"label": "the post-mortem", "url": "https://example.com/pm"}
+    write(path, [record(id="INC-bad-from", evidence=[{**the_link, "window": {"from": "Nov 5"}}]),
+                 record(id="INC-bad-to", evidence=[{**the_link, "window": {"from": "2026-11-05",
+                                                                          "to": "Nov 10"}}]),
+                 record(id="INC-spanned", evidence=[{**the_link, "window": {"from": "2026-11-05",
+                                                                           "to": "2026-11-10"}}])])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert [one["id"] for one in records] == ["INC-spanned"]
+    assert "evidence 1's window is not a UTC from and to span" in notes[0]
+    assert "evidence 1's window.to is not a UTC date or time" in notes[1]
+    assert records[0]["evidence"][0]["window"] == {"from": "2026-11-05T00:00:00Z",
+                                                   "to": "2026-11-10T00:00:00Z"}
+
+
+def test_a_record_may_supersede_another_and_a_dangling_pointer_is_a_note(tmp_path):
+    path = tmp_path / "incidents.yml"
+    write(path, [record(), record(id="INC-2", title="The real cause", supersedes="INC-1")])
+    records, notes, unavailable = incidents.load_incidents(str(path))
+    assert unavailable == "" and notes == []
+    assert incidents.row(records[1])["supersedes"] == "INC-1"
+
+    write(path, [record(), record(id="INC-2", title="The real cause", supersedes="INC-absent")])
+    records, notes, _unavailable = incidents.load_incidents(str(path))
+    assert len(records) == 2, "the record is usable; the pointer is the problem"
+    assert notes == ["incident INC-2 supersedes INC-absent, which the file does not hold"]
+
+
 def test_the_row_serves_the_record_without_its_parsed_moments(tmp_path):
     path = tmp_path / "incidents.yml"
-    write(path, [record(window={"from": "2026-11-05T00:00:00Z", "to": "2026-11-10T00:00:00Z"})])
+    write(path, [record(window={"from": "2026-11-05T00:00:00Z", "to": "2026-11-10T00:00:00Z"},
+                        supersedes="INC-0")])
     [only] = incidents.load_incidents(str(path))[0]
     row = incidents.row(only)
     assert row == {
         "id": "INC-1",
         "title": "Installs fail on a broken snapshot",
         "status": "identified",
+        "diagnosis_confidence": "confirmed",
+        "supersedes": "INC-0",
         "window_from": "2026-11-05T00:00:00Z",
         "window_to": "2026-11-10T00:00:00Z",
         "areas": ["install"],
         "suites": ["vmaas", "caas", "bmaas"],
         "repos": ["osac", "osac-test-infra"],
         "summary": "Install failures doubled from Nov 5. The snapshots were broken.",
-        "cause": "The freshness check failed silently, so broken snapshots rolled out.",
+        "contributing_factors": ["The freshness check failed silently, so broken snapshots rolled out."],
         "evidence": [{"label": "the post-mortem", "url": "https://example.com/pm"}],
-        "follow_ups": ["rebuild the snapshot"],
+        "follow_ups": [{"text": "rebuild the snapshot", "owner": "", "due": "", "ticket": "",
+                        "state": "open", "declined_reason": ""}],
     }
     assert "_from" not in row and "_to" not in row
 
@@ -217,11 +377,16 @@ def test_the_document_serves_the_records_whose_window_overlaps(stores):
 
     assert [row["id"] for row in document["incidents"]] == ["INC-1"]
     assert document["incidents"][0]["window_to"] == "", "ongoing"
-    assert document["notes"] == []
+    # No stored runs at all: the reverse gate cannot cross-check the ongoing
+    # record and says so -- missing data, never a healthy zero.
+    assert document["notes"] == [
+        "incident INC-1 claims ongoing, but the archive cannot say whether its suites still degrade:"
+        " no pass rate for vmaas, caas, bmaas to compare (the last 7 days against the 7 before them)"
+    ]
     about = document["about"][0]
     assert "recorded CI incidents whose window overlaps the last 7 days" in about["population"]
     assert about["window"] == "2026-10-31 12:00 to 2026-11-07 12:00 UTC"
-    assert about["missing"] == "Nothing is missing in this window."
+    assert about["missing"] == document["notes"][0]
     assert str(stores.incidents_file) in about["sources"]
 
 
@@ -267,14 +432,49 @@ def test_health_and_failures_carry_one_line_per_overlapping_incident(stores):
         document = get(api, kind, days=7)
         lines = [note for note in document["notes"] if note.startswith("this window overlaps incident")]
         assert lines == [
-            "this window overlaps incident INC-1: Installs fail on a broken snapshot —"
-            " Install failures doubled from Nov 5. (see the incidents tool)",
-            "this window overlaps incident INC-2: Another one —"
-            " Install failures doubled from Nov 5. (see the incidents tool)",
+            "this window overlaps incident INC-1: Installs fail on a broken snapshot"
+            " (identified, confirmed) — Install failures doubled from Nov 5. (see the incidents tool)",
+            "this window overlaps incident INC-2: Another one"
+            " (identified, confirmed) — Install failures doubled from Nov 5. (see the incidents tool)",
         ], kind
         # The About panel's Missing column is built from the notes, so the
         # line reaches the page and the tool answer both.
         assert "this window overlaps incident INC-1" in document["about"][0]["missing"]
+
+
+def test_the_line_fires_only_for_incidents_covering_the_suites_and_repos_asked_about(stores):
+    """Scoped enrichment: the note explains the numbers the query shows, so
+    an incident that never touched the suite or repository asked about is
+    not their story. A query for all of them matches every record."""
+    stores.run(NOW - timedelta(hours=5))
+    api = api_on(stores, [record(),
+                          record(id="INC-caas", title="A CaaS-only incident", suites=["caas"]),
+                          record(id="INC-infra", title="A test-infra-only incident",
+                                 suites=["vmaas"], repos=["osac-test-infra"])])
+
+    def lines(kind, **params):
+        document = get(api, kind, days=7, **params)
+        return [note.split(":")[0] for note in document["notes"]
+                if note.startswith("this window overlaps incident")]
+
+    for kind in ("health", "failures"):
+        # A VMaaS question: the CaaS-only incident is not its story.
+        assert lines(kind, suite="vmaas") == [
+            "this window overlaps incident INC-1",
+            "this window overlaps incident INC-infra",
+        ], kind
+        # A VMaaS question about the osac repository: the test-infra-only
+        # incident is not either.
+        assert lines(kind, suite="vmaas", repo="osac") == [
+            "this window overlaps incident INC-1",
+        ], kind
+        # A CaaS question: both records that cover CaaS answer it.
+        assert lines(kind, suite="caas") == [
+            "this window overlaps incident INC-1",
+            "this window overlaps incident INC-caas",
+        ], kind
+        # No suite or repository named: every record matches.
+        assert len(lines(kind)) == 3, kind
 
 
 def test_the_other_documents_carry_no_incident_line(stores):
@@ -320,12 +520,24 @@ def test_the_repos_incidents_file_holds_the_seeded_incident():
     assert only["window"]["from"] == "2026-11-05T00:00:00Z"
     assert only["window"].get("to") is None, "ongoing as of 2026-11-23"
     assert only["status"] == "identified"
+    assert only["diagnosis_confidence"] == "confirmed"
     assert only["areas"] == ["install"]
     assert only["suites"] == ["vmaas", "caas", "bmaas"]
     assert only["repos"] == ["osac", "osac-test-infra"]
     assert only["summary"].startswith("Install failures in the osac mono-repo CI rose sharply from Nov 5")
     assert "no healthy upstream" in only["summary"]
-    assert "sha256:e58fe43c367aa8f32c310cbd2a4a2e7b040897abbb7dcea9397e2ad43014ab71" in only["cause"]
+    # The record is migrated in full: the cause chain is a list of factors,
+    # not the single `cause` line it was before.
+    assert "cause" not in only
+    factors = only["contributing_factors"]
+    assert len(factors) == 9
+    assert all(factor.strip() for factor in factors)
+    assert "sha256:e58fe43c367aa8f32c310cbd2a4a2e7b040897abbb7dcea9397e2ad43014ab71" in factors[0]
+    assert any("scm_refspec" in factor and "#2590" in factor for factor in factors), (
+        "the AAP git-tree mechanism and its fix")
+    assert any("aap-operator" in factor and "startingCSV" in factor for factor in factors), (
+        "the confirmed promotion co-candidate")
+    assert any("first-boot race divergence" in factor for factor in factors), "the OVN finding"
     assert [item["url"] for item in only["evidence"]] == [
         "https://redhat-internal.slack.com/archives/C0B8KR3HK16/p1794819597154149",
         "https://github.com/osac-project/osac-test-infra/pull/797",
@@ -342,7 +554,22 @@ def test_the_repos_incidents_file_holds_the_seeded_incident():
     # and mappings): quoted, it loads whole.
     assert only["evidence"][0]["label"] == "Post-mortem in #wg-infra (iskornya, 2026-11-16 08:59 UTC)"
     assert only["evidence"][9]["label"].startswith("ci-observe: failure signatures")
-    assert len(only["follow_ups"]) == 8
+    # The signatures link explains the Nov 6-23 windows its label names.
+    assert only["evidence"][9]["window"] == {"from": "2026-11-06T00:00:00Z", "to": "2026-11-23T00:00:00Z"}
+    # Every follow-up is structured: the open one that lands osac PR #2590
+    # carries its owner, its ticket and no due date, and the finished one
+    # (the ci-observe selection bias) is done.
+    follow_ups = only["follow_ups"]
+    assert len(follow_ups) == 8
+    assert all(set(follow_up) == {"text", "owner", "due", "ticket", "state", "declined_reason"}
+               for follow_up in follow_ups)
+    [land] = [follow_up for follow_up in follow_ups if "#2590" in follow_up["text"]]
+    assert (land["owner"], land["due"], land["state"]) == ("omer-vishlitzky", "", "open")
+    assert land["ticket"] == "https://github.com/osac-project/osac/pull/2590"
+    [done] = [follow_up for follow_up in follow_ups if follow_up["state"] == "done"]
+    assert "signature selection bias" in done["text"]
+    states = [follow_up["state"] for follow_up in follow_ups]
+    assert states.count("done") == 1 and set(states) <= {"open", "done"}
 
 
 def test_the_seeded_incident_serves_the_windows_it_hurt():
@@ -355,6 +582,7 @@ def test_the_seeded_incident_serves_the_windows_it_hurt():
     line = incidents.note_line(only)
     assert line.startswith("this window overlaps incident INC-2026-11-install:")
     assert line.endswith("(see the incidents tool)")
+    assert "(identified, confirmed)" in line
     assert "Install failures in the osac mono-repo CI rose sharply from Nov 5" in line
 
 

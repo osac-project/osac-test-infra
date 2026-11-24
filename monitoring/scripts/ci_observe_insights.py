@@ -17,9 +17,13 @@ a note in the document, never an error):
                                resource kind and by wait, and shared fixtures
     /api/ci-observe/incidents  the recorded incidents whose window overlaps
                                the asked window, from the git-versioned
-                               incidents file (no store); the health and
+                               incidents file; each record that claims to
+                               be ongoing is cross-checked with the run
+                               archive (a week without degradation in its
+                               suites says so), and the health and
                                failures documents carry a one-line note for
-                               each incident their window overlaps
+                               each incident their window overlaps that
+                               covers the suites and repositories they count
 
 Common parameters: days (7 by default, at most KEEP_DAYS), suite (all,
 vmaas, caas, bmaas, it-fulfillment, it-operator, it-bmf, it-caas), repo (all, osac, osac-test-infra), trigger (all, pr,
@@ -707,8 +711,10 @@ class CIObserveInsights:
                 continue
             try:
                 if kind != "incidents":
-                    # The incidents document reads no run store: the runs'
-                    # coverage and freshness are not its concern.
+                    # The incidents document reads the run stores only for
+                    # its staleness cross-check, which says itself when it
+                    # cannot answer: the runs' coverage and freshness are
+                    # not its concern.
                     self._limit_to_stored_history(filters)
                 document = getattr(self, f"_{kind}")(filters, params)
                 document.setdefault("notes", [])
@@ -799,7 +805,10 @@ class CIObserveInsights:
     # failure_signatures). A window that overlaps a recorded incident says so
     # in one line, because the numbers it shows are that incident's work --
     # without the line, a 30% install failure rate reads as a mystery every
-    # time it is asked about again.
+    # time it is asked about again. The line stays advisory: the numbers are
+    # computed from telemetry whatever it says, and it fires only for an
+    # incident that covers the suites and repositories the query counts --
+    # a CaaS incident is not a VMaaS question's story.
     INCIDENT_KINDS = ("health", "failures")
 
     def _incident_notes(self, kind, filters):
@@ -812,6 +821,7 @@ class CIObserveInsights:
             incidents.note_line(record)
             for record in records
             if incidents.overlaps(record, filters.window_from, filters.window_to)
+            and incidents.scope_matches(record, filters.suite, filters.repo)
         ]
 
     # -- freshness ---------------------------------------------------------
@@ -1997,18 +2007,28 @@ class CIObserveInsights:
         return rows
 
     # -- incidents -----------------------------------------------------------
+    # The staleness cross-check of the incidents document: how many days the
+    # archive must show a record's suites un-degraded before the record is
+    # asked to close. A diagnosis that outlives its incident is noise -- it
+    # explains pass rates that are no longer its work.
+    INCIDENT_GATE_DAYS = 7
+
     def _incidents(self, filters, params):
         """The recorded incidents whose window overlaps this window: the
-        root-cause answers behind a bad-looking pass rate. No store is read;
-        `unavailable` says why the records could not be, so an answer of no
-        rows never reads as "nothing ever broke" over a file that was not
-        there."""
+        root-cause answers behind a bad-looking pass rate. `unavailable`
+        says why the records could not be read, so an answer of no rows
+        never reads as "nothing ever broke" over a file that was not there.
+        Each served record that claims to be ongoing is cross-checked with
+        the run archive (see _stale_ongoing_notes): a diagnosis is a claim
+        about telemetry, and the archive gets to disagree."""
         records, notes, unavailable = incidents.load_incidents(self.incidents_file)
-        rows = [
-            incidents.row(record)
+        served = [
+            record
             for record in records
             if incidents.overlaps(record, filters.window_from, filters.window_to)
         ]
+        rows = [incidents.row(record) for record in served]
+        notes = notes + self._stale_ongoing_notes(served, filters)
         end = f" ending {filters.end}" if filters.end else ""
         if unavailable:
             notes = [*notes, unavailable]
@@ -2023,3 +2043,53 @@ class CIObserveInsights:
         if unavailable:
             document["unavailable"] = unavailable
         return document
+
+    def _stale_ongoing_notes(self, records, filters):
+        """One note per served record that claims to be ongoing (window.to
+        open, status identified or ongoing) while the archive shows its
+        suites healthy. The last INCIDENT_GATE_DAYS days are compared with
+        the INCIDENT_GATE_DAYS before them, suite by suite, the same
+        "vs before" the health document computes: a suite at or above its
+        previous-window pass rate has not degraded, and every suite
+        un-degraded asks the record to close or re-verify. A suite the
+        archive cannot rate is missing data, never a healthy zero, so the
+        note says the archive cannot answer instead. It is advisory: the
+        record is served as it is, and it never touches a number."""
+        checked = [
+            record
+            for record in records
+            if record["_to"] is None and record["status"] in incidents.ONGOING_STATUSES
+            and record["suites"]
+        ]
+        if not checked:
+            return []
+        gate_to = filters.window_to
+        gate_from = gate_to - timedelta(days=self.INCIDENT_GATE_DAYS)
+        before_from = gate_to - timedelta(days=2 * self.INCIDENT_GATE_DAYS)
+        facts, _notes = self._window_facts(before_from, gate_to)
+        notes = []
+        for record in checked:
+            missing: list[str] = []
+            degraded = False
+            for suite in record["suites"]:
+                of_suite = [fact for fact in facts if fact["created"] and fact["suite"] == suite]
+                current = self._rates(self._finished(
+                    [fact for fact in of_suite if gate_from <= fact["created"] < gate_to]))["pass_rate"]
+                before = self._rates(self._finished(
+                    [fact for fact in of_suite if before_from <= fact["created"] < gate_from]))["pass_rate"]
+                if current is None or before is None:
+                    missing.append(suite)
+                elif current < before:
+                    degraded = True
+            if degraded:
+                continue
+            if missing:
+                notes.append(
+                    f"incident {record['id']} claims ongoing, but the archive cannot say whether its"
+                    f" suites still degrade: no pass rate for {', '.join(missing)} to compare (the last"
+                    f" {self.INCIDENT_GATE_DAYS} days against the {self.INCIDENT_GATE_DAYS} before them)")
+            else:
+                notes.append(
+                    f"record {record['id']} claims ongoing, but its suites have shown no degradation"
+                    f" since {gate_from:%Y-%m-%d} — close it or re-verify")
+        return notes

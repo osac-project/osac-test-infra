@@ -3,29 +3,43 @@
 # One record per diagnosed incident: what broke, why, and the evidence. A
 # person writes these after diagnosis; the serving layer reads this file as
 # it is (no database, no sync). See monitoring/scripts/ci_observe_incidents.py
-# for the rules. Each record's summary and cause carry the story.
+# for the rules. Each record's summary and contributing factors carry the
+# story.
 #
 # Fields:
 #   id        stable, INC-<year>-<month>-<slug>
 #   title     one line, what the incident was
 #   window    from (UTC timestamp, required) and to (UTC timestamp; null or
-#             left out while the incident is ongoing)
+#             left out only while the status is identified or ongoing -- a
+#             terminal status, fixed or closed, must say when it ended)
 #   areas     where it hurt, e.g. install, test
-#   suites    vmaas, caas, bmaas
+#   suites    vmaas, caas, bmaas, it-fulfillment, it-operator, it-bmf, it-caas
 #   repos     the repositories whose CI it hurt
-#   status    identified (cause known, fix not in), fixed, ongoing (still
-#             being diagnosed)
+#   status    identified (cause known, fix not in), ongoing (still being
+#             diagnosed), fixed, closed
+#   diagnosis_confidence  confirmed, suspected or superseded (a diagnosis a
+#             later record replaced; the record it replaces is named by the
+#             optional supersedes id)
 #   summary   what broke, in two to four sentences
-#   cause     the root-cause chain, concise
-#   evidence  links: post-mortems, PRs, example runs. Quote a label holding
-#             # or : (a plain scalar would take them for a comment or a
-#             mapping)
-#   follow_ups  what is left to do
+#   contributing_factors  the causes that together produced it, one line
+#             each; a bare "human error" is rejected -- name the missing
+#             check, not the person
+#   evidence  links: post-mortems, PRs, example runs, each with an optional
+#             UTC window {from, to} saying which part of the incident it
+#             explains. Quote a label holding # or : (a plain scalar would
+#             take them for a comment or a mapping)
+#   follow_ups  what is left to do: {text, owner, due, ticket, state} where
+#             state is open, done or declined (declined needs a
+#             declined_reason). A plain line still loads as an open
+#             follow-up; a terminal status may not leave an open one behind
 #
 # The incidents MCP tool serves the records whose window overlaps the asked
-# window, and the health and failure answers note the overlap in one line.
-# An incident whose `to` is set stops appearing in windows that start after
-# it.
+# window, and cross-checks each record that claims to be ongoing against
+# the archive: a week without degradation in its suites asks for the record
+# to be closed or re-verified. The health and failure answers note the
+# overlap in one line when the incident covers the suite and repository
+# asked about. An incident whose `to` is set stops appearing in windows
+# that start after it.
 
 incidents:
 - id: INC-2026-11-install
@@ -43,6 +57,7 @@ incidents:
     - osac
     - osac-test-infra
   status: identified
+  diagnosis_confidence: confirmed
   summary: >-
     Install failures in the osac mono-repo CI rose sharply from Nov 5, peaked
     Nov 16-20 (merge-queue pass rate 57 percent), and continue in PR-suite
@@ -55,48 +70,65 @@ incidents:
     cluster snapshot does not pre-cache, so failures cluster in retest bursts
     and under concurrent load while serial scheduled runs on the same
     snapshot pass.
-  cause: >-
-    The flavor freshness check in the e2e workflows ran skopeo without
-    credentials against the private Quay repo, failed silently for months,
-    and runners kept July-era snapshots (which carried a 250-pod limit). New
-    snapshots, an OCP 4.22.14 rebuild built 2026-11-09T15:07Z (digest
-    sha256:e58fe43c367aa8f32c310cbd2a4a2e7b040897abbb7dcea9397e2ad43014ab71),
-    were published in early November and sat unadopted. osac-test-infra PR
-    #797 (OSAC-5886, merged the night of Nov 15-16) fixed the refresh; on Nov
-    16 the whole fleet booted the new snapshot at once, colliding with the
-    merge-queue backlog, and install failures jumped. The Install OSAC
-    failure then and now is the AAP race above; Nov 16-20 runs also showed
-    the AAP project update failing with "fatal: unable to read tree": the
-    project pin is a commit SHA, and the ref holding it was deleted or
-    rewritten mid-install (a force-push to the PR's fork branch, or a
-    merge-queue entry rebuild dropping a gh-readonly-queue ref), so the
-    default-refspec fetch never retrieved it — fixed by fetching the pin by
-    SHA via scm_refspec (osac PR #2590). The failures subsided on Nov 20 18:29 UTC by timing
-    convergence, not by a fix. The Nov 9 snapshot itself is healthy: a bare
-    OCP 4.22.14 SNO, clean recert, no cert-manager in it at all; its one real
-    latent defect is OVN's br-ex landing on the secondary network with
-    ip_forward=0, which breaks externally-facing MetalLB VIPs (the CaaS guest
-    API; mitigated for caas and full-regression by PRs #828 and #832) but not
-    pod egress and not the install path; on two of the three failing bundles
-    examined, kubelet kept the primary network as the node IP while OVN's
-    node-primary-ifaddr recorded the secondary — a first-boot race
-    divergence between the nodeip chain and the default-route chain, not a
-    source-hint collision. Overlapping causes in the same
-    period, all fixed: the July-era CaaS ingress coin flip OSAC-7419 (osac
-    PR #2407, Nov 16 21:52), the AWS-credentials rotation outage (PR #825,
-    Nov 15) and the OVN forwarding defect (#828, #832). The cert-manager
-    death signatures that first pointed elsewhere are a telemetry artifact:
-    full log gathers exist only for failed runs, so gatherer boilerplate (oc
-    logs --previous errors on never-restarted pods, toleration lines from
-    pod describes) scores 100 percent of failed and 0 percent of passing
-    runs, while cert-manager's 20-30 second leader-election RBAC lag is a
-    normal transient of every fresh install, reproduced on a healthy clone of
-    the exact flavor digest. Confirmed co-candidate for the Nov 16 jump: the
-    aap-operator v2.6.0-0.1787258256 channel promotion (CSV built 2026-08-20,
-    AAP 2.6-12) — CI saw the previous CSV the day before and this one from
-    the first failing run, so the live OCP index promotion landed just
-    before 2026-11-16 09:37 UTC; the CI subscriptions carry no startingCSV
-    pin, so clones track the live index head.
+  contributing_factors:
+    - >-
+      The flavor freshness check in the e2e workflows ran skopeo without
+      credentials against the private Quay repo, failed silently for months,
+      and runners kept July-era snapshots (which carried a 250-pod limit).
+      New snapshots, an OCP 4.22.14 rebuild built 2026-11-09T15:07Z (digest
+      sha256:e58fe43c367aa8f32c310cbd2a4a2e7b040897abbb7dcea9397e2ad43014ab71),
+      were published in early November and sat unadopted.
+    - >-
+      osac-test-infra PR #797 (OSAC-5886, merged the night of Nov 15-16)
+      fixed the refresh; on Nov 16 the whole fleet booted the new snapshot at
+      once, colliding with the merge-queue backlog, and install failures
+      jumped.
+    - >-
+      The Install OSAC failure then and now is the AAP readiness race the
+      summary describes: whether a run passes depends on the AAP rollout
+      time, which is dominated by multi-gigabyte registry pulls the cluster
+      snapshot does not pre-cache.
+    - >-
+      Nov 16-20 runs also showed the AAP project update failing with "fatal:
+      unable to read tree": the project pin is a commit SHA, and the ref
+      holding it was deleted or rewritten mid-install (a force-push to the
+      PR's fork branch, or a merge-queue entry rebuild dropping a
+      gh-readonly-queue ref), so the default-refspec fetch never retrieved
+      it — fixed by fetching the pin by SHA via scm_refspec (osac PR #2590).
+    - >-
+      The failures subsided on Nov 20 18:29 UTC by timing convergence, not
+      by a fix.
+    - >-
+      The Nov 9 snapshot itself is healthy: a bare OCP 4.22.14 SNO, clean
+      recert, no cert-manager in it at all; its one real latent defect is
+      OVN's br-ex landing on the secondary network with ip_forward=0, which
+      breaks externally-facing MetalLB VIPs (the CaaS guest API; mitigated
+      for caas and full-regression by PRs #828 and #832) but not pod egress
+      and not the install path; on two of the three failing bundles
+      examined, kubelet kept the primary network as the node IP while OVN's
+      node-primary-ifaddr recorded the secondary — a first-boot race
+      divergence between the nodeip chain and the default-route chain, not
+      a source-hint collision.
+    - >-
+      Overlapping causes in the same period, all fixed: the July-era CaaS
+      ingress coin flip OSAC-7419 (osac PR #2407, Nov 16 21:52), the
+      AWS-credentials rotation outage (PR #825, Nov 15) and the OVN
+      forwarding defect (#828, #832).
+    - >-
+      The cert-manager death signatures that first pointed elsewhere are a
+      telemetry artifact: full log gathers exist only for failed runs, so
+      gatherer boilerplate (oc logs --previous errors on never-restarted
+      pods, toleration lines from pod describes) scores 100 percent of
+      failed and 0 percent of passing runs, while cert-manager's 20-30
+      second leader-election RBAC lag is a normal transient of every fresh
+      install, reproduced on a healthy clone of the exact flavor digest.
+    - >-
+      Confirmed co-candidate for the Nov 16 jump: the aap-operator
+      v2.6.0-0.1787258256 channel promotion (CSV built 2026-08-20, AAP
+      2.6-12) — CI saw the previous CSV the day before and this one from
+      the first failing run, so the live OCP index promotion landed just
+      before 2026-11-16 09:37 UTC; the CI subscriptions carry no
+      startingCSV pin, so clones track the live index head.
   evidence:
     - label: "Post-mortem in #wg-infra (iskornya, 2026-11-16 08:59 UTC)"
       url: https://redhat-internal.slack.com/archives/C0B8KR3HK16/p1794819597154149
@@ -118,12 +150,75 @@ incidents:
       url: https://github.com/osac-project/osac/pull/2590
     - label: "ci-observe: failure signatures, vmaas merge-queue, Nov 6-15 and Nov 16-23 windows"
       url: https://osac-ci.redhat.com:3000/d/ci-observe-failures/ci-observe-e28094-why-runs-fail
+      window:
+        from: 2026-11-06T00:00:00Z
+        to: 2026-11-23T00:00:00Z
   follow_ups:
-    - "Pre-cache the AAP images in the cluster flavor; the readiness race window is the registry pull time."
-    - "Make osac-aap-bootstrap wait for the AAP gateway's actual health instead of in-cluster pings, or raise its retry budget."
-    - "Land osac PR #2590: fetch the AAP project pin by SHA via scm_refspec, so a force-push or merge-queue rebuild cannot orphan it mid-install."
-    - "Fix the ci-observe signature selection bias: gatherer boilerplate scores as a perfect failure discriminator because only failed runs are fully gathered; filter those lines or gather passing runs too. Done: the artifact-log rollup now filters the gatherer's own line shapes (the oc logs --previous BadRequest text, the tolerations every pod describe prints) at index time and counts what it filtered; the gather-on-failure behavior is unchanged."
-    - "Pin why 4.22.14 clones place br-ex on the secondary: on a Nov-flavor clone, capture the first-boot nodeip journal, /run/nodeip-configuration/primary-ip and OVN's node-primary-ifaddr — the failing clones show kubelet on the primary and OVN on the secondary, a first-boot race divergence. Requires flavor pull permission; the CI robot currently has none on osac-project/cluster-flavors."
-    - "Test new snapshots with the full regression suite before pushing them to the flavor tag, and alert when runners are not picking up the current digest (from the post-mortem)."
-    - "Pin the AAP operator CSV in the CI subscriptions (startingCSV), so catalog promotions cannot change install behavior mid-flight."
-    - "Move the flavor tag to versioned, immutable references with an explicit rollout, instead of one mutable tag."
+    - text: >-
+        Pre-cache the AAP images in the cluster flavor; the readiness race
+        window is the registry pull time.
+      owner: ""
+      due: ""
+      ticket: ""
+      state: open
+    - text: >-
+        Make osac-aap-bootstrap wait for the AAP gateway's actual health
+        instead of in-cluster pings, or raise its retry budget.
+      owner: ""
+      due: ""
+      ticket: ""
+      state: open
+    - text: >-
+        Land osac PR #2590: fetch the AAP project pin by SHA via
+        scm_refspec, so a force-push or merge-queue rebuild cannot orphan it
+        mid-install.
+      owner: omer-vishlitzky
+      due: ""
+      ticket: https://github.com/osac-project/osac/pull/2590
+      state: open
+    - text: >-
+        Fix the ci-observe signature selection bias: gatherer boilerplate
+        scores as a perfect failure discriminator because only failed runs
+        are fully gathered; filter those lines or gather passing runs too.
+        Done: the artifact-log rollup now filters the gatherer's own line
+        shapes (the oc logs --previous BadRequest text, the tolerations
+        every pod describe prints) at index time and counts what it
+        filtered; the gather-on-failure behavior is unchanged.
+      owner: ""
+      due: ""
+      ticket: ""
+      state: done
+    - text: >-
+        Pin why 4.22.14 clones place br-ex on the secondary: on a
+        Nov-flavor clone, capture the first-boot nodeip journal,
+        /run/nodeip-configuration/primary-ip and OVN's node-primary-ifaddr —
+        the failing clones show kubelet on the primary and OVN on the
+        secondary, a first-boot race divergence. Requires flavor pull
+        permission; the CI robot currently has none on
+        osac-project/cluster-flavors.
+      owner: ""
+      due: ""
+      ticket: ""
+      state: open
+    - text: >-
+        Test new snapshots with the full regression suite before pushing
+        them to the flavor tag, and alert when runners are not picking up
+        the current digest (from the post-mortem).
+      owner: ""
+      due: ""
+      ticket: ""
+      state: open
+    - text: >-
+        Pin the AAP operator CSV in the CI subscriptions (startingCSV), so
+        catalog promotions cannot change install behavior mid-flight.
+      owner: ""
+      due: ""
+      ticket: ""
+      state: open
+    - text: >-
+        Move the flavor tag to versioned, immutable references with an
+        explicit rollout, instead of one mutable tag.
+      owner: ""
+      due: ""
+      ticket: ""
+      state: open

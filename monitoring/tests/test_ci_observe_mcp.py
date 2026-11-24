@@ -530,12 +530,14 @@ def seeded_incident():
     """One incident record as the exporter's incidents document serves it."""
     return {
         "id": "INC-2026-11-install", "title": "Install failures from defective snapshots",
-        "status": "identified", "window_from": "2026-11-05T00:00:00Z", "window_to": "",
+        "status": "identified", "diagnosis_confidence": "confirmed", "supersedes": "",
+        "window_from": "2026-11-05T00:00:00Z", "window_to": "",
         "areas": ["install"], "suites": ["vmaas", "caas", "bmaas"], "repos": ["osac", "osac-test-infra"],
         "summary": "Install failures doubled weekly from Nov 5.",
-        "cause": "The flavor freshness check failed silently.",
+        "contributing_factors": ["The flavor freshness check failed silently."],
         "evidence": [{"label": "the post-mortem", "url": "https://example.com/pm"}],
-        "follow_ups": ["rebuild the snapshot"],
+        "follow_ups": [{"text": "rebuild the snapshot", "owner": "", "due": "", "ticket": "",
+                        "state": "open", "declined_reason": ""}],
     }
 
 
@@ -591,7 +593,7 @@ def test_the_incident_note_reaches_the_failure_answers(config, web):
     failure documents; the tools carry the documents' notes, so the answers
     a window-overlap question lands on say what the numbers are."""
     line = ("this window overlaps incident INC-2026-11-install: Install failures from defective snapshots"
-            " — Install failures doubled weekly from Nov 5. (see the incidents tool)")
+            " (identified, confirmed) — Install failures doubled weekly from Nov 5. (see the incidents tool)")
     web.add("http://exporter/api/ci-observe/failures?days=7&suite=vmaas&trigger=pr&repo=osac", {
         "causes": [{"cause": "install"}], "signatures": [{"signature": "cert-manager cannot get lease"}],
         "about": [{}], "window": [{}], "notes": [line],

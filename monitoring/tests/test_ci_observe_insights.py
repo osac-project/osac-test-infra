@@ -1208,3 +1208,133 @@ def test_the_shared_run_facts_keep_at_most_a_few_windows(stores, monkeypatch):
     for days in ("1", "7", "30"):
         get(api, "health", days=days)
     assert len(api._facts_cache) == insights.FACTS_CACHE_ENTRIES
+
+
+# -- the incidents reverse gate ---------------------------------------------------------------------
+
+
+def ongoing_incident(**overrides):
+    """One identified incident with an open window, over vmaas only."""
+    record = {
+        "id": "INC-1",
+        "title": "Installs fail on a broken snapshot",
+        "status": "identified",
+        "diagnosis_confidence": "confirmed",
+        "window": {"from": "2026-10-01T00:00:00Z"},
+        "areas": ["install"],
+        "suites": ["vmaas"],
+        "repos": ["osac"],
+        "summary": "Install failures doubled from Nov 5. The snapshots were broken.",
+        "contributing_factors": ["The freshness check failed silently, so broken snapshots rolled out."],
+        "evidence": [{"label": "the post-mortem", "url": "https://example.com/pm"}],
+        "follow_ups": [{"text": "rebuild the snapshot", "state": "open"}],
+    }
+    record.update(overrides)
+    return record
+
+
+def test_an_ongoing_incident_whose_suites_recovered_is_asked_to_close(stores):
+    """The reverse gate: vmaas failed two of three runs in the week before
+    the window and passes three of three in it, so the diagnosis outlived
+    the incident -- the incidents document says so instead of serving the
+    ongoing claim unchecked."""
+    for hours in (9 * 24, 10 * 24):  # the week before the window: two failures
+        stores.run(NOW - timedelta(hours=hours), "failure", failed="Install OSAC")
+    stores.run(NOW - timedelta(hours=11 * 24), "success")
+    for hours in (24, 48, 72):  # the window: three passes
+        stores.run(NOW - timedelta(hours=hours), "success")
+    stores.write_incidents([ongoing_incident()])
+
+    document = get(stores.api(), "incidents", days=7)
+
+    assert [row["id"] for row in document["incidents"]] == ["INC-1"]
+    assert document["notes"] == [
+        "record INC-1 claims ongoing, but its suites have shown no degradation since 2026-10-31 —"
+        " close it or re-verify"
+    ]
+    assert document["about"][0]["missing"] == document["notes"][0], "a note, never an error"
+
+
+def test_an_ongoing_incident_whose_suites_still_degrade_is_served_silently(stores):
+    """The archive agrees with the record: no note, and the numbers stay
+    the story the incident tells."""
+    for hours in (9 * 24, 10 * 24, 11 * 24):  # the week before the window: three passes
+        stores.run(NOW - timedelta(hours=hours), "success")
+    for hours in (24, 48):  # the window: two failures
+        stores.run(NOW - timedelta(hours=hours), "failure", failed="Install OSAC")
+    stores.write_incidents([ongoing_incident()])
+
+    document = get(stores.api(), "incidents", days=7)
+
+    assert document["notes"] == []
+
+
+def test_an_ongoing_incident_the_archive_cannot_rate_is_missing_data(stores):
+    """No run of the record's suite is stored: the gate says the archive
+    cannot answer -- missing data is named, never read as a healthy zero,
+    so the close-it note cannot fire over an empty archive."""
+    stores.run(NOW - timedelta(hours=48), "success")  # vmaas, not the record's suite
+    stores.write_incidents([ongoing_incident(suites=["caas"])])
+
+    document = get(stores.api(), "incidents", days=7)
+
+    assert document["notes"] == [
+        "incident INC-1 claims ongoing, but the archive cannot say whether its suites still degrade:"
+        " no pass rate for caas to compare (the last 7 days against the 7 before them)"
+    ]
+
+
+def test_an_ongoing_incident_without_any_stored_runs_is_missing_data(tmp_path):
+    """Neither store exists: the same rule over a deployment gap."""
+    incidents_file = tmp_path / "incidents.yml"
+    incidents_file.write_text(yaml.safe_dump({"incidents": [ongoing_incident()]}), encoding="utf-8")
+    api = insights.CIObserveInsights(str(tmp_path / "none.db"), str(tmp_path / "none-trends.db"),
+                                     clock=lambda: NOW, incidents_file=str(incidents_file))
+
+    document = get(api, "incidents", days=7)
+
+    assert [note for note in document["notes"] if "claims ongoing" in note] == [
+        "incident INC-1 claims ongoing, but the archive cannot say whether its suites still degrade:"
+        " no pass rate for vmaas to compare (the last 7 days against the 7 before them)"
+    ]
+
+
+def test_the_gate_needs_every_suite_of_the_record(stores):
+    """One suite still degrading keeps the record honest; one suite the
+    archive cannot rate is missing data: either way the close-it note does
+    not fire."""
+    for hours in (9 * 24, 10 * 24):
+        stores.run(NOW - timedelta(hours=hours), "success")
+        stores.run(NOW - timedelta(hours=hours), "success", suite="caas")
+    stores.run(NOW - timedelta(hours=24), "success")
+    stores.run(NOW - timedelta(hours=24), "failure", suite="caas", failed="Install OSAC")
+
+    stores.write_incidents([ongoing_incident(suites=["vmaas", "caas"])])
+    document = get(stores.api(), "incidents", days=7)
+    assert document["notes"] == [], "caas is worse than the week before: the claim stands"
+
+    stores.write_incidents([ongoing_incident(suites=["vmaas", "bmaas"])])
+    document = get(stores.api(), "incidents", days=7)
+    assert document["notes"] == [
+        "incident INC-1 claims ongoing, but the archive cannot say whether its suites still degrade:"
+        " no pass rate for bmaas to compare (the last 7 days against the 7 before them)"
+    ]
+
+
+def test_a_terminated_incident_is_not_cross_checked(stores):
+    """The gate is for records that claim to be ongoing: a record whose
+    window closed, or an ongoing one that names no suites to check, is
+    served without the archive's opinion."""
+    ended = {"from": "2026-10-01T00:00:00Z", "to": "2026-11-01T00:00:00Z"}
+    for hours in (24, 48, 72):
+        stores.run(NOW - timedelta(hours=hours), "success")
+    stores.write_incidents([ongoing_incident(id="INC-over", status="fixed", window=ended,
+                                             follow_ups=[{"text": "rebuild the snapshot",
+                                                          "state": "done"}]),
+                            ongoing_incident(id="INC-undiagnosed", status="ongoing",
+                                             diagnosis_confidence="suspected", suites=[])])
+
+    document = get(stores.api(), "incidents", days=7)
+
+    assert [row["id"] for row in document["incidents"]] == ["INC-over", "INC-undiagnosed"]
+    assert document["notes"] == []
