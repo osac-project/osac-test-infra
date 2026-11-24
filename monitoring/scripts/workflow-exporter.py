@@ -980,7 +980,17 @@ class WorkflowExporter:
                        "coderabbit approval", "e2e-ready label", "scan e2e logs",
                        "e2e on unlock label", "reserve e2e comment"],
         "ai":         ["ai diagnostic"],
-        "e2e":        ["e2e"],
+        # Every suite workflow's stored name categorizes as e2e, not just the
+        # ones with "e2e" in them: the integration suites' refined names
+        # ("IT fulfillment (Tests)", ...) carry "tests", which the ci patterns
+        # below would otherwise catch -- flipping rows the exporter's
+        # _refine_integration_suite already stored as e2e (the startup
+        # recategorization does exactly that). Derived from
+        # ci_observe_phases.SUITE_WORKFLOWS so a future suite whose name
+        # lacks "e2e" cannot hit the same bug.
+        "e2e":        ["e2e", *(name.lower()
+                                for names in ci_observe_phases.SUITE_WORKFLOWS.values()
+                                for name in names)],
         "lint":       ["pre-commit", "lint", "checklist", "kustomize", "check image"],
         "release":    ["publish", "container image", "mirror"],
         "ci":         ["ci", "test", "check", "build"],

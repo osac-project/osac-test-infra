@@ -178,3 +178,20 @@ def test_the_run_index_filters_the_integration_suites(W):
     for suite, names in expected.items():
         assert W.CI_OBSERVE_SUITE_WORKFLOWS[suite] == names
         assert names[0] in W.CI_OBSERVE_SUITE_WORKFLOWS["core"]
+
+
+def test_every_suite_workflows_name_categorizes_as_e2e(wfe):
+    """A suite workflow's stored name must categorize as e2e whatever it
+    contains. The integration suites' refined names ("IT fulfillment
+    (Tests)", ...) carry "tests", which the ci patterns would otherwise
+    catch -- and the startup recategorization would then flip rows the
+    exporter's _refine_integration_suite already stored as e2e back to ci.
+    The e2e patterns are derived from ci_observe_phases.SUITE_WORKFLOWS so
+    a future suite whose name lacks "e2e" cannot hit the same bug."""
+    W = wfe.WorkflowExporter
+    for names in wfe.ci_observe_phases.SUITE_WORKFLOWS.values():
+        for name in names:
+            assert W._categorize_workflow(name) == "e2e", name
+    # The callers and legs that stay out of scope keep the ci category.
+    assert W._categorize_workflow(TESTS) == "ci"
+    assert W._categorize_workflow("Unit Tests") == "ci"
