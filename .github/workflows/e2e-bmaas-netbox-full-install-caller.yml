@@ -74,3 +74,5 @@ jobs:
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
       notify-on-failure: false
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+    secrets:
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
