@@ -4,9 +4,9 @@
 # cluster; the scan and upload that follow do not (see the upload-artifacts
 # action), so a workflow can destroy the cluster in between.
 #
-# The collection is all-or-nothing: if gather-osac-logs.sh fails or is stopped
-# by the timeout, .redaction-complete is not written and the upload action
-# refuses to upload the unredacted files.
+# Cluster collection is all-or-nothing: incomplete output is never published.
+# Completed compact host diagnostics remain available independently, including
+# when cluster collection is interrupted or times out.
 #
 # Required env: KUBECONFIG, RUNNER_TEMP, GITHUB_WORKSPACE
 # Optional env: E2E_NAMESPACE, JUNIT_PATH, INVENTORY_FILE (read by
@@ -14,6 +14,7 @@
 set -eo pipefail
 
 ARTIFACT_DIR="${RUNNER_TEMP}/osac-artifacts"
+COLLECTION_DIR="${ARTIFACT_DIR}"
 COLLECT_TIMEOUT_SECONDS="${COLLECT_TIMEOUT_SECONDS:-900}"
 
 # The upload action keeps the marker, so one left by an earlier collection of
@@ -21,13 +22,21 @@ COLLECT_TIMEOUT_SECONDS="${COLLECT_TIMEOUT_SECONDS:-900}"
 # not vouch for this one.
 rm -f "${ARTIFACT_DIR}/.redaction-complete"
 
-# Compact boot diagnostics are deliberately collected without kubeconfig
-# access. Their helper omits raw cluster-tool logs; the upload action must scan
-# and redact this path successfully before it can be uploaded.
-if [[ ! -f "${KUBECONFIG:-}" && -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
-  echo "No kubeconfig is available; retaining selected compact-boot host diagnostics only."
+# Keep validated host files in the upload directory and collect cluster data
+# separately. A timeout or cancellation must not mix unredacted partial output
+# into the host bundle or cause the upload gate to discard that bundle.
+if [[ -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
+  COLLECTION_DIR=$(mktemp -d "${RUNNER_TEMP}/osac-cluster-artifacts.XXXXXX")
+  trap 'rm -rf -- "${COLLECTION_DIR}"' EXIT
+  cp -a "${ARTIFACT_DIR}/." "${COLLECTION_DIR}/"
+  find "${ARTIFACT_DIR}" -mindepth 1 -maxdepth 1 ! -name compact-boot -exec rm -rf -- {} +
+  # Only helper-validated host files are left here. They still require the
+  # existing gitleaks scan and release gate before upload.
   touch "${ARTIFACT_DIR}/.redaction-complete"
-  exit 0
+  if [[ ! -f "${KUBECONFIG:-}" ]]; then
+    echo "No kubeconfig is available; retaining selected compact-boot host diagnostics only."
+    exit 0
+  fi
 fi
 
 NETRIS_ARTIFACT_LAYOUT=false
@@ -41,7 +50,7 @@ export NETRIS_ARTIFACT_LAYOUT
 
 rc=0
 timeout "${COLLECT_TIMEOUT_SECONDS}" \
-  "${GITHUB_WORKSPACE}/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}" || rc=$?
+  "${GITHUB_WORKSPACE}/scripts/gather-osac-logs.sh" "${COLLECTION_DIR}" || rc=$?
 
 # The release gate censors the values of the cluster's own Secrets wherever they
 # show up. The snapshot lives next to the artifact directory, never inside it,
@@ -53,6 +62,10 @@ mkdir -p "${INVENTORY_DIR}"
   || { rm -f "${INVENTORY_DIR}/k8s-secrets.json"; echo "::notice::Secret inventory not collected"; }
 
 if [[ "${rc}" -eq 0 ]]; then
+  if [[ "${COLLECTION_DIR}" != "${ARTIFACT_DIR}" ]]; then
+    # The gather completed redaction; only now may its files reach upload.
+    cp -a "${COLLECTION_DIR}/." "${ARTIFACT_DIR}/"
+  fi
   touch "${ARTIFACT_DIR}/.redaction-complete"
 elif [[ "${rc}" -eq 124 ]]; then
   echo "::warning::Log collection stopped after ${COLLECT_TIMEOUT_SECONDS}s" \

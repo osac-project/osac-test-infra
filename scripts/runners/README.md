@@ -146,7 +146,10 @@ kubeconfig when boot fails. When available, cluster collection captures MCO
 pod state, events, current/previous log tails, leader leases, ControllerConfig
 Infrastructure/DNS inputs, and the two `00-master` API/CoreDNS identity files.
 These diagnostics use the existing redaction and scanned upload flow. Earlier
-failures without a kubeconfig retain the selected host diagnostics only.
+failures without a kubeconfig retain the selected host diagnostics only. Cluster
+collection is staged separately until redaction finishes, so a timeout or
+cancellation preserves the completed host diagnostics and excludes partial
+cluster output from upload.
 
 ### Registering a dedicated runner (different labels/purpose)
 
