@@ -150,6 +150,9 @@ failures without a kubeconfig retain the selected host diagnostics only. Cluster
 collection is staged separately until redaction finishes, so a timeout or
 cancellation preserves the completed host diagnostics and excludes partial
 cluster output from upload.
+Staging failures also retain the host bundle. If the final cluster-file copy
+fails or is interrupted, the upload check discards its partial output and
+keeps only the completed host diagnostics.
 
 ### Registering a dedicated runner (different labels/purpose)
 

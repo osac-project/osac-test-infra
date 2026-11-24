@@ -26,9 +26,6 @@ rm -f "${ARTIFACT_DIR}/.redaction-complete"
 # separately. A timeout or cancellation must not mix unredacted partial output
 # into the host bundle or cause the upload gate to discard that bundle.
 if [[ -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
-  COLLECTION_DIR=$(mktemp -d "${RUNNER_TEMP}/osac-cluster-artifacts.XXXXXX")
-  trap 'rm -rf -- "${COLLECTION_DIR}"' EXIT
-  cp -a "${ARTIFACT_DIR}/." "${COLLECTION_DIR}/"
   find "${ARTIFACT_DIR}" -mindepth 1 -maxdepth 1 ! -name compact-boot -exec rm -rf -- {} +
   # Only helper-validated host files are left here. They still require the
   # existing gitleaks scan and release gate before upload.
@@ -37,6 +34,9 @@ if [[ -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
     echo "No kubeconfig is available; retaining selected compact-boot host diagnostics only."
     exit 0
   fi
+  COLLECTION_DIR=$(mktemp -d "${RUNNER_TEMP}/osac-cluster-artifacts.XXXXXX")
+  trap 'rm -rf -- "${COLLECTION_DIR}"' EXIT
+  cp -a "${ARTIFACT_DIR}/compact-boot" "${COLLECTION_DIR}/"
 fi
 
 NETRIS_ARTIFACT_LAYOUT=false
@@ -63,8 +63,12 @@ mkdir -p "${INVENTORY_DIR}"
 
 if [[ "${rc}" -eq 0 ]]; then
   if [[ "${COLLECTION_DIR}" != "${ARTIFACT_DIR}" ]]; then
-    # The gather completed redaction; only now may its files reach upload.
+    # Keep the original host bundle intact. The upload gate discards cluster
+    # files if publication fails or is interrupted before the copy completes.
+    rm -rf -- "${COLLECTION_DIR}/compact-boot"
+    touch "${ARTIFACT_DIR}/.cluster-copy-in-progress"
     cp -a "${COLLECTION_DIR}/." "${ARTIFACT_DIR}/"
+    rm -f "${ARTIFACT_DIR}/.cluster-copy-in-progress"
   fi
   touch "${ARTIFACT_DIR}/.redaction-complete"
 elif [[ "${rc}" -eq 124 ]]; then
