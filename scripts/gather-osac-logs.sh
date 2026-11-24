@@ -103,6 +103,7 @@ fi
 collect_namespace_logs() {
     local ns="$1"
     local dir="$2"
+    local log_tail="${3:--1}"
     local gathered_pod_logs="$MGMT_CLUSTER_DIR/namespaces/$ns/pods"
     if [[ -d "$gathered_pod_logs" ]]; then
         echo "Namespace $ns already has categorized pod diagnostics; skipping duplicate capture"
@@ -127,10 +128,10 @@ collect_namespace_logs() {
         log_prefix="${dir}/pod-${pod}__${kind}__${container}"
         (
             capture_with_timeout "pod logs ${ns}/${pod}/${container} current" 60s \
-                oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps \
+                oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps --tail="${log_tail}" \
                 > "${log_prefix}__current.log" 2>&1 || true
             capture_with_timeout "pod logs ${ns}/${pod}/${container} previous" 60s \
-                oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps --previous \
+                oc logs "${pod}" -n "${ns}" -c "${container}" --timestamps --tail="${log_tail}" --previous \
                 > "${log_prefix}__previous.log" 2>&1 || true
         ) &
         pending=$((pending + 1))
@@ -143,6 +144,34 @@ collect_namespace_logs() {
         (.spec.initContainers[]? | [$pod, .name, "init"]) | @tsv' \
         <<< "${pods_json}" 2>> "${dir}/pod-discovery-errors.txt")
     wait
+}
+
+collect_compact_mco_diagnostics() {
+    local dir="$MGMT_CLUSTER_DIR/mco"
+    local ns="openshift-machine-config-operator"
+    mkdir -p "${dir}"
+
+    # Keep only the MCO inputs used by compact-boot's identity gate. Other
+    # MachineConfig files can contain credentials and must not be archived.
+    capture_with_timeout "MCO ControllerConfig" 15s oc --request-timeout=10s \
+        get controllerconfig machine-config-controller -o json 2> "${dir}/controllerconfig-errors.txt" \
+        | jq '{metadata: (.metadata | del(.managedFields, .annotations)),
+            spec: {infra: .spec.infra, dns: .spec.dns}, status}' \
+        > "${dir}/controllerconfig.json" 2>> "${dir}/controllerconfig-errors.txt" || true
+    capture_with_timeout "MCO 00-master identity" 15s oc --request-timeout=10s \
+        get machineconfig 00-master -o json 2> "${dir}/00-master-errors.txt" \
+        | jq '{metadata: (.metadata | del(.managedFields, .annotations)),
+            identityFiles: [.spec.config.storage.files[]? |
+                select(.path == "/etc/kubernetes/apiserver-url.env" or
+                    .path == "/etc/kubernetes/static-pod-resources/coredns/Corefile.tmpl") |
+                {path, source: .contents.source}]}' \
+        > "${dir}/00-master-identity.json" 2>> "${dir}/00-master-errors.txt" || true
+    capture_with_timeout "MCO leader leases" 15s oc --request-timeout=10s \
+        get leases -n "${ns}" -o json > "${dir}/leases.json" 2>&1 || true
+
+    # Reuse namespace collection for pod state, events, descriptions and both
+    # current/previous container logs, with bounded log tails for boot failures.
+    collect_namespace_logs "${ns}" "$MGMT_CLUSTER_DIR/namespaces/${ns}" 1000
 }
 
 collect_resource_status() {
@@ -242,6 +271,14 @@ collect_router_evidence() {
     } > "${dir}/router-access.log"
     rm -f "${body}"
 }
+
+# Collect MCO evidence first, before workload diagnostics use the collection
+# budget. The host helper's marker limits this addition to compact MNO runs;
+# all files still pass through the redaction and upload checks below.
+if [[ -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
+    echo "Collecting compact boot MCO diagnostics..."
+    collect_compact_mco_diagnostics
+fi
 
 collect_namespace_logs "$E2E_NAMESPACE" "$MGMT_CLUSTER_DIR/namespaces/$E2E_NAMESPACE"
 

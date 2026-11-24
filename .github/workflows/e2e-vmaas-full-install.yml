@@ -1523,7 +1523,15 @@ jobs:
         timeout-minutes: 2
         env:
           CLONE_NAME: ${{ steps.setup.outputs.clone-name }}
-        run: sudo /usr/local/sbin/osac-compact-boot-diagnostics "${CLONE_NAME}" "${RUNNER_TEMP}"
+        run: |
+          # compact-boot can create its kubeconfig before the readiness gate
+          # fails. Recover it for collection even though the boot step failed.
+          if [[ ! -s "${RUNNER_TEMP}/kubeconfig" ]]; then
+            if ! timeout 15s sudo /usr/local/sbin/osac-compact-kubeconfig "${CLONE_NAME}" "${RUNNER_TEMP}"; then
+              echo "::warning::Compact kubeconfig is unavailable; retaining host diagnostics only."
+            fi
+          fi
+          sudo /usr/local/sbin/osac-compact-boot-diagnostics "${CLONE_NAME}" "${RUNNER_TEMP}"
 
       # Teardown comes right after the collection, ahead of the slow scan and
       # upload: a cancelled job gets only 5 minutes for its always() steps.
