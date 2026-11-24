@@ -57,7 +57,7 @@ STEPS = (
 )
 
 
-def timeline(created, queue_s, steps=STEPS, failed=None, conclusion="success"):
+def timeline(created, queue_s, steps=STEPS, failed=None, conclusion="success", job_name="vmaas / e2e"):
     """One suite job: its wait for a runner, then its steps back to back."""
     started = created + timedelta(seconds=queue_s)
     moment = started
@@ -73,7 +73,7 @@ def timeline(created, queue_s, steps=STEPS, failed=None, conclusion="success"):
         if name == failed:
             break
     return [{
-        "name": "vmaas / e2e", "status": "completed", "conclusion": conclusion, "created_at": iso(created),
+        "name": job_name, "status": "completed", "conclusion": conclusion, "created_at": iso(created),
         "started_at": iso(started), "completed_at": iso(moment), "runner_name": "box-1", "steps": rows,
     }]
 
@@ -103,14 +103,15 @@ class Stores:
         self.next_id = 1000
 
     def run(self, created, conclusion="success", suite="vmaas", queue_s=60, failed=None, repo="osac",
-            event="schedule", workflow=None, sha="a" * 40, with_timeline=True, duration_s=None, attempt=1):
+            event="schedule", workflow=None, sha="a" * 40, with_timeline=True, duration_s=None, attempt=1,
+            run_id=None, job_name="vmaas / e2e"):
         self.next_id += 1
         workflow = workflow or {
             "vmaas": "E2E VMaaS Full Install", "caas": "E2E CaaS Full Install", "bmaas": "E2E BMaaS Full Install",
             "it-fulfillment": "IT fulfillment (Tests)", "it-operator": "IT operator (Tests)",
             "it-bmf": "IT BMF (Tests)", "it-caas": "IT CaaS (Tests)",
         }[suite]
-        jobs = timeline(created, queue_s, failed=failed, conclusion=conclusion) if with_timeline else []
+        jobs = timeline(created, queue_s, failed=failed, conclusion=conclusion, job_name=job_name) if with_timeline else []
         ended = phases.parse_time(jobs[0]["completed_at"]) if jobs else created + timedelta(seconds=duration_s or 0)
         steps = [{"name": name, "duration_s": seconds} for name, seconds in STEPS]
         with sqlite3.connect(self.jobs_db) as conn:
@@ -118,7 +119,7 @@ class Stores:
                 "INSERT INTO jobs VALUES (?, ?, ?, ?, 'e2e', '', ?, 'completed', ?, ?, ?, ?, ?, ?, ?, '', ?, '',"
                 " 'box-1', ?)",
                 (
-                    self.next_id, str(self.next_id), repo, workflow, conclusion, event,
+                    self.next_id, run_id or str(self.next_id), repo, workflow, conclusion, event,
                     duration_s if duration_s is not None else int((ended - created).total_seconds()),
                     iso(created), iso(ended), attempt,
                     f"{suite} / e2e → {failed}" if failed else "", json.dumps(steps), sha,
@@ -433,6 +434,37 @@ def test_flake_campaign_runs_are_counted_only_when_asked_for_by_name(stores):
     assert by_suite["it-fulfillment"]["runs"] == 1
     assert by_suite["it-caas"]["runs"] == 1
     assert "only when asked for by name" in get(api, "health")["population"]
+
+
+def test_a_rerun_leg_counts_once_and_repetitions_count_each(stores):
+    """A GitHub re-run stores a new row under a new job id and the
+    superseded attempt's row stays stored; the rates count each
+    execution's last attempt (see _rates), so a re-run leg counts once at
+    its newest attempt -- while two campaign repetitions of one suite are
+    different jobs of one run and count each."""
+    stores.run(NOW - timedelta(hours=3), "failure", suite="it-fulfillment", event="pull_request",
+               run_id="500", attempt=1,
+               job_name="Integration test (fulfillment-service) / it-fulfillment-service")
+    stores.run(NOW - timedelta(hours=2), suite="it-fulfillment", event="pull_request",
+               run_id="500", attempt=2,
+               job_name="Integration test (fulfillment-service) / it-fulfillment-service")
+    stores.run(NOW - timedelta(hours=4), suite="it-caas", event="schedule", run_id="600",
+               job_name="Integration repetition 4 / Integration test (CaaS) / it-caas",
+               workflow="IT CaaS (Flake detection)")
+    stores.run(NOW - timedelta(hours=5), "failure", suite="it-caas", event="schedule", run_id="600",
+               job_name="Integration repetition 5 / Integration test (CaaS) / it-caas",
+               workflow="IT CaaS (Flake detection)")
+    api = stores.api()
+
+    by_suite = {row["suite"]: row for row in get(api, "health")["suites"]}
+    assert by_suite["it-fulfillment"]["runs"] == 1, "the re-run leg counts once, at its last attempt"
+    assert by_suite["it-fulfillment"]["passed"] == 1
+    assert by_suite["it-fulfillment"]["first_try_pass_rate"] == 0, "someone re-ran it"
+    assert by_suite["it-fulfillment"]["reruns"] == 1
+    flake = {row["suite"]: row for row in get(api, "health", trigger="flake")["suites"]}
+    assert flake["it-caas"]["runs"] == 2, "two repetitions are two jobs of one run"
+    assert flake["it-caas"]["passed"] == 1
+    assert flake["it-caas"]["failed"] == 1
 
 
 # -- time -------------------------------------------------------------------------------------------

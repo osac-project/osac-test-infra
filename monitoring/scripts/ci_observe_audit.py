@@ -564,11 +564,40 @@ def stored_e2e_rows(jobs_db, trends_db, since, until):
     return rows
 
 
+def run_unit(row):
+    """The re-run unit of a stored suite row: the run and the row's own job
+    when its timeline names exactly one (an integration leg's -- distinct
+    campaign repetitions of one suite are different job names in one run),
+    else the workflow name, which a re-run pair shares. The pages count
+    each unit's last attempt (model.md's pass rate), so the recount below
+    does too; implemented here rather than imported, like everything else
+    this checker reads."""
+    try:
+        timeline = json.loads(row.get("timeline_json") or "[]")
+    except (TypeError, ValueError):
+        timeline = []
+    if isinstance(timeline, list) and len(timeline) == 1 and isinstance(timeline[0], dict):
+        name = (timeline[0].get("name") or "").strip()
+        if name:
+            return name
+    return (row.get("workflow") or "").lower()
+
+
 def e2e_recount(rows, served):
     """The Overview's runs, passes, failures and cancellations per suite,
     against the stored rows counted by the documented scope. Also returns
     every stored workflow with the suite the documentation gives it, so a
     difference can be traced to the names that cause it."""
+    # Each re-run unit's last attempt only: a re-run stores a new row under
+    # a new job id and the superseded attempt's row stays stored (see
+    # run_unit), the way the served population counts.
+    kept = {}
+    for row in rows:
+        key = (str(row.get("run_id") or row.get("id")), run_unit(row))
+        held = kept.get(key)
+        if held is None or (row.get("run_attempt") or 1) > (held.get("run_attempt") or 1):
+            kept[key] = row
+    counted = {row["id"] for row in kept.values()}
     mine = {suite: Counter() for suite in (*SUITES, "all")}
     families = {}
     for row in rows:
@@ -581,7 +610,7 @@ def e2e_recount(rows, served):
         family["gate_rows"] += int(gate)
         family["conclusions"][row.get("conclusion") or "(none)"] += 1
         result = RESULTS.get((row.get("conclusion") or "").lower())
-        if not suite or gate or not result:
+        if not suite or gate or not result or row["id"] not in counted:
             continue
         if run_trigger(row) == "flake":
             # The campaigns are counted only when asked for by name, and

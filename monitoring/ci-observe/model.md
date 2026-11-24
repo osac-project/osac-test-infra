@@ -52,10 +52,13 @@ job a run contains, with the leg's own conclusion, so the readers map it
 like any other suite run. A campaign's rows wear the suite's
 flake-detection name, and the Started by filter counts them only when
 asked for by name: a campaign re-runs one fixed commit a hundred-plus
-times, and its pass rate — the flake rate — would swamp every other
-number under Any trigger. Every other leg of that workflow — the unit
-tests, the contract checks, the installer, preflight and AAP suites — is
-out of scope.
+times, and counting those repetitions under Any trigger would swamp every
+other number. A campaign's own numbers read the other way around from a
+suite's health: 99 passes and one failure are a 99% pass rate, and the
+observed failure rate — 1%, the share of repetitions that flaked — is the
+signal the campaigns exist to measure. Every other leg of that workflow —
+the unit tests, the contract checks, the installer, preflight and AAP
+suites — is out of scope.
 
 Netris, stretched, CaaS agentless-net, full regression and the named installs (**E2E VMaaS Production Install**, **E2E VMaaS Staging Install**, **E2E VMaaS Chart Packaging Smoke**, **OSAC CI Large**) test other scenarios and are never counted.
 
@@ -172,7 +175,7 @@ A run is keyed by its GitHub run id; a recording id adds the suite and rerun num
 - The workflow exporter keeps its own job history for 30 days, and a gap check proves it complete once an hour: one count per repo per fully-past day against GitHub, a run-by-run verification only where the counts differ (`day_checks`, `github_actions_gap_check_*`). GitHub keeps the JUnit artifact for 30 days, so a run's tests are read within that window.
 - The pull request backfill covers `osac` and `osac-test-infra` only, the two repositories the Repository filter names; no other repository of the organization is listed.
 - An insight window may end at any past moment, not only at now: the `end` parameter takes a UTC date (`2026-11-01`) or a UTC second-precision time (`2026-11-01T12:00:00Z`). The dashboards' own windows keep ending at now.
-- A run's logs artifact (with its JUnit file) is in one place, by the run's trigger: on the run for pull-request, merge-queue and push runs, in the private repository `osac-ci-artifacts` for scheduled and manual runs (since 2026-11-13). The Tests workflow's integration legs run from two callers — the CI workflow (pull requests and the merge queue, its bundles on the run) and the Integration Tests workflow (scheduled, manual, nightly, its bundles in `osac-ci-artifacts`). Reading those needs a token that can see that repository.
+- A run's logs artifact (with its JUnit file) is in one place, by the run's trigger: on the run for pull-request, merge-queue and push runs, in the private repository `osac-ci-artifacts` for scheduled and manual runs (since 2026-11-13). The Tests workflow's integration legs run from three callers — the CI workflow (pull requests and the merge queue, its bundles on the run) and the Integration Tests workflow (scheduled, manual, nightly, its bundles in `osac-ci-artifacts`), plus the Flake detection campaigns, whose repetitions each upload their own suffixed bundle to the campaign run and are read by none of the pages: campaign results are not in test history and a campaign's run page names no artifact place — flake-report.yml owns that data. Reading the first two places needs a token that can see that repository.
 - The exporter fetches the job timeline (needed for the wait for a runner and for timeouts) of a run stored before timelines existed a few runs per poll, counted suite runs only, newest first.
 - The exporter examines the integration legs of CI, Integration Tests and Flake detection runs stored before those legs became rows of their own a few runs per poll, newest first, and marks each examined run; rows ingested since already carry their legs.
 - The exporter polls the newest completed runs and the runs it saw active, and every 30 minutes lists every completed run created in the last 48 hours to store what the polling missed or kept with an outdated result. A run missed while the exporter was down for longer than that is recovered by a one-off backfill (`BACKFILL_DAYS`).

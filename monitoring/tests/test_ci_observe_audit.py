@@ -693,9 +693,11 @@ def test_flake_campaign_rows_map_to_their_suites_but_leave_the_recount():
     served["suites"][-1].update({"runs": 1, "passed": 1})
     checks, names = audit.e2e_recount(
         [
-            {"repo": "osac", "workflow": "IT fulfillment (Tests)", "conclusion": "success"},
-            {"repo": "osac", "workflow": "IT fulfillment (Flake detection)", "conclusion": "success"},
-            {"repo": "osac", "workflow": "IT fulfillment (Flake detection)", "conclusion": "failure"},
+            {"id": 1, "run_id": "1", "repo": "osac", "workflow": "IT fulfillment (Tests)", "conclusion": "success"},
+            {"id": 2, "run_id": "2", "repo": "osac", "workflow": "IT fulfillment (Flake detection)",
+             "conclusion": "success"},
+            {"id": 3, "run_id": "2", "repo": "osac", "workflow": "IT fulfillment (Flake detection)",
+             "conclusion": "failure"},
         ],
         served,
     )

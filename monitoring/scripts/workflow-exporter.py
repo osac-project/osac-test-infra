@@ -2271,10 +2271,15 @@ class WorkflowExporter:
         the ~6,700 CI rows of a full 30-day window, most holding one or
         more legs -- plus the rows the old single-suite refine renamed to a
         suite's name, which are restored to the workflow's own name and
-        category while their legs become rows of their own. A few runs per
-        poll cycle, newest first, refetch their jobs (one call each); the
-        rest wait for the next cycle, and the pass waits while the shared
-        GitHub budget is below INTEGRATION_LEG_BACKFILL_MIN_RATE_LIMIT.
+        category while their legs become rows of their own. Each examined
+        parent also gets its own steps and failed step rebuilt with the
+        same builders a fresh ingestion uses (out-of-scope jobs kept, leg
+        steps and leg-pointing failed steps gone) and written back
+        explicitly, because _upsert_job will not rewrite an unchanged run.
+        A few runs per poll cycle, newest first, refetch their jobs (one
+        call each); the rest wait for the next cycle, and the pass waits
+        while the shared GitHub budget is below
+        INTEGRATION_LEG_BACKFILL_MIN_RATE_LIMIT.
 
         Each examined run is marked in integration_leg_checks whatever its
         jobs hold: a CI run whose plan picked no in-scope leg has no leg
@@ -2335,21 +2340,33 @@ class WorkflowExporter:
                 record["category"] = WorkflowExporter._category_of_run(
                     ci_observe_phases.IT_WORKFLOW, record.get("conclusion") or "")
             self._refine_run_record(record, jobs)
+            # Rebuild the parent's own details with the same builders a
+            # fresh ingestion uses: the legs' steps moved to rows of their
+            # own, and a failed_step that still points at a leg (or, for a
+            # renamed parent, the rename's e2e classification) must not
+            # survive on the run's row. _upsert_job would not write any of
+            # this back -- an unchanged run's row is already current to it
+            # -- so the values are persisted explicitly below.
+            failed = self._extract_failed_steps(jobs) if record.get("conclusion") == "failure" else []
+            if record.get("conclusion") == "failure":
+                record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed, jobs)
+                record["failed_step"] = "; ".join(f["display"] for f in failed)
+            else:
+                record["failure_reason"] = None
+                record["failed_step"] = ""
+            record["steps"] = self._extract_step_durations(jobs)
             for suite in self._suite_records(record, jobs):
                 self._upsert_job(suite)
-            if renamed:
-                with self._db() as conn:
-                    # failure_reason was classified under the rename's e2e
-                    # category; a ci row's classification is "n/a", the
-                    # value a fresh ingestion of this run would store (a
-                    # passing row never carried one).
+            with self._db() as conn:
+                if renamed:
                     conn.execute(
-                        "UPDATE jobs SET workflow = ?, display_name = ?, category = ?,"
-                        " failure_reason = CASE WHEN conclusion = 'failure' THEN 'n/a'"
-                        " ELSE failure_reason END WHERE id = ?",
+                        "UPDATE jobs SET workflow = ?, display_name = ?, category = ? WHERE id = ?",
                         (ci_observe_phases.IT_WORKFLOW, record["display_name"], record["category"], row["id"]),
                     )
-            with self._db() as conn:
+                conn.execute(
+                    "UPDATE jobs SET steps_json = ?, failed_step = ?, failure_reason = ? WHERE id = ?",
+                    (json.dumps(record["steps"]), record["failed_step"], record["failure_reason"], row["id"]),
+                )
                 conn.execute(
                     "INSERT OR IGNORE INTO integration_leg_checks (run_id, checked_at) VALUES (?, ?)",
                     (row["id"], now_stamp),

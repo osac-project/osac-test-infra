@@ -452,6 +452,39 @@ def test_the_catch_up_skips_a_run_that_already_has_leg_rows(W, exporter, github,
     assert github.calls == []
 
 
+def test_the_catch_up_rebuilds_the_parents_own_details(W, exporter, github, R, wfe, monkeypatch):
+    """The parent run's stored steps and failed step were written by an
+    ingestion that counted the legs as its own jobs; the catch-up rebuilds
+    both with the builders a fresh ingestion uses -- out-of-scope jobs
+    kept, leg steps and a leg-pointing failed step gone -- and writes them
+    back explicitly, because _upsert_job will not rewrite an unchanged
+    run."""
+    monkeypatch.setattr(wfe, "TOKEN", "token")
+    with exporter._db() as conn:
+        conn.execute(
+            "INSERT INTO jobs (id, repo, workflow, display_name, category, status, conclusion, run_attempt,"
+            " run_id, url, created_at, steps_json, failed_step, failure_reason)"
+            " VALUES (1, 'osac', ?, 'osac / CI', 'ci', 'completed', 'failure', 1, '1', 'u',"
+            " '2026-11-01T00:00:00Z', ?, ?, 'test')",
+            (CI, json.dumps([{"name": "Run integration tests", "duration_s": 60},
+                             {"name": "Lint charts", "duration_s": 30}]),
+             "Integration test (CaaS) / it-caas → Run integration tests"),
+        )
+    jobs = ci_run_jobs()
+    jobs[5] = leg_job("Integration test (CaaS) / it-caas", conclusion="failure", job_id=6)
+    github.add(
+        R("osac/actions/runs/1/attempts/1/jobs?per_page=30"),
+        FakeResponse(payload={"jobs": jobs}),
+    )
+    assert exporter._backfill_integration_legs_if_needed(limit=10) == 1
+    [parent] = rows(exporter, "SELECT steps_json, failed_step, failure_reason FROM jobs WHERE id = 1")
+    steps = [s["name"] for s in json.loads(parent["steps_json"])]
+    assert "Run integration tests" not in steps, "the leg's steps live on the leg row"
+    assert "Lint charts" in steps and "Deploy charts" in steps, "the out-of-scope installer leg stays"
+    assert parent["failed_step"] == "", "the run row no longer points at a leg's step"
+    assert parent["failure_reason"] == "n/a", "a ci row's classification"
+
+
 # the flake-detection campaigns, every leg a hundred-plus times ----------------------------------
 
 
