@@ -48,6 +48,12 @@ signature occurred, in failed and in passing runs alike. Passing runs
 contribute table rows only, no Loki lines: a signature that appears in
 both answers nothing, and only the comparison can tell a cause from the
 ambient noise every cluster logs (informer timeouts, libvirt races).
+Gatherer boilerplate (oc logs --previous on a pod that never restarted,
+the tolerations every pod describe prints) is not indexed at all: failed
+runs are gathered fully and passing runs are not, so those lines would
+score as a perfect failure discriminator while saying nothing about any
+run. What is filtered is counted, per run in artifact_logs and in the
+pass summary.
 
 Population: the in-scope suites (ci_observe_phases.SUITE_WORKFLOWS), every
 trigger, the latest attempt of each run. Failed runs are indexed fully;
@@ -159,6 +165,19 @@ GITHUB_RESERVE = int(os.getenv("CI_OBSERVE_LOGS_GITHUB_RESERVE", "1000"))
 # minus its noise filter: a zero counter is not an error.
 ERROR_LINE_RE = re.compile(r"(?i)\b(errors?|panick?|fatal|fail(ed|ure)?|unreachable|exception|traceback)\b")
 NOT_ERROR_RE = re.compile(r"(?i)\b(fail(ed|ure)?|unreachable|errors?)\s*[=:]\s*0\b")
+# Gatherer boilerplate the error patterns match but no run's health says
+# anything about. The gather script reads failed runs fully and passing runs
+# not at all, so these lines score 100 percent of failed and 0 percent of
+# passing runs and outranked every real cause in the signature ranking (the
+# INC-2026-11-install follow-up): `oc logs --previous` on a pod that never
+# restarted answers BadRequest, and every `oc describe pod` prints the same
+# two taint tolerations. They are dropped at index time and counted, never
+# silently: the pass summary says how many lines were filtered.
+OC_LOGS_PREVIOUS_RE = re.compile(
+    r'^Error from server \(BadRequest\): previous terminated container "[^"]*" in pod "[^"]*" not found$')
+TOLERATION_RE = re.compile(
+    r'node\.kubernetes\.io/(?:unreachable|not-ready):NoExecute op=Exists for \d+s')
+TOLERATIONS_HEADER_RE = re.compile(r'^Tolerations:\s*$')
 # A line's message begins after these prefixes, stripped before the
 # signature is computed: the gather's "N-" line number before an RFC 3339
 # timestamp (bare or bracketed), Kubernetes' "I1121 12:00:00.000 1
@@ -241,6 +260,16 @@ def is_error_line(line):
     return bool(ERROR_LINE_RE.search(line)) and not NOT_ERROR_RE.search(line)
 
 
+def is_gatherer_line(line):
+    """Whether a line is gatherer boilerplate (see OC_LOGS_PREVIOUS_RE):
+    text the act of gathering writes into every bundle it reads fully, not
+    anything the run under test said. Such a line is not an error line, so
+    it counts in neither the error lines nor the signatures; the reader is
+    told how many were dropped (see read_bundle's counts)."""
+    return bool(OC_LOGS_PREVIOUS_RE.match(line.strip()) or TOLERATION_RE.search(line)
+                or TOLERATIONS_HEADER_RE.match(line.strip()))
+
+
 def file_kind(path):
     for pattern, kind in KIND_PATTERNS:
         if pattern.search(path):
@@ -276,6 +305,11 @@ def open_state(db_path):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(artifact_logs)")}
     if "skipped_lines" not in columns:
         conn.execute("ALTER TABLE artifact_logs ADD COLUMN skipped_lines INTEGER NOT NULL DEFAULT 0")
+    if "gatherer_lines" not in columns:
+        # Rows from before the gatherer filter count none: unknown, not zero,
+        # but a plain count column cannot say so; the pass summary has said
+        # how many it filtered since the filter landed.
+        conn.execute("ALTER TABLE artifact_logs ADD COLUMN gatherer_lines INTEGER NOT NULL DEFAULT 0")
     if "attempt" not in columns:
         # Rows from before carry no attempt; they were read at the attempt
         # stored then, which is the first for nearly every run (see
@@ -403,7 +437,8 @@ def read_bundle(archive, run, now=None):
     now = now or datetime.now(timezone.utc)
     streams = {}
     signatures = {}
-    counts = {"files": 0, "lines": 0, "error_lines": 0, "skipped_files": 0, "skipped_lines": 0}
+    counts = {"files": 0, "lines": 0, "error_lines": 0, "skipped_files": 0, "skipped_lines": 0,
+              "gatherer_lines": 0}
     failed = run["outcome"] == "failure"
     finished = run["finished_at"]
     earliest = (run.get("created_at") or finished) - LINE_TIME_SLACK
@@ -432,6 +467,13 @@ def read_bundle(archive, run, now=None):
             counts["lines"] += 1
             if len(line.encode("utf-8", "replace")) > MAX_LINE_BYTES:
                 counts["skipped_lines"] += 1
+                continue
+            if is_gatherer_line(line):
+                # Boilerplate the act of gathering writes, not the run: it
+                # is dropped before the error-line patterns can score it as
+                # a failure discriminator (see is_gatherer_line), and
+                # counted so the drop is visible.
+                counts["gatherer_lines"] += 1
                 continue
             error_line = is_error_line(line)
             if error_line:
@@ -513,16 +555,17 @@ def flush_loki(session):
         logger.warning("the Loki flush failed: %s", error)
 
 
-NO_COUNTS = {"files": 0, "lines": 0, "error_lines": 0, "skipped_files": 0, "skipped_lines": 0}
+NO_COUNTS = {"files": 0, "lines": 0, "error_lines": 0, "skipped_files": 0, "skipped_lines": 0,
+             "gatherer_lines": 0}
 
 
 def record_run(state, run, state_name, reason, counts, now):
     state.execute(
         "INSERT OR REPLACE INTO artifact_logs (run_id, suite, repo, state, reason, files, lines, error_lines,"
-        " skipped_files, skipped_lines, ingested_at, attempt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        " skipped_files, skipped_lines, gatherer_lines, ingested_at, attempt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (run["run_id"], run["suite"], run["repo"], state_name, reason,
          counts["files"], counts["lines"], counts["error_lines"], counts["skipped_files"],
-         counts["skipped_lines"], now.strftime("%Y-%m-%dT%H:%M:%SZ"), run["attempt"]))
+         counts["skipped_lines"], counts["gatherer_lines"], now.strftime("%Y-%m-%dT%H:%M:%SZ"), run["attempt"]))
 
 
 def record_signatures(state, run, signatures):
@@ -568,6 +611,7 @@ def main(argv=None):
 
     indexed = skipped = failed = missing = unavailable = 0
     looked_up = 0
+    filtered_gatherer_lines = 0
     budget = GitHubBudget(GITHUB_RESERVE)
     stopped = ""
     left = 0
@@ -638,6 +682,7 @@ def main(argv=None):
                 record_run(state, run, kept, row["reason"] if args.resign else "", counts, now)
                 record_signatures(state, run, signatures)
             indexed += 1
+            filtered_gatherer_lines += counts["gatherer_lines"]
             logger.info("  %s run %s (%s, %s): %d file(s), %d error line(s), %d signature(s)%s",
                         run["repo"], run["run_id"], run["suite"], run["outcome"], counts["files"],
                         counts["error_lines"], len(signatures),
@@ -645,6 +690,9 @@ def main(argv=None):
             if counts["skipped_lines"]:
                 logger.info("  %s run %s: %d line(s) over Loki's entry bound were not stored",
                             run["repo"], run["run_id"], counts["skipped_lines"])
+            if counts["gatherer_lines"]:
+                logger.info("  %s run %s: %d gatherer boilerplate line(s) were not indexed as errors",
+                            run["repo"], run["run_id"], counts["gatherer_lines"])
         except GitHubRateLimited as error:
             # The shared budget is spent: not this run's fact and not a
             # fault. What was read is recorded; the rest waits for the next
@@ -669,6 +717,8 @@ def main(argv=None):
 
     summary = (f"{indexed} indexed, {missing} missing, {unavailable} unavailable, {skipped} already read,"
                f" {failed} unreadable or rejected")
+    if filtered_gatherer_lines:
+        summary += f", {filtered_gatherer_lines} gatherer boilerplate line(s) filtered (not errors)"
     if left:
         summary += f", {left} left for the next passes ({stopped})"
     if not args.dry_run:

@@ -22,13 +22,15 @@ a note in the document, never an error):
                                each incident their window overlaps
 
 Common parameters: days (7 by default, at most KEEP_DAYS), suite (all,
-vmaas, caas, bmaas), repo (all, osac, osac-test-infra), trigger (all, pr,
+vmaas, caas, bmaas, it-fulfillment, it-operator, it-bmf, it-caas), repo (all, osac, osac-test-infra), trigger (all, pr,
 merge_queue, scheduled, manual). Every number compares the window with the
 window just before it when the stores reach back that far.
 
-The population is the standard VMaaS, CaaS and BMaaS suite runs
+The population is the standard VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs
 (ci_observe_phases.suite_key): a full-install run, a pull-request suite run,
-or one suite of a merge-queue run. GitHub owns pass or fail.
+one suite of a merge-queue run, or one run of the osac mono-repo's Tests
+workflow for the four integration suites (pull-request and push triggered).
+GitHub owns pass or fail.
 
 Stores, all read-only here:
 - workflow-exporter.db `jobs` (live, 30 days) and `captures` (run page
@@ -219,11 +221,11 @@ class Filters:
             days = DEFAULT_DAYS
         self.days = max(1, min(days, KEEP_DAYS))
         suite = _param(params, "suite", "all").strip().lower()
-        # The runs list names all three suites "core".
+        # The runs list names the whole ci-observe population "core".
         if suite == "core":
             suite = "all"
         if suite not in ("all", *phases.SUITES):
-            self.notes.append(f"suite {suite!r} is not VMaaS, CaaS or BMaaS; showing all three")
+            self.notes.append(f"suite {suite!r} is not one of the seven ci-observe suites; showing all of them")
             suite = "all"
         self.suite = suite
         repo = _param(params, "repo", "all").strip()
@@ -1080,8 +1082,9 @@ class CIObserveInsights:
         daily = self._daily_health(finished, filters)
         return {
             "population": (
-                f"VMaaS, CaaS and BMaaS suite runs created in the last {filters.days} days "
-                "(full-install, pull-request and merge-queue suite runs); GitHub owns pass or fail"
+                f"VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs created in"
+                f" the last {filters.days} days (full-install, pull-request and merge-queue E2E suite runs,"
+                " and the Tests workflow's pull-request and push integration runs); GitHub owns pass or fail"
             ),
             "tiles": [tile],
             "suites": suites,
@@ -1260,7 +1263,8 @@ class CIObserveInsights:
         totals["failed_share"] = ratio(totals["failed_hours"], totals["runner_hours"])
         return {
             "population": (
-                f"passing VMaaS, CaaS and BMaaS suite runs in the last {filters.days} days for the phases and "
+                f"passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs in"
+                f" the last {filters.days} days for the phases and "
                 "steps; every finished run for the runner wait and the hours"
             ),
             "phases": self._phase_rows(finished, filters),
@@ -1428,7 +1432,8 @@ class CIObserveInsights:
         notes.extend(signature_notes)
         return {
             "population": (
-                f"failed VMaaS, CaaS and BMaaS suite runs in the last {filters.days} days; a run's cause is the "
+                f"failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs in the"
+                f" last {filters.days} days; a run's cause is the "
                 "phase of its first failed step"
             ),
             "tiles": [tile],
@@ -1627,7 +1632,8 @@ class CIObserveInsights:
         ]
         return {
             "population": (
-                f"tests of VMaaS, CaaS and BMaaS suite runs in the last {filters.days} days, from the JUnit "
+                f"tests of VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs in"
+                f" the last {filters.days} days, from the JUnit "
                 "artifacts; a skipped test is not a run"
             ),
             "tests": tests[:limit],
@@ -1658,7 +1664,8 @@ class CIObserveInsights:
         wanted = _param(params, "test").strip()
         empty = {
             "population": (
-                f"runs of one test in the VMaaS, CaaS and BMaaS suite runs of the last {filters.days} days, from "
+                f"runs of one test in the VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS"
+                f" suite runs of the last {filters.days} days, from "
                 "the JUnit reports; where its time goes, from the recorded runs' traces"
             ),
             "summary": [], "runs": [], "daily": [], "breakdown": [], "breakdown_daily": [], "waits": [],
@@ -1939,7 +1946,8 @@ class CIObserveInsights:
             )
         return {
             "population": (
-                f"poll_until waits of recorded VMaaS, CaaS and BMaaS runs in the last {filters.days} days, from "
+                f"poll_until waits of recorded VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT"
+                f" CaaS runs in the last {filters.days} days, from "
                 "the span rollup of their traces"
             ),
             "kinds": kinds,

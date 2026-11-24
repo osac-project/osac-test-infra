@@ -127,7 +127,7 @@
     "label": "Suite",
     "type": "custom",
     "hide": 0,
-    "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas",
+    "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas,IT fulfillment : it-fulfillment,IT operator : it-operator,IT BMF : it-bmf,IT CaaS : it-caas",
     "options": [
      {
       "text": "All suites",
@@ -148,6 +148,26 @@
       "text": "BMaaS",
       "value": "bmaas",
       "selected": false
+     },
+     {
+      "text": "IT fulfillment",
+      "value": "it-fulfillment",
+      "selected": false
+     },
+     {
+      "text": "IT operator",
+      "value": "it-operator",
+      "selected": false
+     },
+     {
+      "text": "IT BMF",
+      "value": "it-bmf",
+      "selected": false
+     },
+     {
+      "text": "IT CaaS",
+      "value": "it-caas",
+      "selected": false
      }
     ],
     "current": {
@@ -158,14 +178,14 @@
     "includeAll": false,
     "multi": false,
     "refresh": 0,
-    "description": "The VMaaS, CaaS and BMaaS E2E suites."
+    "description": "The VMaaS, CaaS and BMaaS E2E suites and the IT fulfillment, IT operator, IT BMF and IT CaaS integration suites."
    },
    {
     "name": "trigger",
     "label": "Started by",
     "type": "custom",
     "hide": 0,
-    "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual",
+    "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual,Pushes : push",
     "options": [
      {
       "text": "Any trigger",
@@ -191,6 +211,11 @@
       "text": "Manual",
       "value": "manual",
       "selected": false
+     },
+     {
+      "text": "Pushes",
+      "value": "push",
+      "selected": false
      }
     ],
     "current": {
@@ -201,7 +226,7 @@
     "includeAll": false,
     "multi": false,
     "refresh": 0,
-    "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, or manual runs."
+    "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, manual runs, or pushes to a branch (the integration suites)."
    },
    {
     "name": "repo",
@@ -262,7 +287,7 @@
    "type": "stat",
    "id": 2,
    "title": "Failed runs",
-   "description": "Runs GitHub marked failed or timed out. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+   "description": "Runs GitHub marked failed or timed out. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
    "gridPos": {
     "x": 0,
     "y": 2,
@@ -366,7 +391,7 @@
    "type": "stat",
    "id": 3,
    "title": "Failure rate",
-   "description": "Failed ÷ (passed + failed). Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above). Unit: percent.",
+   "description": "Failed ÷ (passed + failed). Population: passed and failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above). Unit: percent.",
    "gridPos": {
     "x": 3,
     "y": 2,
@@ -474,7 +499,7 @@
    "type": "stat",
    "id": 4,
    "title": "Tests failed",
-   "description": "Failed in a test step. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+   "description": "Failed in a test step. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
    "gridPos": {
     "x": 6,
     "y": 2,
@@ -574,7 +599,7 @@
    "type": "stat",
    "id": 5,
    "title": "Build failed",
-   "description": "Failed building the code under test. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+   "description": "Failed building the code under test. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
    "gridPos": {
     "x": 9,
     "y": 2,
@@ -674,7 +699,7 @@
    "type": "stat",
    "id": 6,
    "title": "OSAC install failed",
-   "description": "Failed installing OSAC or its operators. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+   "description": "Failed installing OSAC or its operators. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
    "gridPos": {
     "x": 12,
     "y": 2,
@@ -774,7 +799,7 @@
    "type": "stat",
    "id": 7,
    "title": "CI infrastructure",
-   "description": "Failed in cluster or host setup, CI setup, logs or teardown, timed out, or lost its runner. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+   "description": "Failed in cluster or host setup, CI setup, logs or teardown, timed out, or lost its runner. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
    "gridPos": {
     "x": 15,
     "y": 2,
@@ -874,7 +899,7 @@
    "type": "stat",
    "id": 8,
    "title": "Blocked",
-   "description": "An unapproved fork pull request, or inputs the workflow refused. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+   "description": "An unapproved fork pull request, or inputs the workflow refused. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
    "gridPos": {
     "x": 18,
     "y": 2,
@@ -974,7 +999,7 @@
    "type": "stat",
    "id": 9,
    "title": "Cancelled",
-   "description": "Not failures: runs cancelled, usually because a newer push replaced them. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+   "description": "Not failures: runs cancelled, usually because a newer push replaced them. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
    "gridPos": {
     "x": 21,
     "y": 2,
@@ -1074,7 +1099,7 @@
    "type": "timeseries",
    "id": 10,
    "title": "Failed runs per day, by area",
-   "description": "Each bar is one day's failed runs, split by the area of their cause. The Causes table splits CI infrastructure further. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: one point per UTC day the runs were created, last $days days. Unit: count of runs.",
+   "description": "Each bar is one day's failed runs, split by the area of their cause. The Causes table splits CI infrastructure further. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: one point per UTC day the runs were created, last $days days. Unit: count of runs.",
    "gridPos": {
     "x": 0,
     "y": 6,
@@ -1273,7 +1298,7 @@
    "type": "table",
    "id": 11,
    "title": "Causes",
-   "description": "Failed runs per cause, their share and the change in count. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs and percent.",
+   "description": "Failed runs per cause, their share and the change in count. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs and percent.",
    "gridPos": {
     "x": 14,
     "y": 6,
@@ -1524,7 +1549,7 @@
    "type": "barchart",
    "id": 12,
    "title": "Failures by suite",
-   "description": "Failed runs of each suite, split by the area of their cause. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+   "description": "Failed runs of each suite, split by the area of their cause. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
    "gridPos": {
     "x": 0,
     "y": 15,
@@ -1725,7 +1750,7 @@
    "type": "table",
    "id": 13,
    "title": "Steps that failed",
-   "description": "The step each failed run stopped in, the most frequent first. 'Last failed' opens the newest such run. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs and percent.",
+   "description": "The step each failed run stopped in, the most frequent first. 'Last failed' opens the newest such run. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs and percent.",
    "gridPos": {
     "x": 10,
     "y": 15,
@@ -3258,7 +3283,7 @@
    "type": "table",
    "id": 17,
    "title": "Failed runs",
-   "description": "Every failed run, newest first: its cause, the step it stopped in and, when tests failed, the first failed test and its error. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: time, count and duration as named.",
+   "description": "Every failed run, newest first: its cause, the step it stopped in and, when tests failed, the first failed test and its error. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: time, count and duration as named.",
    "gridPos": {
     "x": 0,
     "y": 51,

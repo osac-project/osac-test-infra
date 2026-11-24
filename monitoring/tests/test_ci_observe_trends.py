@@ -102,6 +102,28 @@ def artifact_payload(api_url: str, *, run_id=RUN_ID, art_id=42, expired=False, s
     return FakeResponse(payload={"total_count": 1, "artifacts": [artifact]})
 
 
+def it_artifact_payload(api_url: str, *, run_id=RUN_ID, art_id=42, suite="it-fulfillment") -> FakeResponse:
+    """The Tests workflow's integration bundle: osac-logs-it-<suite>-<run id>."""
+    artifact = {
+        "id": art_id,
+        "name": f"osac-logs-{suite}-{run_id}",
+        "size_in_bytes": 1024,
+        "expired": False,
+        "expires_at": "2026-11-08T10:00:00Z",
+        "archive_download_url": f"{api_url}/repos/osac-project/osac/actions/artifacts/{art_id}/zip",
+    }
+    return FakeResponse(payload={"total_count": 1, "artifacts": [artifact]})
+
+
+def test_an_artifacts_name_names_the_integration_suite_too(trends):
+    assert trends.artifact_suite(f"osac-logs-full-install-{RUN_ID}") == "vmaas"
+    assert trends.artifact_suite(f"osac-logs-caas-full-install-{RUN_ID}") == "caas"
+    assert trends.artifact_suite(f"osac-logs-it-fulfillment-{RUN_ID}") == "it-fulfillment"
+    assert trends.artifact_suite(f"osac-logs-it-caas-{RUN_ID}") == "it-caas"
+    assert trends.artifact_suite(f"osac-logs-it-nosuchsuite-{RUN_ID}") == ""
+    assert trends.artifact_suite(f"caas-integration-logs-{RUN_ID}") == ""
+
+
 def today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -390,14 +412,20 @@ def fetched(trends, trigger="pr", repo="osac", **fetcher):
 
 
 PRIVATE_NAME_PATH = "/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100"
+# Every suite's bundle name for one run: the three E2E families and the four
+# integration ones, the names a private-repository fallback asks for.
+ALL_SUITE_NAMES = tuple(
+    f"osac-logs-{pattern}-{RUN_ID}" for pattern in
+    ("full-install", "caas-full-install", "bmaas-full-install",
+     "it-fulfillment", "it-operator", "it-bmf", "it-caas"))
 
 
 def nothing_anywhere(github):
     """Empty listings at both places a run's artifact can be: the run's own
-    artifact list and the private repository's three name-filtered ones."""
+    artifact list and the private repository's name-filtered ones (every
+    suite's, the three E2E names and the four integration ones)."""
     github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-    for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
-                 f"osac-logs-bmaas-full-install-{RUN_ID}"):
+    for name in ALL_SUITE_NAMES:
         github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
 
 
@@ -433,8 +461,24 @@ class TestArtifactFetch:
         cases, reason = fetched(trends)
 
         assert cases is None
-        assert reason == (f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in "
+        assert reason == (f"no osac-logs-[<suite>-]full-install-{RUN_ID} (E2E) or"
+                          f" osac-logs-it-<suite>-{RUN_ID} (integration) artifact in "
                           f"run {RUN_ID} of osac-project/osac or in osac-project/osac-ci-artifacts")
+
+    def test_a_push_run_keeps_its_integration_bundle_on_the_run(self, trends, github, wfe):
+        """The Tests workflow's integration runs are push (and pull-request)
+        triggered, and their osac-logs-it-<suite>-<run id> bundle is on the
+        run itself, like a pull-request e2e run's."""
+        github.add(LIST_PATH, it_artifact_payload(wfe.API_URL))
+        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch(
+            {"run_id": RUN_ID, "repo": "osac", "trigger": "push", "suites": ["it-fulfillment"]})
+
+        assert reason is None
+        assert len(cases) == 3
+        assert {case["suite_key"] for case in cases} == {"it-fulfillment"}, \
+            "the bundle's name says which integration suite ran"
 
     def test_a_pull_request_run_whose_artifact_went_private_is_found(self, trends, github, wfe):
         """Since osac commit c39048bb96 (2026-11-14) every trigger publishes
@@ -443,7 +487,9 @@ class TestArtifactFetch:
         repository. Before this lookup every pull-request and merge-queue
         run since that date read as 'no artifact'."""
         github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
-        for name in (f"osac-logs-caas-full-install-{RUN_ID}", f"osac-logs-bmaas-full-install-{RUN_ID}"):
+        for name in ALL_SUITE_NAMES:
+            if name == f"osac-logs-full-install-{RUN_ID}":
+                continue
             github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
         github.add(PRIVATE_NAME_PATH.format(name=f"osac-logs-full-install-{RUN_ID}"),
                    FakeResponse(payload={"total_count": 1, "artifacts": [private_entry(wfe.API_URL)]}))
@@ -456,8 +502,9 @@ class TestArtifactFetch:
         assert len(cases) == 3
 
     def test_a_scheduled_run_is_read_from_the_private_repository_only(self, trends, github, wfe):
-        for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
-                     f"osac-logs-bmaas-full-install-{RUN_ID}"):
+        for name in ALL_SUITE_NAMES:
+            if name == f"osac-logs-full-install-{RUN_ID}":
+                continue
             github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
         github.add(PRIVATE_NAME_PATH.format(name=f"osac-logs-full-install-{RUN_ID}"),
                    FakeResponse(payload={"total_count": 1, "artifacts": [private_entry(wfe.API_URL)]}))
@@ -472,9 +519,9 @@ class TestArtifactFetch:
 
     def test_a_one_suite_run_asks_the_private_repository_for_its_own_artifact_only(self, trends, github, wfe):
         """The private repository is listed by name, one call a name: a VMaaS
-        run asks for its own artifact, not all three suites', a third of the
-        calls on the budget everything shares. A run whose suites are not
-        all known asks for all three."""
+        run asks for its own artifact, not all seven suites', a seventh of
+        the calls on the budget everything shares. A run whose suites are
+        not all known asks for every suite's name."""
         vmaas = f"osac-logs-full-install-{RUN_ID}"
         github.add(PRIVATE_NAME_PATH.format(name=vmaas),
                    FakeResponse(payload={"total_count": 1, "artifacts": [private_entry(wfe.API_URL)]}))
@@ -487,10 +534,12 @@ class TestArtifactFetch:
         assert [call for call in github.calls if "osac-ci-artifacts" in call and "name=" in call] == [
             PRIVATE_NAME_PATH.format(name=vmaas)]
         github.calls.clear()
-        for name in (f"osac-logs-caas-full-install-{RUN_ID}", f"osac-logs-bmaas-full-install-{RUN_ID}"):
+        for name in ALL_SUITE_NAMES:
+            if name == vmaas:
+                continue
             github.add(PRIVATE_NAME_PATH.format(name=name), FakeResponse(payload={"total_count": 0, "artifacts": []}))
         fetcher.fetch({**run, "suites": []})
-        assert len([call for call in github.calls if "name=" in call]) == 3
+        assert len([call for call in github.calls if "name=" in call]) == len(ALL_SUITE_NAMES)
 
     def test_a_run_knows_the_suites_its_rows_name(self, trends):
         merge_queue = trends.candidate_runs([
@@ -510,7 +559,8 @@ class TestArtifactFetch:
 
         message = str(raised.value)
         assert f"osac-project/osac-ci-artifacts answered HTTP {status}" in message
-        assert "PRIVATE_GITHUB_TOKEN needs read access to the Actions artifacts of osac-project/osac-ci-artifacts" in message
+        assert ("PRIVATE_GITHUB_TOKEN needs read access to the Actions artifacts of"
+                " osac-project/osac-ci-artifacts") in message
 
     def test_a_github_error_on_the_run_stops_the_pass(self, trends, github):
         github.add(LIST_PATH, FakeResponse(502, text="bad gateway"))
@@ -537,7 +587,8 @@ class TestArtifactFetch:
         cases, reason = fetched(trends, "scheduled")
 
         assert cases is None
-        assert reason == (f"no osac-logs-[<suite>-]full-install-{RUN_ID} artifact in "
+        assert reason == (f"no osac-logs-[<suite>-]full-install-{RUN_ID} (E2E) or"
+                          f" osac-logs-it-<suite>-{RUN_ID} (integration) artifact in "
                           f"osac-project/osac-ci-artifacts or in run {RUN_ID} of osac-project/osac")
 
     def test_a_trigger_without_an_artifact_place_is_a_reason(self, trends, github):
@@ -548,8 +599,7 @@ class TestArtifactFetch:
         assert github.calls == []
 
     def test_the_fetchers_org_and_api_url_reach_the_private_repository(self, trends, github):
-        for name in (f"osac-logs-full-install-{RUN_ID}", f"osac-logs-caas-full-install-{RUN_ID}",
-                     f"osac-logs-bmaas-full-install-{RUN_ID}"):
+        for name in ALL_SUITE_NAMES:
             github.add(f"/repos/other-org/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
                        FakeResponse(payload={"total_count": 0, "artifacts": []}))
         github.add(f"/repos/other-org/runs-here/actions/runs/{RUN_ID}/artifacts?per_page=100",

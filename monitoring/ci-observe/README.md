@@ -1,6 +1,6 @@
 # CI Observe
 
-CI Observe shows how healthy the VMaaS, CaaS and BMaaS E2E runs are, where their time goes, why they fail, how each test behaves over time, and how long pull requests wait.
+CI Observe shows how healthy the VMaaS, CaaS and BMaaS E2E runs and the four integration suites of the Tests workflow are, where their time goes, why they fail, how each test behaves over time, and how long pull requests wait.
 
 ## Open it
 
@@ -31,7 +31,7 @@ The bar at the top of every page opens the others. **Window**, **Suite**, **Star
 
 | Term | Meaning |
 |---|---|
-| Suite run | One VMaaS, CaaS or BMaaS suite run, from any trigger. Netris, stretched, agentless and the named installs are other scenarios and are not counted. |
+| Suite run | One VMaaS, CaaS or BMaaS suite run, or one run of the Tests workflow's four integration suites, from any trigger. Netris, stretched, agentless, the named installs and every other Tests leg are other scenarios and are not counted. |
 | Pass rate | Passed runs ÷ (passed + failed). A cancelled run (usually replaced by a newer push) is left out. |
 | First-try pass rate | Runs that passed without a re-run ÷ (passed + failed). GitHub keeps one result per run and a re-run replaces it, so Pass rate shows only the last attempt; a run someone re-ran counts here as not passing the first time. The gap between the two is the failures re-runs hid. |
 | Runs re-run | Runs someone re-ran on GitHub (Re-run jobs). A new run started by a new push or a `/test` comment is a run of its own, not a re-run. |

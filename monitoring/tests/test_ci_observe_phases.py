@@ -23,6 +23,78 @@ IN_SCOPE_WORKFLOWS = (
     "e2e-vmaas.yml",
 )
 
+# The steps of the osac mono-repo's Tests workflow (.github/workflows/tests.yml
+# of osac-project/osac), as GitHub names them in a run's job: every step of
+# the job is listed for every leg, and only the leg's own steps run. The
+# workflow lives outside this repository, so its steps are pinned here by
+# hand, the way the osac-ci steps below are; a new step in tests.yml needs
+# an entry here and a phase in _STEP_PHASE.
+TESTS_WORKFLOW_STEPS = {
+    "it-fulfillment-service": [
+        "Set up job",
+        "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "Run ./.github/actions/setup-go",
+        "Install Kind",
+        "Install Helm",
+        "Install infrastructure on Kind",
+        "Run integration tests",
+        "Collect diagnostic logs",
+        "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+        "Post Install Kind",
+        "Post Run ./.github/actions/setup-go",
+        "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "Complete job",
+    ],
+    "it-osac-operator": [
+        "Set up job",
+        "Checkout repository",
+        "Set up Go",
+        "Install Kind",
+        "Install Helm",
+        "Install ginkgo",
+        "Install infrastructure on Kind",
+        "Run integration tests",
+        "Collect diagnostic logs",
+        "Post Install Kind",
+        "Post Set up Go",
+        "Post Checkout repository",
+        "Complete job",
+    ],
+    "it-bare-metal-fulfillment-operator": [
+        "Set up job",
+        "Checkout repository",
+        "Set up Python",
+        "Set up Go",
+        "Install Kind",
+        "Install Helm",
+        "Install ginkgo",
+        "Install infrastructure on Kind",
+        "Test BMF NetBox Secret lookup",
+        "Run integration tests",
+        "Collect diagnostic logs",
+        "Post Install Kind",
+        "Post Set up Go",
+        "Post Set up Python",
+        "Post Checkout repository",
+        "Complete job",
+    ],
+    "it-caas": [
+        "Set up job",
+        "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "Run ./.github/actions/setup-go",
+        "Install Helm",
+        "Install Kind",
+        "Prepare CaaS integration environment",
+        "Run CaaS integration tests",
+        "Collect CaaS diagnostics",
+        "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+        "Post Install Kind",
+        "Post Run ./.github/actions/setup-go",
+        "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "Complete job",
+    ],
+}
+
 
 @pytest.fixture(scope="module")
 def phases():
@@ -51,6 +123,15 @@ def test_every_step_of_the_in_scope_workflows_has_a_named_phase(phases):
         if phases.step_phase(step, job) == "other"
     ]
     assert not unnamed, "add these steps to ci_observe_phases._STEP_PHASE: " + ", ".join(unnamed)
+
+
+@pytest.mark.parametrize("kind", sorted(TESTS_WORKFLOW_STEPS))
+def test_every_step_of_the_tests_workflow_integration_legs_has_a_named_phase(phases, kind):
+    unnamed = [
+        step for step in TESTS_WORKFLOW_STEPS[kind]
+        if phases.step_phase(step, kind) == "other"
+    ]
+    assert not unnamed, f"add the {kind} steps to ci_observe_phases._STEP_PHASE: " + ", ".join(unnamed)
 
 
 @pytest.mark.parametrize(
@@ -93,22 +174,38 @@ def test_the_verify_job_of_a_pr_suite_is_ci_setup(phases):
 
 
 @pytest.mark.parametrize(
-    ("workflow", "suite", "trigger"),
+    ("event", "workflow", "suite", "trigger"),
     [
-        ("E2E suite · vmaas · #1620 · 0123abc", "vmaas", "pr"),
-        ("E2E VMaaS PR suite", "vmaas", "pr"),
-        ("E2E CaaS Full Install", "caas", "manual"),
-        ("E2E bmaas (merge queue)", "bmaas", "merge_queue"),
-        ("E2E VMaaS", "vmaas", "manual"),
-        ("E2E VMaaS Netris Full Install", "", "manual"),
-        ("E2E VMaaS Production Install", "", "manual"),
-        ("E2E CaaS Agentless-Net Full Install", "", "manual"),
-        ("E2E Full Regression", "", "manual"),
+        ("workflow_dispatch", "E2E suite · vmaas · #1620 · 0123abc", "vmaas", "pr"),
+        ("workflow_dispatch", "E2E VMaaS PR suite", "vmaas", "pr"),
+        ("workflow_dispatch", "E2E CaaS Full Install", "caas", "manual"),
+        ("merge_group", "E2E bmaas (merge queue)", "bmaas", "merge_queue"),
+        ("workflow_dispatch", "E2E VMaaS", "vmaas", "manual"),
+        ("workflow_dispatch", "E2E VMaaS Netris Full Install", "", "manual"),
+        ("workflow_dispatch", "E2E VMaaS Production Install", "", "manual"),
+        ("workflow_dispatch", "E2E CaaS Agentless-Net Full Install", "", "manual"),
+        ("workflow_dispatch", "E2E Full Regression", "", "manual"),
+        # The Tests workflow's integration suites: pull-request and push
+        # triggered, named per suite by the exporter. The workflow's own
+        # name is not a suite: its other legs stay out of scope.
+        ("pull_request", "IT fulfillment (Tests)", "it-fulfillment", "pr"),
+        ("pull_request", "IT operator (Tests)", "it-operator", "pr"),
+        ("pull_request", "IT BMF (Tests)", "it-bmf", "pr"),
+        ("pull_request", "IT CaaS (Tests)", "it-caas", "pr"),
+        ("push", "Tests", "", "push"),
     ],
 )
-def test_suite_and_trigger(phases, workflow, suite, trigger):
+def test_suite_and_trigger(phases, event, workflow, suite, trigger):
     assert phases.suite_key(workflow) == suite
-    assert phases.trigger_key("workflow_dispatch", workflow) == trigger
+    assert phases.trigger_key(event, workflow) == trigger
+
+
+def test_the_integration_suites_trigger_on_pushes_too(phases):
+    assert phases.trigger_key("push", "IT fulfillment (Tests)") == "push"
+    assert phases.suite_label("it-fulfillment") == "IT fulfillment"
+    assert phases.suite_label("it-bmf") == "IT BMF"
+    assert set(phases.IT_JOB_SUITES.values()) == {"it-fulfillment", "it-operator", "it-bmf", "it-caas"}
+    assert set(phases.IT_SUITE_WORKFLOWS) == set(phases.IT_JOB_SUITES.values())
 
 
 def test_event_triggers(phases):

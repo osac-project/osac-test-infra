@@ -1014,6 +1014,14 @@ class WorkflowExporter:
         "Deploy OSAC from snapshot (make deploy-osac)",
         "Run E2E tests",
         "Run CaaS e2e tests",
+        # The Tests workflow's integration legs (the four IT suites of
+        # ci_observe_phases): the installs on Kind, the CaaS environment
+        # make prepare builds, and the suites themselves.
+        "Install infrastructure on Kind",
+        "Prepare CaaS integration environment",
+        "Run integration tests",
+        "Run CaaS integration tests",
+        "Test BMF NetBox Secret lookup",
     })
 
     # The one step, shared verbatim by both phases of the AI diagnostic
@@ -1163,6 +1171,16 @@ class WorkflowExporter:
         return ""
 
     @staticmethod
+    def _refine_run_record(record, jobs, active=False):
+        """Refine a run record from its jobs, wherever they are known: the
+        pull-request flow's job marks (see _refine_pipeline_category), then
+        the Tests workflow's leg-to-suite naming (see
+        _refine_integration_suite). Both read the jobs before the record's
+        steps and failure classification are built."""
+        WorkflowExporter._refine_pipeline_category(record, jobs, active=active)
+        WorkflowExporter._refine_integration_suite(record, jobs)
+
+    @staticmethod
     def _refine_pipeline_category(record, jobs, active=False):
         """Mark the jobs of a pull-request-flow run: orchestration jobs as
         plumbing, suite jobs as stored elsewhere (see _suite_records). The run's
@@ -1177,6 +1195,37 @@ class WorkflowExporter:
                 j["pipeline_plumbing"] = True
             elif WorkflowExporter._is_suite_job(j):
                 j["pipeline_suite"] = True
+
+    @staticmethod
+    def _refine_integration_suite(record, jobs):
+        """Name a run of the osac mono-repo's Tests workflow after the
+        integration suite its one job ran, and make it an e2e row.
+
+        A Tests run is one leg of the mono-repo's unit and integration matrix,
+        and the leg is the run's single job, named after its kind
+        ("it-fulfillment-service", ...; a called run may prefix the caller's
+        job name, so the last " / " part is the leg). The four in-scope kinds
+        become suite runs under their suite's workflow name
+        (ci_observe_phases.IT_SUITE_WORKFLOWS), category "e2e", so every
+        ci-observe reader maps them like any other suite run and the run
+        index, the archive and the rollups count them. Every other leg (unit
+        tests, contract checks, the installer, preflight and AAP suites) is
+        out of scope: the row keeps the workflow's own name and category.
+        Called wherever _refine_pipeline_category is, before the failure
+        classification, which reads the category. No-op for any other
+        workflow."""
+        if (record.get("workflow") or "").strip().lower() != ci_observe_phases.IT_WORKFLOW.lower():
+            return
+        for job in jobs or []:
+            leg = (job.get("name") or "").strip().rsplit(" / ", 1)[-1].lower()
+            suite = ci_observe_phases.IT_JOB_SUITES.get(leg)
+            if not suite:
+                continue
+            workflow = ci_observe_phases.IT_SUITE_WORKFLOWS[suite]
+            record["workflow"] = workflow
+            record["display_name"] = f"{record.get('repo') or ''} / {workflow}"
+            record["category"] = "e2e"
+            return
 
     SUITE_ROW_KIND: ClassVar[dict[str, str]] = {
         "E2E for pull requests": "pull requests",
@@ -1940,8 +1989,12 @@ class WorkflowExporter:
 
     def _upsert_job(self, record):
         """Insert a job record, or overwrite it if a row with the same id
-        already exists but with an older run_attempt, or with the same
-        attempt and another, non-empty conclusion.
+        already exists but with an older run_attempt, with the same attempt
+        and another, non-empty conclusion, or with the Tests workflow's own
+        name where the new row names the integration suite its leg ran (see
+        _refine_integration_suite: the leg is only readable from the jobs,
+        so a row stored before that refinement ran is re-examined and then
+        overwritten with the suite's name).
 
         A GitHub run keeps the same id across re-runs (e.g. "re-run failed
         jobs") -- only run_attempt increments and the run's own
@@ -1975,8 +2028,10 @@ class WorkflowExporter:
                 f"ON CONFLICT(id) DO UPDATE SET {update_clause} "
                 f"WHERE excluded.run_attempt > jobs.run_attempt "
                 f"OR (excluded.run_attempt = jobs.run_attempt AND COALESCE(excluded.conclusion, '') != '' "
-                f"AND COALESCE(excluded.conclusion, '') != COALESCE(jobs.conclusion, ''))",
-                row,
+                f"AND COALESCE(excluded.conclusion, '') != COALESCE(jobs.conclusion, '')) "
+                f"OR (LOWER(COALESCE(jobs.workflow, '')) = :tests_name "
+                f"AND LOWER(COALESCE(excluded.workflow, '')) != :tests_name)",
+                {**row, "tests_name": ci_observe_phases.IT_WORKFLOW.lower()},
             )
             return cur.rowcount > 0
 
@@ -2908,7 +2963,7 @@ class WorkflowExporter:
                         jobs = self._fetch_run_jobs(repo, run["id"])
                         if jobs:
                             record["runner_name"] = self._extract_runner_names(jobs)
-                            self._refine_pipeline_category(record, jobs, active=True)
+                            self._refine_run_record(record, jobs, active=True)
                             suites = self._suite_records(record, jobs, active=True)
                         elif jobs is None and record["workflow"] in WorkflowExporter.PIPELINE_WORKFLOW_NAMES:
                             # The category of a pull-request-flow run comes from
@@ -3126,12 +3181,20 @@ class WorkflowExporter:
         _upsert_job). False means the stored row is already as current as
         this run, so the caller can skip the extra _fetch_run_jobs API call
         entirely.
+
+        A row still stored under the Tests workflow's own name is re-fetched
+        whatever its attempt says: its integration leg (and with it the
+        suite _refine_integration_suite names) is only readable from its
+        jobs, so a row stored before that refinement ran is re-examined
+        until it carries a suite's name or proves to be an out-of-scope leg.
         """
         with self._db() as conn:
             row = conn.execute(
-                "SELECT run_attempt, conclusion FROM jobs WHERE id = ?", (run["id"],)
+                "SELECT run_attempt, conclusion, workflow FROM jobs WHERE id = ?", (run["id"],)
             ).fetchone()
         if row is None:
+            return True
+        if (row["workflow"] or "").strip().lower() == ci_observe_phases.IT_WORKFLOW.lower():
             return True
         attempt = run.get("run_attempt", 1)
         if attempt != row[0]:
@@ -3197,7 +3260,7 @@ class WorkflowExporter:
                         run_id, repo,
                     )
                     continue
-                self._refine_pipeline_category(record, jobs)
+                self._refine_run_record(record, jobs)
                 if jobs:
                     record["runner_name"] = self._extract_runner_names(jobs)
                     record["steps"] = self._extract_step_durations(jobs)
@@ -3287,7 +3350,7 @@ class WorkflowExporter:
                     run_id, repo,
                 )
                 continue
-            self._refine_pipeline_category(record, jobs)
+            self._refine_run_record(record, jobs)
             if jobs:
                 record["runner_name"] = self._extract_runner_names(jobs)
                 record["steps"] = self._extract_step_durations(jobs)
@@ -3717,7 +3780,7 @@ class WorkflowExporter:
                             run_id, repo,
                         )
                         continue
-                    self._refine_pipeline_category(record, jobs)
+                    self._refine_run_record(record, jobs)
                     if jobs:
                         record["runner_name"] = self._extract_runner_names(jobs)
                         record["steps"] = self._extract_step_durations(jobs)
@@ -3730,7 +3793,8 @@ class WorkflowExporter:
                         # treats "no per-step detail at all" as infra,
                         # which is correct here too.
                         failed = self._extract_failed_steps(jobs or [])
-                        record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed, jobs)
+                        record["failure_reason"] = self._classify_failure_reason(
+                            record.get("category", ""), failed, jobs)
                         if failed:
                             record["failed_step"] = "; ".join(
                                 f["display"] for f in failed
@@ -3782,7 +3846,7 @@ class WorkflowExporter:
             )
             return None
         failed = []
-        self._refine_pipeline_category(record, jobs)
+        self._refine_run_record(record, jobs)
         if jobs:
             record["runner_name"] = self._extract_runner_names(jobs)
             record["steps"] = self._extract_step_durations(jobs)
@@ -5515,18 +5579,28 @@ class WorkflowExporter:
             "e2e stretched netris pr suite",
         ),
     }
+    # The four integration suites of the osac mono-repo's Tests workflow, as
+    # the exporter stores them (see _refine_integration_suite).
+    CI_OBSERVE_SUITE_WORKFLOWS.update({
+        suite: (name.lower(),) for suite, name in ci_observe_phases.IT_SUITE_WORKFLOWS.items()
+    })
 
     # The osac-ci dispatcher names a PR suite run "E2E suite · <suite> ·
     # #<pr> · <sha>", and the Netris callers append " / PR #<n> @ <sha>" to
     # their run name. The PR number and SHA vary, so these are prefixes of
     # one suite's naming scheme, not a substring match on the whole name.
-    # "core" is the standard VMaaS, CaaS and BMaaS suites together: the
-    # population every other ci-observe page reads (ci_observe_phases). The
-    # agentless-net CaaS variant runs on other infrastructure and is not one.
+    # "core" is the ci-observe population together: the three E2E suites and
+    # the four integration suites every other ci-observe page reads
+    # (ci_observe_phases). The agentless-net CaaS variant runs on other
+    # infrastructure and is not one.
     CI_OBSERVE_SUITE_WORKFLOWS["core"] = (
         CI_OBSERVE_SUITE_WORKFLOWS["vmaas"]
         + tuple(filter(lambda name: "agentless" not in name, CI_OBSERVE_SUITE_WORKFLOWS["caas"]))
         + CI_OBSERVE_SUITE_WORKFLOWS["bmaas"]
+        + CI_OBSERVE_SUITE_WORKFLOWS["it-fulfillment"]
+        + CI_OBSERVE_SUITE_WORKFLOWS["it-operator"]
+        + CI_OBSERVE_SUITE_WORKFLOWS["it-bmf"]
+        + CI_OBSERVE_SUITE_WORKFLOWS["it-caas"]
     )
 
     CI_OBSERVE_SUITE_PREFIXES: ClassVar[dict[str, tuple[str, ...]]] = {

@@ -309,7 +309,7 @@ def test_the_suite_rows_link_to_their_pages_with_the_filters(stores):
 
     rows = {row["suite"]: row for row in get(stores.api(), "health", days=14, repo="osac")["suites"]}
 
-    assert set(rows) == {"vmaas", "caas", "bmaas", "all"}
+    assert set(rows) == {*phases.SUITES, "all"}
     assert rows["caas"]["time_url"].startswith(phases.TIME_PAGE)
     assert "var-suite=caas" in rows["caas"]["time_url"]
     assert "var-days=14" in rows["caas"]["failures_url"]
@@ -959,7 +959,8 @@ def test_every_seeded_document_adds_up(seeded, days):
     assert one["summary"][0]["runs"] == len(one["runs"])
     assert one["breakdown"] and one["waits"]
     time_document = get(seeded, "time", days=days)
-    assert {row["category"] for row in time_document["phases"]} == {"VMaaS", "CaaS", "BMaaS", "All suites"}
+    assert {row["category"] for row in time_document["phases"]} == {
+        "VMaaS", "CaaS", "BMaaS", "IT fulfillment", "IT operator", "IT BMF", "IT CaaS", "All suites"}
 
 
 def test_the_seeded_test_that_gets_slower_says_so(seeded):

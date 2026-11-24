@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Recent E2E runs.",
+  "description": "Recent ci-observe suite runs.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -72,7 +72,7 @@
     {
       "type": "text",
       "id": 1,
-      "title": "E2E runs",
+      "title": "Suite runs",
       "description": "",
       "gridPos": {
         "h": 2,
@@ -93,7 +93,7 @@
     {
       "type": "table",
       "id": 12,
-      "title": "Recent E2E runs, last $days days",
+      "title": "Recent suite runs, last $days days",
       "description": "One row per E2E run. No under Recorded means no test data. Failed step names the exact step the run stopped in, and the column filter narrows by it.",
       "gridPos": {
         "h": 22,
@@ -933,7 +933,7 @@
         "label": "Suite",
         "type": "custom",
         "hide": 0,
-        "query": "All suites : core,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas",
+        "query": "All suites : core,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas,IT fulfillment : it-fulfillment,IT operator : it-operator,IT BMF : it-bmf,IT CaaS : it-caas",
         "options": [
           {
             "text": "All suites",
@@ -954,6 +954,26 @@
             "text": "BMaaS",
             "value": "bmaas",
             "selected": false
+          },
+          {
+            "text": "IT fulfillment",
+            "value": "it-fulfillment",
+            "selected": false
+          },
+          {
+            "text": "IT operator",
+            "value": "it-operator",
+            "selected": false
+          },
+          {
+            "text": "IT BMF",
+            "value": "it-bmf",
+            "selected": false
+          },
+          {
+            "text": "IT CaaS",
+            "value": "it-caas",
+            "selected": false
           }
         ],
         "current": {
@@ -964,7 +984,7 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0,
-        "description": "The VMaaS, CaaS and BMaaS E2E suites."
+        "description": "The VMaaS, CaaS and BMaaS E2E suites and the IT fulfillment, IT operator, IT BMF and IT CaaS integration suites."
       },
       {
         "name": "result",

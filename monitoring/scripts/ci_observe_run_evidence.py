@@ -62,16 +62,24 @@ JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "30"))
 # source run id, so a name lookup finds them regardless of trigger. An
 # artifact therefore lives in exactly one of two known places and the
 # reader checks both: the place the run's trigger says first, then the
-# other one.
+# other one. A push-triggered run (the Tests workflow's integration suites)
+# keeps its bundle on its own run, like a pull-request one: only the e2e
+# callers publish to the private repository.
 PRIVATE_ARTIFACT_REPO = os.getenv("PRIVATE_ARTIFACT_REPO", "osac-ci-artifacts")
-ON_THE_RUN = frozenset({"pr", "merge_queue"})
+ON_THE_RUN = frozenset({"pr", "merge_queue", "push"})
 IN_THE_PRIVATE_REPO = frozenset({"scheduled", "manual"})
 # The artifact each suite's full-install job uploads. VMaaS's name has no
 # suite in it. A merge-queue run holds all three, each with its own capture.
+# The integration suites of the Tests workflow upload one bundle per run
+# named osac-logs-it-<suite>-<run id>.
 SUITE_ARTIFACTS = {
     "vmaas": "osac-logs-full-install-{run_id}",
     "caas": "osac-logs-caas-full-install-{run_id}",
     "bmaas": "osac-logs-bmaas-full-install-{run_id}",
+    "it-fulfillment": "osac-logs-it-fulfillment-{run_id}",
+    "it-operator": "osac-logs-it-operator-{run_id}",
+    "it-bmf": "osac-logs-it-bmf-{run_id}",
+    "it-caas": "osac-logs-it-caas-{run_id}",
 }
 TOKEN_FIX = (
     "PRIVATE_GITHUB_TOKEN needs read access to the Actions artifacts of {org}/{repo}: "
@@ -168,9 +176,9 @@ class GitHubBudget:
 
 def artifact_place(trigger, repo, run_id, org=ORG, private=None):
     """(listing path, label, private) of one place a run's artifact can be:
-    its own run for a pull-request or merge-queue run, the private artifact
-    repository for a scheduled or manual one. `private` explicitly selects
-    the place for the second lookup (see find_artifacts). Raises
+    its own run for a pull-request, merge-queue or push run, the private
+    artifact repository for a scheduled or manual one. `private` explicitly
+    selects the place for the second lookup (see find_artifacts). Raises
     EvidenceError for any other trigger."""
     if private is True or (private is None and trigger in IN_THE_PRIVATE_REPO):
         return f"/repos/{org}/{PRIVATE_ARTIFACT_REPO}/actions/artifacts", f"{org}/{PRIVATE_ARTIFACT_REPO}", True
@@ -178,7 +186,7 @@ def artifact_place(trigger, repo, run_id, org=ORG, private=None):
         return (f"/repos/{org}/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
                 f"run {run_id} of {org}/{repo}", False)
     raise EvidenceError(
-        f"run {run_id} is a {trigger or 'unknown'}-triggered run, and only pull-request and merge-queue runs "
+        f"run {run_id} is a {trigger or 'unknown'}-triggered run, and only pull-request, merge-queue and push runs "
         f"(artifact on the run) and scheduled and manual runs (artifact in {org}/{PRIVATE_ARTIFACT_REPO}) "
         "have a known artifact place"
     )
@@ -332,7 +340,8 @@ class CIObserveRunEvidence:
     )
     # The capture ids /api/ci-observe/failed-tests reads: the suite names the
     # artifact. A legacy or bare id names none.
-    SUITE_CAPTURE_ID_RE = re.compile(r"^(vmaas|caas|bmaas)-(?:pr\d+|main)-(\d+)-a(\d+)$")
+    SUITE_CAPTURE_ID_RE = re.compile(
+        r"^(vmaas|caas|bmaas|it-fulfillment|it-operator|it-bmf|it-caas)-(?:pr\d+|main)-(\d+)-a(\d+)$")
 
     def __init__(self, exporter):
         self.exporter = exporter
@@ -882,8 +891,8 @@ class CIObserveRunEvidence:
         match = CIObserveRunEvidence.SUITE_CAPTURE_ID_RE.match(capture_id)
         if match is None:
             raise EvidenceError(
-                f"capture id {capture_id!r} is not <vmaas|caas|bmaas>-<prN|main>-<run id>-a<attempt>, "
-                "so it names no suite artifact"
+                f"capture id {capture_id!r} is not <vmaas|caas|bmaas|it-fulfillment|it-operator|it-bmf|it-caas>-"
+                "<prN|main>-<run id>-a<attempt>, so it names no suite artifact"
             )
         suite, run_id, run_attempt = match.group(1), int(match.group(2)), int(match.group(3))
         key = ("failed_tests", run_id, run_attempt, suite)

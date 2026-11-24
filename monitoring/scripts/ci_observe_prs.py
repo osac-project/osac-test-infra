@@ -445,9 +445,15 @@ TEST_STEP_NAMES = frozenset({
 
 
 # A short suite name for the E2E runs table. The stored workflow name is
-# either "E2E <suite> (<kind>)" for the pull-request flow or the full-install
-# workflow's own name; both contain the suite word.
+# either "E2E <suite> (<kind>)" for the pull-request flow, the full-install
+# workflow's own name, or "IT <suite> (Tests)" for the Tests workflow's
+# integration legs. The it-* keys come first: "IT CaaS (Tests)" also
+# contains the "caas" of the E2E suite, and the specific key must win.
 SUITE_LABELS = (
+    ("it fulfillment", "IT fulfillment"),
+    ("it operator", "IT operator"),
+    ("it bmf", "IT BMF"),
+    ("it caas", "IT CaaS"),
     ("vmaas", "VMaaS"),
     ("caas", "CaaS"),
     ("bmaas", "BMaaS"),
@@ -465,7 +471,8 @@ def _suite_label(workflow):
 
 
 def _suite_key(workflow):
-    """The short suite key a capture id carries: vmaas, caas, bmaas."""
+    """The short suite key a capture id carries: vmaas, caas, bmaas and the
+    four it-* integration suites."""
     text = (workflow or "").lower()
     for key, _ in SUITE_LABELS:
         if key in text:
@@ -2443,7 +2450,8 @@ class CIObservePRs:
         return None
 
     def _e2e_stats(self, repo, number, opened_at=None):
-        """The pull request's VMaaS, CaaS and BMaaS E2E history from the
+        """The pull request's ci-observe suite-run history (the three E2E
+        suites and the four integration suites) from the
         exporter's job history and the 90-day run archive in trends.db: runs
         (every suite run, pull request and merge queue), failures, retests
         (runs beyond the first of each suite) and versions (the distinct
@@ -2479,9 +2487,10 @@ class CIObservePRs:
                         " AND COALESCE(LOWER(failure_reason), '') != 'gate'",
                         [repo, *args],
                     ):
-                        # The VMaaS, CaaS and BMaaS suites only: the archive
-                        # keeps nothing else, so the 30 days of jobs must not
-                        # add Netris or stretched runs to the count.
+                        # The ci-observe suites only (ci_observe_phases):
+                        # the archive keeps nothing else, so the 30 days of
+                        # jobs must not add Netris or stretched runs to the
+                        # count.
                         if phases.suite_key(row[1]):
                             rows.setdefault(row[0], row[1:])
                     read = True

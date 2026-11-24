@@ -85,9 +85,11 @@ def test_the_filters_are_window_suite_trigger_and_repository(name):
     assert set(variables) == expected
     assert [option["value"] for option in variables["days"]["options"]] == ["7", "14", "30", "90"]
     assert variables["days"]["current"]["value"] == ("30" if name == "ci-observe-test.json" else "7")
-    assert [option["value"] for option in variables["suite"]["options"]] == ["all", "vmaas", "caas", "bmaas"]
+    assert [option["value"] for option in variables["suite"]["options"]] == [
+        "all", "vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas",
+    ]
     assert [option["value"] for option in variables["trigger"]["options"]] == [
-        "all", "pr", "merge_queue", "scheduled", "manual",
+        "all", "pr", "merge_queue", "scheduled", "manual", "push",
     ]
     assert [option["value"] for option in variables["repo"]["options"]] == ["all", "osac", "osac-test-infra"]
     for variable in variables.values():

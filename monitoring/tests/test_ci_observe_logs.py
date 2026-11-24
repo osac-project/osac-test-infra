@@ -163,6 +163,67 @@ def test_oversized_files_and_lines_are_skipped_and_counted():
     assert [value[1] for values in streams.values() for value in values] == ["error: short"]
 
 
+# The gatherer boilerplate the signature index must not score as a failure
+# discriminator (the INC-2026-11-install follow-up): the oc logs --previous
+# refusal on a pod that never restarted, and the tolerations every oc
+# describe pod prints.
+GATHERER_LOG = "\n".join([
+    'Error from server (BadRequest): previous terminated container "controller-manager"'
+    ' in pod "osac-controller-7d9f8b6c5-x2k4p" not found',
+    "Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s",
+    "                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s",
+    "Tolerations:",
+])
+
+
+def test_the_gatherers_own_boilerplate_is_not_an_error_line_or_a_signature():
+    """Only failed runs are gathered fully, so the gatherer's own output
+    scores 100 percent of failed and 0 percent of passing runs and used to
+    outrank every real cause. It is filtered at index time and counted."""
+    archive = bundle({"pods/osac-controller/describe.txt": GATHERER_LOG,
+                      "aap-jobs/install.log": INSTALL_LOG})
+    streams, signatures, counts = logs.read_bundle(archive, run(), NOW)
+    assert counts["gatherer_lines"] == 4
+    assert counts["error_lines"] == 1, "only the real error line counts"
+    pushed = [value[1] for values in streams.values() for value in values]
+    assert pushed == [INSTALL_LOG.splitlines()[0]], "the boilerplate is not pushed to Loki"
+    assert len(signatures) == 1, "the boilerplate leaves no signature"
+    assert "cert-manager cannot get lease" in next(iter(signatures))[0]
+
+
+@pytest.mark.parametrize("line", [
+    'Error from server (BadRequest): previous terminated container "x" in pod "y" not found',
+    "node.kubernetes.io/unreachable:NoExecute op=Exists for 300s",
+    "node.kubernetes.io/not-ready:NoExecute op=Exists for 300s",
+    "Tolerations:",
+    "Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s",
+])
+def test_one_gatherer_line_shape_at_a_time(line):
+    assert logs.is_gatherer_line(line)
+
+
+@pytest.mark.parametrize("line", [
+    "error: a real failure",
+    "E1120 10:06:00.000000 1 leader.go:42] error retrieving lock kube-system/cert-manager: forbidden",
+    "node.kubernetes.io/unreachable:NoSchedule",  # a taint, not the toleration boilerplate
+    "Tolerations of the pod were checked",
+])
+def test_a_real_error_line_is_not_mistaken_for_boilerplate(line):
+    assert not logs.is_gatherer_line(line)
+
+
+def test_the_pass_summary_says_how_many_gatherer_lines_were_filtered(world):
+    """The count is surfaced, never dropped silently: the pass record and
+    the per-run row both carry it."""
+    world.run(1, "601", "failure")
+    world.bundles = {"601": {"pods/describe.txt": GATHERER_LOG, "aap-jobs/install.log": INSTALL_LOG}}
+    assert logs.main(["--days", "30"]) == 0
+    assert "4 gatherer boilerplate line(s) filtered" in world.passes()["logs"]
+    state = world.state()[("601", "vmaas")]
+    assert state["gatherer_lines"] == 4
+    assert state["error_lines"] == 1, "only the real error line counts"
+
+
 class Response:
     def __init__(self, status, text=""):
         self.status_code = status

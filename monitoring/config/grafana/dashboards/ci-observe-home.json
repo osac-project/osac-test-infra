@@ -1,7 +1,7 @@
 {
   "uid": "ci-observe-home",
   "title": "CI Observe — Overview",
-  "description": "E2E CI health at a glance for the VMaaS, CaaS and BMaaS suites.",
+  "description": "CI health at a glance for the VMaaS, CaaS and BMaaS E2E suites and the four integration suites.",
   "tags": [
     "osac",
     "ci",
@@ -127,7 +127,7 @@
         "label": "Suite",
         "type": "custom",
         "hide": 0,
-        "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas",
+        "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas,IT fulfillment : it-fulfillment,IT operator : it-operator,IT BMF : it-bmf,IT CaaS : it-caas",
         "options": [
           {
             "text": "All suites",
@@ -148,6 +148,26 @@
             "text": "BMaaS",
             "value": "bmaas",
             "selected": false
+          },
+          {
+            "text": "IT fulfillment",
+            "value": "it-fulfillment",
+            "selected": false
+          },
+          {
+            "text": "IT operator",
+            "value": "it-operator",
+            "selected": false
+          },
+          {
+            "text": "IT BMF",
+            "value": "it-bmf",
+            "selected": false
+          },
+          {
+            "text": "IT CaaS",
+            "value": "it-caas",
+            "selected": false
           }
         ],
         "current": {
@@ -158,14 +178,14 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0,
-        "description": "The VMaaS, CaaS and BMaaS E2E suites."
+        "description": "The VMaaS, CaaS and BMaaS E2E suites and the IT fulfillment, IT operator, IT BMF and IT CaaS integration suites."
       },
       {
         "name": "trigger",
         "label": "Started by",
         "type": "custom",
         "hide": 0,
-        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual",
+        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual,Pushes : push",
         "options": [
           {
             "text": "Any trigger",
@@ -191,6 +211,11 @@
             "text": "Manual",
             "value": "manual",
             "selected": false
+          },
+          {
+            "text": "Pushes",
+            "value": "push",
+            "selected": false
           }
         ],
         "current": {
@@ -201,7 +226,7 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0,
-        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, or manual runs."
+        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, manual runs, or pushes to a branch (the integration suites)."
       },
       {
         "name": "repo",
@@ -262,7 +287,7 @@
       "type": "stat",
       "id": 2,
       "title": "Pass rate",
-      "description": "Passed runs ÷ (passed + failed). Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above). Unit: percent.",
+      "description": "Passed runs ÷ (passed + failed). Population: passed and failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 0,
         "y": 2,
@@ -370,7 +395,7 @@
       "type": "stat",
       "id": 34,
       "title": "First-try pass rate",
-      "description": "Runs that passed without a re-run ÷ (passed + failed). A run someone re-ran on GitHub counts as not passing the first time, even when the re-run passed. Pass rate counts only a run's last attempt, so the gap between the two tiles is failures that a re-run hid. Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above). Unit: percent.",
+      "description": "Runs that passed without a re-run ÷ (passed + failed). A run someone re-ran on GitHub counts as not passing the first time, even when the re-run passed. Pass rate counts only a run's last attempt, so the gap between the two tiles is failures that a re-run hid. Population: passed and failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 3,
         "y": 2,
@@ -478,7 +503,7 @@
       "type": "stat",
       "id": 3,
       "title": "Pass rate change",
-      "description": "This window's pass rate minus the previous window's, in percentage points. Green: better. Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: percent.",
+      "description": "This window's pass rate minus the previous window's, in percentage points. Green: better. Population: passed and failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: percent.",
       "gridPos": {
         "x": 6,
         "y": 2,
@@ -586,7 +611,7 @@
       "type": "stat",
       "id": 35,
       "title": "Runs re-run",
-      "description": "Runs someone re-ran on GitHub (Re-run jobs). Pass rate shows only their last attempt, so a failure before the re-run is not in it. Population: finished VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "description": "Runs someone re-ran on GitHub (Re-run jobs). Pass rate shows only their last attempt, so a failure before the re-run is not in it. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: count of runs.",
       "gridPos": {
         "x": 9,
         "y": 2,
@@ -686,7 +711,7 @@
       "type": "stat",
       "id": 4,
       "title": "Typical time to result",
-      "description": "Median time from GitHub creating a run's first job to its last job finishing: what a developer waits for a green result, the wait for a runner included. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "description": "Median time from GitHub creating a run's first job to its last job finishing: what a developer waits for a green result, the wait for a runner included. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 12,
         "y": 2,
@@ -786,7 +811,7 @@
       "type": "stat",
       "id": 5,
       "title": "Slow runs take",
-      "description": "The 90th percentile: 9 in 10 passing runs finish faster than this. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "description": "The 90th percentile: 9 in 10 passing runs finish faster than this. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 15,
         "y": 2,
@@ -994,7 +1019,7 @@
       "type": "stat",
       "id": 7,
       "title": "Failures caused by CI",
-      "description": "Share of the failed runs whose first failed step was CI infrastructure (cluster or hosts, CI setup, logs or teardown, a timeout, a lost runner), not the tests, the build or the OSAC install. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: percent.",
+      "description": "Share of the failed runs whose first failed step was CI infrastructure (cluster or hosts, CI setup, logs or teardown, a timeout, a lost runner), not the tests, the build or the OSAC install. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 21,
         "y": 2,
@@ -1108,7 +1133,7 @@
       "type": "stat",
       "id": 8,
       "title": "Runs",
-      "description": "Runs that finished. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "description": "Runs that finished. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
       "gridPos": {
         "x": 0,
         "y": 6,
@@ -1208,7 +1233,7 @@
       "type": "stat",
       "id": 9,
       "title": "Failed runs",
-      "description": "Runs GitHub marked failed or timed out. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "description": "Runs GitHub marked failed or timed out. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
       "gridPos": {
         "x": 4,
         "y": 6,
@@ -1318,7 +1343,7 @@
       "type": "stat",
       "id": 10,
       "title": "Runner hours",
-      "description": "Wall-clock hours of every finished run. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: hours.",
+      "description": "Wall-clock hours of every finished run. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: hours.",
       "gridPos": {
         "x": 8,
         "y": 6,
@@ -1424,7 +1449,7 @@
       "type": "stat",
       "id": 11,
       "title": "Runner hours on failed runs",
-      "description": "Share of the runner hours spent on runs that failed. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: percent of hours.",
+      "description": "Share of the runner hours spent on runs that failed. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: percent of hours.",
       "gridPos": {
         "x": 12,
         "y": 6,
@@ -1756,7 +1781,7 @@
       "type": "table",
       "id": 14,
       "title": "Suite health",
-      "description": "One row per suite and one for all three. 'Time' and 'Failures' open that suite's pages. First try: share that passed without a re-run. Re-runs: runs someone re-ran on GitHub. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs, percent and duration as named.",
+      "description": "One row per suite and one for all three. 'Time' and 'Failures' open that suite's pages. First try: share that passed without a re-run. Re-runs: runs someone re-ran on GitHub. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs, percent and duration as named.",
       "gridPos": {
         "x": 0,
         "y": 9,
@@ -2470,7 +2495,7 @@
       "type": "barchart",
       "id": 15,
       "title": "Where a passing run spends its time",
-      "description": "The average passing run of each suite, phase by phase: the wait for a runner, then each group of workflow steps (in every job of the run). Open 'Where the time goes' for the steps. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "description": "The average passing run of each suite, phase by phase: the wait for a runner, then each group of workflow steps (in every job of the run). Open 'Where the time goes' for the steps. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 0,
         "y": 14,
@@ -2743,7 +2768,7 @@
       "type": "barchart",
       "id": 16,
       "title": "Why runs failed",
-      "description": "Failed runs of each suite by the phase of their first failed step. Tests: a test failed. Build and OSAC install: the code under test did not build or install. CI infrastructure: the cluster, the hosts, CI setup, teardown, a timeout or a lost runner. Blocked: an unapproved fork or refused inputs. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "description": "Failed runs of each suite by the phase of their first failed step. Tests: a test failed. Build and OSAC install: the code under test did not build or install. CI infrastructure: the cluster, the hosts, CI setup, teardown, a timeout or a lost runner. Blocked: an unapproved fork or refused inputs. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
       "gridPos": {
         "x": 12,
         "y": 14,
@@ -2944,7 +2969,7 @@
       "type": "timeseries",
       "id": 17,
       "title": "Pass rate per day",
-      "description": "Passed ÷ (passed + failed) per day, per suite and for all three; the dashed line is the first-try pass rate of all three (a run that needed a re-run counts as not passing). Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: one point per UTC day the runs were created, last $days days. Unit: percent.",
+      "description": "Passed ÷ (passed + failed) per day, per suite and for all of them; the dashed line is the first-try pass rate of all of them (a run that needed a re-run counts as not passing). Population: passed and failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs; cancelled runs are left out. Time: one point per UTC day the runs were created, last $days days. Unit: percent.",
       "gridPos": {
         "x": 0,
         "y": 22,
@@ -3092,6 +3117,82 @@
                 }
               }
             ]
+          },
+{
+            "matcher": {
+              "id": "byName",
+              "options": "it-fulfillment_pass_rate"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IT fulfillment"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+{
+            "matcher": {
+              "id": "byName",
+              "options": "it-operator_pass_rate"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IT operator"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d55181"
+                }
+              }
+            ]
+          },
+{
+            "matcher": {
+              "id": "byName",
+              "options": "it-bmf_pass_rate"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IT BMF"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          },
+{
+            "matcher": {
+              "id": "byName",
+              "options": "it-caas_pass_rate"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IT CaaS"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
           }
         ]
       },
@@ -3153,6 +3254,26 @@
               "selector": "bmaas_pass_rate",
               "text": "bmaas_pass_rate",
               "type": "number"
+            },
+{
+              "selector": "it-fulfillment_pass_rate",
+              "text": "it-fulfillment_pass_rate",
+              "type": "number"
+            },
+{
+              "selector": "it-operator_pass_rate",
+              "text": "it-operator_pass_rate",
+              "type": "number"
+            },
+{
+              "selector": "it-bmf_pass_rate",
+              "text": "it-bmf_pass_rate",
+              "type": "number"
+            },
+{
+              "selector": "it-caas_pass_rate",
+              "text": "it-caas_pass_rate",
+              "type": "number"
             }
           ]
         }
@@ -3162,7 +3283,7 @@
       "type": "timeseries",
       "id": 18,
       "title": "Typical time to result per day",
-      "description": "Median time to a green result per day, per suite and for all three, the wait for a runner included. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: one point per UTC day the runs were created, last $days days. Unit: duration.",
+      "description": "Median time to a green result per day, per suite and for all of them, the wait for a runner included. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: one point per UTC day the runs were created, last $days days. Unit: duration.",
       "gridPos": {
         "x": 12,
         "y": 22,
@@ -3276,6 +3397,82 @@
                 }
               }
             ]
+          },
+{
+            "matcher": {
+              "id": "byName",
+              "options": "it-fulfillment_median_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IT fulfillment"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+{
+            "matcher": {
+              "id": "byName",
+              "options": "it-operator_median_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IT operator"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d55181"
+                }
+              }
+            ]
+          },
+{
+            "matcher": {
+              "id": "byName",
+              "options": "it-bmf_median_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IT BMF"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          },
+{
+            "matcher": {
+              "id": "byName",
+              "options": "it-caas_median_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IT CaaS"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
           }
         ]
       },
@@ -3331,6 +3528,26 @@
             {
               "selector": "bmaas_median_s",
               "text": "bmaas_median_s",
+              "type": "number"
+            },
+{
+              "selector": "it-fulfillment_median_s",
+              "text": "it-fulfillment_median_s",
+              "type": "number"
+            },
+{
+              "selector": "it-operator_median_s",
+              "text": "it-operator_median_s",
+              "type": "number"
+            },
+{
+              "selector": "it-bmf_median_s",
+              "text": "it-bmf_median_s",
+              "type": "number"
+            },
+{
+              "selector": "it-caas_median_s",
+              "text": "it-caas_median_s",
               "type": "number"
             }
           ]
@@ -4268,7 +4485,7 @@
       "type": "table",
       "id": 23,
       "title": "Latest failed runs",
-      "description": "The newest failed runs: their cause and the step they stopped in. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: time and duration as named.",
+      "description": "The newest failed runs: their cause and the step they stopped in. Population: failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: time and duration as named.",
       "gridPos": {
         "x": 0,
         "y": 47,

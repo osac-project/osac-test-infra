@@ -515,7 +515,8 @@ class TestFailedTestsErrors:
         f"run-{RUN_ID}-attempt-1", str(RUN_ID), f"netris-main-{RUN_ID}-a1", "garbage", "",
     ])
     def test_a_capture_id_that_names_no_suite(self, evidence, capture_id):
-        assert "is not <vmaas|caas|bmaas>-<prN|main>-<run id>-a<attempt>" in refused(evidence, capture_id)
+        assert ("is not <vmaas|caas|bmaas|it-fulfillment|it-operator|it-bmf|it-caas>-"
+                "<prN|main>-<run id>-a<attempt>" in refused(evidence, capture_id))
 
     def test_an_indexed_run_without_junit_answers_with_its_error_lines(self, evidence, github, monkeypatch):
         """A run that failed before its tests has no junit to read, and the
@@ -678,10 +679,30 @@ class TestFailedTestsErrors:
         assert not [call for call in github.calls if call.endswith("/zip")]
 
     def test_a_trigger_with_no_artifact_place(self, evidence, github):
-        seed_direct_run(evidence, event="push")
+        seed_direct_run(evidence, event="workflow_run")
 
-        assert "only pull-request and merge-queue runs" in refused(evidence)
+        assert "only pull-request, merge-queue and push runs" in refused(evidence)
         assert not [call for call in github.calls if "/artifacts" in call]
+
+    def test_a_push_run_is_read_on_the_run(self, evidence, github, wfe):
+        """The Tests workflow's integration suites are push triggered; their
+        osac-logs-it-<suite>-<run id> bundle is on the run, like a
+        pull-request run's."""
+        evidence._upsert_job(run_row(workflow="IT fulfillment (Tests)", event="push",
+                                     failed_step="it-fulfillment-service → Run integration tests"))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": [
+            artifact_entry(wfe.API_URL, name=f"osac-logs-it-fulfillment-{RUN_ID}")]}))
+        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        doc = failed_tests(evidence, f"it-fulfillment-main-{RUN_ID}-a1")
+
+        assert doc["trigger"] == "push"
+        assert doc["artifact"] == {
+            "name": f"osac-logs-it-fulfillment-{RUN_ID}",
+            "place": f"run {RUN_ID} of osac-project/osac",
+            "url": f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}/artifacts/42",
+        }
+        assert not [call for call in github.calls if "osac-ci-artifacts" in call]
 
     def test_expired(self, evidence, github, wfe):
         seed_direct_run(evidence)

@@ -127,7 +127,7 @@
         "label": "Suite",
         "type": "custom",
         "hide": 0,
-        "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas",
+        "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas,IT fulfillment : it-fulfillment,IT operator : it-operator,IT BMF : it-bmf,IT CaaS : it-caas",
         "options": [
           {
             "text": "All suites",
@@ -148,6 +148,26 @@
             "text": "BMaaS",
             "value": "bmaas",
             "selected": false
+          },
+          {
+            "text": "IT fulfillment",
+            "value": "it-fulfillment",
+            "selected": false
+          },
+          {
+            "text": "IT operator",
+            "value": "it-operator",
+            "selected": false
+          },
+          {
+            "text": "IT BMF",
+            "value": "it-bmf",
+            "selected": false
+          },
+          {
+            "text": "IT CaaS",
+            "value": "it-caas",
+            "selected": false
           }
         ],
         "current": {
@@ -158,14 +178,14 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0,
-        "description": "The VMaaS, CaaS and BMaaS E2E suites."
+        "description": "The VMaaS, CaaS and BMaaS E2E suites and the IT fulfillment, IT operator, IT BMF and IT CaaS integration suites."
       },
       {
         "name": "trigger",
         "label": "Started by",
         "type": "custom",
         "hide": 0,
-        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual",
+        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual,Pushes : push",
         "options": [
           {
             "text": "Any trigger",
@@ -191,6 +211,11 @@
             "text": "Manual",
             "value": "manual",
             "selected": false
+          },
+          {
+            "text": "Pushes",
+            "value": "push",
+            "selected": false
           }
         ],
         "current": {
@@ -201,7 +226,7 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0,
-        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, or manual runs."
+        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, manual runs, or pushes to a branch (the integration suites)."
       },
       {
         "name": "repo",
@@ -262,7 +287,7 @@
       "type": "stat",
       "id": 2,
       "title": "Typical time to result",
-      "description": "Median, from the first job's creation to the last job's end. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "description": "Median, from the first job's creation to the last job's end. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 0,
         "y": 2,
@@ -362,7 +387,7 @@
       "type": "stat",
       "id": 3,
       "title": "Slow runs take",
-      "description": "The 90th percentile: 9 in 10 passing runs finish faster. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "description": "The 90th percentile: 9 in 10 passing runs finish faster. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 4,
         "y": 2,
@@ -462,7 +487,7 @@
       "type": "stat",
       "id": 4,
       "title": "Average passing run",
-      "description": "The mean passing run. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "description": "The mean passing run. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 8,
         "y": 2,
@@ -670,7 +695,7 @@
       "type": "stat",
       "id": 6,
       "title": "Runner hours",
-      "description": "Wall-clock hours of every finished run. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: hours.",
+      "description": "Wall-clock hours of every finished run. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: hours.",
       "gridPos": {
         "x": 16,
         "y": 2,
@@ -770,7 +795,7 @@
       "type": "stat",
       "id": 7,
       "title": "Hours on failed runs",
-      "description": "Share of the runner hours spent on runs that failed. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: percent of hours.",
+      "description": "Share of the runner hours spent on runs that failed. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: percent of hours.",
       "gridPos": {
         "x": 20,
         "y": 2,
@@ -878,7 +903,7 @@
       "type": "barchart",
       "id": 8,
       "title": "A passing run, phase by phase",
-      "description": "The average passing run of each suite: the wait for a runner, then each group of workflow steps (in every job of the run). Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "description": "The average passing run of each suite: the wait for a runner, then each group of workflow steps (in every job of the run). Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 0,
         "y": 6,
@@ -1151,7 +1176,7 @@
       "type": "table",
       "id": 9,
       "title": "Phases",
-      "description": "Each phase of a passing run: its average, median and slow (p90) duration, its share of the average run, and how its average moved. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: duration and percent.",
+      "description": "Each phase of a passing run: its average, median and slow (p90) duration, its share of the average run, and how its average moved. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: duration and percent.",
       "gridPos": {
         "x": 14,
         "y": 6,
@@ -1441,7 +1466,7 @@
       "type": "timeseries",
       "id": 10,
       "title": "Phase time per day",
-      "description": "The average passing run per day, stacked by phase: a band that grows is a phase getting slower. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: one point per UTC day the runs were created, last $days days. Unit: duration.",
+      "description": "The average passing run per day, stacked by phase: a band that grows is a phase getting slower. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: one point per UTC day the runs were created, last $days days. Unit: duration.",
       "gridPos": {
         "x": 0,
         "y": 15,
@@ -1839,7 +1864,7 @@
       "type": "table",
       "id": 12,
       "title": "Steps",
-      "description": "Every workflow step of a passing run, the biggest share first. Share: of the average run. 'vs before': the median compared with the previous window; red means slower. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: duration and percent.",
+      "description": "Every workflow step of a passing run, the biggest share first. Share: of the average run. 'vs before': the median compared with the previous window; red means slower. Population: passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: duration and percent.",
       "gridPos": {
         "x": 0,
         "y": 23,

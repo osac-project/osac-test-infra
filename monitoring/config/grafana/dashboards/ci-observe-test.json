@@ -127,7 +127,7 @@
         "label": "Suite",
         "type": "custom",
         "hide": 0,
-        "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas",
+        "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas,IT fulfillment : it-fulfillment,IT operator : it-operator,IT BMF : it-bmf,IT CaaS : it-caas",
         "options": [
           {
             "text": "All suites",
@@ -148,6 +148,26 @@
             "text": "BMaaS",
             "value": "bmaas",
             "selected": false
+          },
+          {
+            "text": "IT fulfillment",
+            "value": "it-fulfillment",
+            "selected": false
+          },
+          {
+            "text": "IT operator",
+            "value": "it-operator",
+            "selected": false
+          },
+          {
+            "text": "IT BMF",
+            "value": "it-bmf",
+            "selected": false
+          },
+          {
+            "text": "IT CaaS",
+            "value": "it-caas",
+            "selected": false
           }
         ],
         "current": {
@@ -158,14 +178,14 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0,
-        "description": "The VMaaS, CaaS and BMaaS E2E suites."
+        "description": "The VMaaS, CaaS and BMaaS E2E suites and the IT fulfillment, IT operator, IT BMF and IT CaaS integration suites."
       },
       {
         "name": "trigger",
         "label": "Started by",
         "type": "custom",
         "hide": 0,
-        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual",
+        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual,Pushes : push",
         "options": [
           {
             "text": "Any trigger",
@@ -191,6 +211,11 @@
             "text": "Manual",
             "value": "manual",
             "selected": false
+          },
+          {
+            "text": "Pushes",
+            "value": "push",
+            "selected": false
           }
         ],
         "current": {
@@ -201,7 +226,7 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0,
-        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, or manual runs."
+        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, manual runs, or pushes to a branch (the integration suites)."
       },
       {
         "name": "repo",

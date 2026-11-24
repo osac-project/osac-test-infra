@@ -110,7 +110,7 @@ incidents:
     - "Pre-cache the AAP images in the cluster flavor; the readiness race window is the registry pull time."
     - "Make osac-aap-bootstrap wait for the AAP gateway's actual health instead of in-cluster pings, or raise its retry budget."
     - "Fix the AAP project's git fetch so fork PR-head SHAs resolve (fatal: unable to read tree)."
-    - "Fix the ci-observe signature selection bias: gatherer boilerplate scores as a perfect failure discriminator because only failed runs are fully gathered; filter those lines or gather passing runs too."
+    - "Fix the ci-observe signature selection bias: gatherer boilerplate scores as a perfect failure discriminator because only failed runs are fully gathered; filter those lines or gather passing runs too. Done: the artifact-log rollup now filters the gatherer's own line shapes (the oc logs --previous BadRequest text, the tolerations every pod describe prints) at index time and counts what it filtered; the gather-on-failure behavior is unchanged."
     - "Fix the snapshot's OVN br-ex secondary-network placement, or clean the ovnk interface hints in cluster-tool's restore."
     - "Test new snapshots with the full regression suite before pushing them to the flavor tag, and alert when runners are not picking up the current digest (from the post-mortem)."
     - "Determine whether the aap-operator v2.6.0-0.1787258256 promotion contributed to the Nov 16 jump."

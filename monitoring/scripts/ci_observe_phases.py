@@ -1,24 +1,28 @@
-"""What a ci-observe E2E run spent its time on, and why it failed.
+"""What a ci-observe suite run spent its time on, and why it failed.
 
 One small vocabulary, shared by the rollups and the read side, so every page
 names a phase and a failure cause the same way:
 
-- a *suite run* is one VMaaS, CaaS or BMaaS E2E execution: a full-install
-  run, a pull-request suite run, or one suite of a merge-queue run;
+- a *suite run* is one VMaaS, CaaS or BMaaS E2E execution (a full-install
+  run, a pull-request suite run, or one suite of a merge-queue run), or one
+  run of the osac mono-repo's "Tests" workflow for the four integration
+  suites (fulfillment, operator, BMF, CaaS; see IT_WORKFLOW);
 - a *phase* is a group of workflow steps (queue, CI setup, cluster and
   hosts, build, install OSAC, tests, logs and teardown);
 - a *cause* is the phase of the first step that failed, plus three causes no
   step can name (timed out, runner lost, blocked request).
 
-Only the standard VMaaS, CaaS and BMaaS suites are in scope. Netris,
-stretched, agentless-net, full-regression and the named VMaaS installs are
-other scenarios on other infrastructure, so they are not part of the
-population and `suite_key` returns "" for them.
+Only the standard VMaaS, CaaS and BMaaS suites and the four integration
+suites are in scope. Netris, stretched, agentless-net, full-regression, the
+named VMaaS installs and every other leg of the Tests workflow (unit tests,
+contract checks, the installer and AAP suites) are other scenarios, so they
+are not part of the population and `suite_key` returns "" for them.
 
-Pure functions only: no I/O, no clock. The step names come from the
-e2e-*-full-install.yml and e2e-vmaas.yml workflows; a test pins that every
-step of those files lands in a named phase, so a new step cannot silently
-fall into "other".
+Pure functions only: no I/O, no clock. The E2E step names come from the
+e2e-*-full-install.yml and e2e-vmaas.yml workflows of this repository; the
+integration steps come from the osac mono-repo's tests.yml (see
+IT_WORKFLOW). A test pins that every step of those jobs lands in a named
+phase, so a new step cannot silently fall into "other".
 """
 
 from __future__ import annotations
@@ -57,8 +61,17 @@ def window_days(days) -> int:
 
 # -- suites -------------------------------------------------------------------
 
-SUITES = ("vmaas", "caas", "bmaas")
-SUITE_LABELS = {"vmaas": "VMaaS", "caas": "CaaS", "bmaas": "BMaaS", "all": "All suites"}
+SUITES = ("vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas")
+SUITE_LABELS = {
+    "vmaas": "VMaaS",
+    "caas": "CaaS",
+    "bmaas": "BMaaS",
+    "it-fulfillment": "IT fulfillment",
+    "it-operator": "IT operator",
+    "it-bmf": "IT BMF",
+    "it-caas": "IT CaaS",
+    "all": "All suites",
+}
 
 # The stored workflow names that are one in-scope suite. The exporter stores
 # the run name GitHub reports, so a pull-request suite run appears as
@@ -84,16 +97,51 @@ SUITE_WORKFLOWS = {
         "e2e bmaas (pull requests)",
         "e2e bmaas (merge queue)",
     ),
+    # The osac mono-repo's "Tests" workflow: the exporter stores one of its
+    # runs under the name of the integration suite its one job ran (see
+    # workflow-exporter.py's _refine_integration_suite), so these read like
+    # any other suite's workflows.
+    "it-fulfillment": ("it fulfillment (tests)",),
+    "it-operator": ("it operator (tests)",),
+    "it-bmf": ("it bmf (tests)",),
+    "it-caas": ("it caas (tests)",),
 }
-SUITE_PREFIXES = {suite: (f"e2e suite · {suite} · ",) for suite in SUITES}
+SUITE_PREFIXES = {suite: (f"e2e suite · {suite} · ",) for suite in SUITES if not suite.startswith("it-")}
 _WORKFLOW_SUITE = {name: suite for suite, names in SUITE_WORKFLOWS.items() for name in names}
+
+# The osac mono-repo's reusable "Tests" workflow (.github/workflows/tests.yml
+# of osac-project/osac). One run of it is one integration-test leg, and the
+# leg is the run's single job, named after its `kind` input
+# ("it-fulfillment-service", "it-osac-operator",
+# "it-bare-metal-fulfillment-operator", "it-caas"; a leg with a `dir` input
+# names that instead). The workflow also runs the unit, contract, installer,
+# preflight and AAP legs; those are out of scope, and a Tests run whose job
+# names none of the four kinds below stays outside the ci-observe population.
+# The runs are pull-request and push triggered on GitHub-hosted runners; no
+# merge-queue or scheduled variant exists today.
+IT_WORKFLOW = "Tests"
+IT_JOB_SUITES = {
+    "it-fulfillment-service": "it-fulfillment",
+    "it-osac-operator": "it-operator",
+    "it-bare-metal-fulfillment-operator": "it-bmf",
+    "it-caas": "it-caas",
+}
+# The stored workflow name of one integration suite's Tests runs (display
+# case; suite_key reads the lowercased form through SUITE_WORKFLOWS).
+IT_SUITE_WORKFLOWS = {
+    "it-fulfillment": "IT fulfillment (Tests)",
+    "it-operator": "IT operator (Tests)",
+    "it-bmf": "IT BMF (Tests)",
+    "it-caas": "IT CaaS (Tests)",
+}
 
 PR_IN_NAME_RE = re.compile(r"#(\d+)")
 SHA_IN_NAME_RE = re.compile(r" · ([0-9a-f]{7,40})$")
 
 
 def suite_key(workflow: str | None) -> str:
-    """"vmaas", "caas" or "bmaas" for an in-scope suite workflow, "" otherwise."""
+    """The suite an in-scope workflow names ("vmaas", "caas", "bmaas",
+    "it-fulfillment", ...), "" otherwise."""
     name = (workflow or "").strip().lower()
     if name in _WORKFLOW_SUITE:
         return _WORKFLOW_SUITE[name]
@@ -286,12 +334,26 @@ _STEP_PHASE = {
     "read approle credentials": "prepare",
     "retrieve secrets from vault": "prepare",
     "write secrets": "prepare",
+    # Steps of the osac mono-repo's Tests workflow (the integration suites):
+    # the code, the language toolchains and the Kind/Helm/ginkgo binaries.
+    # "Run ./.github/actions/setup-go" is an unnamed step, which GitHub names
+    # after the action it runs; "Run actions/checkout@<sha>" (also unnamed)
+    # the "checkout" fallback pattern below already covers.
+    "run ./.github/actions/setup-go": "prepare",
+    "run ./.github/actions/setup-python": "prepare",
+    "set up go": "prepare",
+    "set up python": "prepare",
+    "install kind": "prepare",
+    "install ginkgo": "prepare",
+    # The BMaaS full-install workflow's NetBox inventory backend (PR #628).
+    "install uv": "prepare",
     # The test cluster and its virtual hosts.
     "set clone name": "cluster",
     "prepare cluster environment": "cluster",
     "boot cluster clone": "cluster",
     "prepare cluster prerequisites": "cluster",
     "setup virtual baremetalhosts": "cluster",
+    "setup virtual netbox devices": "cluster",
     "setup caas agent": "cluster",
     # Build what the run installs and tests with.
     "log in to the chart's oci registry": "build",
@@ -308,6 +370,12 @@ _STEP_PHASE = {
     "deploy osac": "install",
     "resolve deployed fulfillment-service image": "install",
     "create test adapter route for metering tests": "install",
+    # The Tests workflow's installs: make install-infra creates the Kind
+    # cluster and installs the operators on it in one step, and the CaaS
+    # leg's make prepare builds and installs everything the suite runs
+    # against.
+    "install infrastructure on kind": "install",
+    "prepare caas integration environment": "install",
     # Run the suite.
     "resolve effective test suite (fallback if tier dir is empty)": "test",
     "resolve effective test suite (fail if requested tier is empty)": "test",
@@ -315,6 +383,11 @@ _STEP_PHASE = {
     "run e2e tests": "test",
     "run e2e tests (ci-observe capture)": "test",
     "run caas e2e tests": "test",
+    "run integration tests": "test",
+    "run caas integration tests": "test",
+    # A live check of the product against the installed cluster (the BMF
+    # leg's NetBox secret lookup), between the install and the suite.
+    "test bmf netbox secret lookup": "test",
     # Afterwards: evidence, cleanup and notifications.
     "gather compact boot diagnostics": "collect",
     "gather cluster logs": "collect",
@@ -322,6 +395,8 @@ _STEP_PHASE = {
     "teardown": "collect",
     "scan and upload artifacts": "collect",
     "scan and upload artifacts (job cancelled)": "collect",
+    "collect diagnostic logs": "collect",
+    "collect caas diagnostics": "collect",
     "authenticate for ai diagnosis": "collect",
     "run ai failure diagnosis": "collect",
     "notify slack on failure": "collect",
@@ -333,14 +408,19 @@ _STEP_PHASE = {
 
 # Fallbacks for a renamed or new step, most specific first.
 _STEP_PATTERNS = (
-    (re.compile(r"^post |^(gather|collect|teardown|scan and upload|upload|destroy|clean ?up)\b"), "collect"),
+    # An unnamed actions/upload-artifact step appears as
+    # "Run actions/upload-artifact@<sha>" (the Tests workflow's bundles), so
+    # the upload word also matches mid-line, not only at a step's start.
+    (re.compile(r"^post |^(gather|collect|teardown|scan and upload|upload|destroy|clean ?up)\b"
+                r"|\bupload-artifact\b|\bupload artifacts?\b"), "collect"),
     (re.compile(r"\b(e2e|pytest)\b.*\btests?\b|^run .*tests?\b|^resolve effective test"), "test"),
     (re.compile(r"slack|ai (failure )?diagnosis|chai-bot|notify"), "collect"),
     (re.compile(r"^(install|deploy) (osac|infrastructure operators)|^setup osac|metering"), "install"),
     (re.compile(r"cluster|clone|baremetalhost|virtual host|caas agent"), "cluster"),
     (re.compile(r"^build |image|chart|^extract osac cli"), "build"),
     (re.compile(r"checkout|secret|credential|vault|approle|token|authorize|validate|bootstrap|^fetch |^ensure |"
-                r"^install (grpcurl|helm|yq|tools?)"), "prepare"),
+                r"^install (grpcurl|helm|yq|kind|ginkgo|tools?)|^set up [a-z]"
+                r"|^run \./\.github/actions/setup-"), "prepare"),
     # The gate and queue bookkeeping a suite run does before it starts: its
     # check run, readiness, superseded runs, the pull request and its labels,
     # and the shared suite-inputs action.

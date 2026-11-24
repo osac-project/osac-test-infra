@@ -460,7 +460,16 @@ def window_checks(db, github, api, repo, days, now, api_get=read_api):
 
 # -- E2E runs ------------------------------------------------------------------
 
-SUITES = ("vmaas", "caas", "bmaas")
+SUITES = ("vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas")
+# The Tests workflow's integration suites, as the exporter stores them
+# (model.md's suite table): kept here by hand, like everything else this
+# checker reads, so it stays independent of the code it checks.
+IT_SUITE_WORKFLOWS = {
+    "it-fulfillment": "IT fulfillment (Tests)",
+    "it-operator": "IT operator (Tests)",
+    "it-bmf": "IT BMF (Tests)",
+    "it-caas": "IT CaaS (Tests)",
+}
 # ci-observe/model.md: "Netris, stretched, CaaS agentless-net, full regression
 # and the named installs (...) test other scenarios and are never counted."
 NEVER_COUNTED = ("netris", "stretched", "agentless", "regression", "production install", "staging install",
@@ -486,6 +495,9 @@ def documented_suite(workflow):
     name = " ".join((workflow or "").lower().split())
     if any(word in name for word in NEVER_COUNTED):
         return ""
+    for suite, workflow_name in IT_SUITE_WORKFLOWS.items():
+        if name == workflow_name.lower():
+            return suite
     for suite in SUITES:
         if name in (f"e2e {suite}", f"e2e {suite} full install", f"e2e {suite} pr suite"):
             return suite
@@ -828,13 +840,19 @@ def e2e_audit(github, args, now, api_get, rng):
 # -- E2E tests: the run page's Failed tests and the test history ---------------
 
 # Where scheduled and manual E2E runs publish their logs artifact (with the
-# JUnit file), since 2026-11-13. Pull-request and merge-queue runs keep it on
-# the run.
+# JUnit file), since 2026-11-13. Pull-request, merge-queue and push runs keep
+# it on the run (the Tests workflow's integration suites are pull-request and
+# push triggered).
 PRIVATE_ARTIFACTS = os.getenv("PRIVATE_ARTIFACT_REPO", "osac-ci-artifacts")
 # The artifact a suite's full-install job publishes: VMaaS has no suite in the
-# name. A merge-queue run holds all three, each with its own capture.
+# name. A merge-queue run holds all three, each with its own capture. The
+# Tests workflow's integration suites upload osac-logs-it-<suite>-<run id>.
 SUITE_ARTIFACTS = {"vmaas": "osac-logs-full-install-{run}", "caas": "osac-logs-caas-full-install-{run}",
-                   "bmaas": "osac-logs-bmaas-full-install-{run}"}
+                   "bmaas": "osac-logs-bmaas-full-install-{run}",
+                   "it-fulfillment": "osac-logs-it-fulfillment-{run}",
+                   "it-operator": "osac-logs-it-operator-{run}",
+                   "it-bmf": "osac-logs-it-bmf-{run}",
+                   "it-caas": "osac-logs-it-caas-{run}"}
 CAPTURE_SUITE = re.compile(r"^([a-z0-9][a-z0-9-]*)-(?:pr\d+|main)-\d+-a\d+$")
 ARTIFACT_LIMIT = 256 * 1024 * 1024
 # The test history is read hourly, and an artifact can trail its run.
@@ -863,9 +881,13 @@ def test_step(row):
         steps = json.loads(row.get("steps_json") or "[]")
     except ValueError:
         return False, False, True
-    ran = any("e2e tests" in (step.get("name") or "").lower() and (step.get("duration_s") or 0) > 0
+    # The E2E suites run "Run E2E tests"; the Tests workflow's integration
+    # legs run "Run integration tests" and "Run CaaS integration tests".
+    test_steps = ("e2e tests", "integration tests")
+    ran = any(any(word in (step.get("name") or "").lower() for word in test_steps)
+              and (step.get("duration_s") or 0) > 0
               for step in steps if isinstance(step, dict))
-    failed = any("e2e tests" in entry.rsplit(" → ", 1)[-1].lower()
+    failed = any(any(word in entry.rsplit(" → ", 1)[-1].lower() for word in test_steps)
                  for entry in (row.get("failed_step") or "").split("; ") if entry.strip())
     return ran or failed, failed, False
 
@@ -919,7 +941,7 @@ def run_trigger(row):
         return "merge_queue"
     if event == "pull_request" or name.startswith("e2e suite · ") or name.endswith((" pr suite", "(pull requests)")):
         return "pr"
-    return {"schedule": "scheduled", "workflow_dispatch": "manual"}.get(event, event or "unknown")
+    return {"schedule": "scheduled", "workflow_dispatch": "manual", "push": "push"}.get(event, event or "unknown")
 
 
 def artifact_failures(github, repo, run_id, suite, trigger):
@@ -935,7 +957,7 @@ def artifact_failures(github, repo, run_id, suite, trigger):
                   f"/repos/{ORG}/{repo}/actions/runs/{run_id}/artifacts?per_page=100")
     in_the_private_repo = (f"{ORG}/{PRIVATE_ARTIFACTS}",
                            f"/repos/{ORG}/{PRIVATE_ARTIFACTS}/actions/artifacts?name={name}&per_page=100")
-    if trigger in ("pr", "merge_queue"):
+    if trigger in ("pr", "merge_queue", "push"):
         places = [on_the_run, in_the_private_repo]
     elif trigger in ("scheduled", "manual"):
         places = [in_the_private_repo, on_the_run]

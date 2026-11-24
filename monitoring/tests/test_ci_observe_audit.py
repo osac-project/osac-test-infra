@@ -244,7 +244,8 @@ def e2e_artifacts():
 
 
 SUITE_NAMES = ("osac-logs-full-install-{run_id}", "osac-logs-caas-full-install-{run_id}",
-               "osac-logs-bmaas-full-install-{run_id}")
+               "osac-logs-bmaas-full-install-{run_id}", "osac-logs-it-fulfillment-{run_id}",
+               "osac-logs-it-operator-{run_id}", "osac-logs-it-bmf-{run_id}", "osac-logs-it-caas-{run_id}")
 
 
 def artifact_entries(api_url, run_id, artifacts, place="run"):
@@ -417,7 +418,13 @@ def test_the_e2e_audit_agrees_with_what_the_exporter_stored(stored_runs, capsys)
     assert {a["workflow"] for a in result["sample"]} == {
         "E2E VMaaS Full Install", "E2E CaaS Full Install", "E2E vmaas (merge queue)", "E2E caas (merge queue)"}
     assert all(c["ok"] for c in result["recount"]), result["recount"]
-    assert [c["recount"] for c in result["recount"]] == ["2/2/0/0", "2/0/2/0", "0/0/0/0", "4/2/2/0"]
+    assert [c["recount"] for c in result["recount"]] == [
+        "2/2/0/0", "2/0/2/0", "0/0/0/0",
+        # The four integration suites hold nothing in this world, and the
+        # served document agrees: zero rows, not missing ones.
+        "0/0/0/0", "0/0/0/0", "0/0/0/0", "0/0/0/0",
+        "4/2/2/0",
+    ]
     assert all(c["ok"] for c in result["completeness"]), result["completeness"]
     assert [(c["github"], c["stored"]) for c in result["completeness"]] == [(1, 1), (1, 1), (1, 1), (1, 1)]
     suites = {f["workflow"]: f["suite"] for f in result["workflows"]}
@@ -647,8 +654,24 @@ def test_suite_workflows_are_the_counted_ones():
     assert audit.counted_workflow("E2E VMaaS Full Install")
     assert audit.counted_workflow("E2E BMaaS PR suite")
     assert audit.counted_workflow("E2E for the merge queue")
+    assert audit.counted_workflow("IT fulfillment (Tests)")
+    assert audit.counted_workflow("IT CaaS (Tests)")
     assert not audit.counted_workflow("E2E VMaaS Netris Full Install")
     assert not audit.counted_workflow("E2E review relay")
+    assert not audit.counted_workflow("Tests")
+
+
+def test_the_integration_suites_recount_and_place_their_bundles_like_model_md_says():
+    """The audit reads the scope from its own tables, not the exporter's
+    code: the four integration suites count, and their push-triggered runs
+    keep the bundle on the run."""
+    for suite, workflow in audit.IT_SUITE_WORKFLOWS.items():
+        assert audit.documented_suite(workflow) == suite
+        assert suite in audit.SUITES
+        assert audit.SUITE_ARTIFACTS[suite] == f"osac-logs-{suite}-{{run}}"
+    assert audit.run_trigger({"event": "push", "workflow": "IT fulfillment (Tests)"}) == "push"
+    assert audit.test_step({"steps_json": json.dumps(
+        [{"name": "Run CaaS integration tests", "duration_s": 60}])}) == (True, False, False)
 
 
 def test_a_rerun_of_failed_jobs_keeps_each_suite_on_its_own_attempt(exporter, wfe, trends, artifact_github, tmp_path,

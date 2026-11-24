@@ -53,9 +53,10 @@ has already expired contributes nothing: it is counted in rollup_days as
 unavailable, never as a green zero.
 
 Each test row of a run also says which suite artifact it came from
-(`suite_key`: vmaas, caas, bmaas), why the run happened (`trigger`), the
-pull request (`pr`) and, for a failure, the first line of its JUnit message
-(`message`, the bounded message attribute only, never the stack trace).
+(`suite_key`: vmaas, caas, bmaas or one of the four it-* integration
+suites), why the run happened (`trigger`), the pull request (`pr`) and, for
+a failure, the first line of its JUnit message (`message`, the bounded
+message attribute only, never the stack trace).
 `test_key` is the test's canonical id, the join key to the span rollup.
 
 The same pass copies the exporter's E2E job rows into `suite_runs`, so the
@@ -198,8 +199,10 @@ SUITE_RUN_COLUMNS = (
     "url", "runner_name", "timeline_json",
 )
 # The artifact a JUnit file came from names the suite: VMaaS uploads
-# osac-logs-full-install-<run id>, the others insert their suite.
+# osac-logs-full-install-<run id>, the other E2E suites insert their suite,
+# and the Tests workflow's integration suites upload osac-logs-it-<suite>-<run id>.
 ARTIFACT_SUITE_RE = re.compile(r"^osac-logs-(?:([a-z0-9-]+)-)?full-install-\d+$")
+IT_ARTIFACT_SUITE_RE = re.compile(r"^osac-logs-(it-[a-z0-9-]+)-\d+$")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS test_rollup (
@@ -647,7 +650,10 @@ def test_run_rows(runs):
 
 def artifact_suite(name):
     """The suite an osac-logs artifact belongs to ("vmaas", "caas", "bmaas",
-    ...), "" for a name that is not one."""
+    "it-fulfillment", ...), "" for a name that is not one."""
+    match = IT_ARTIFACT_SUITE_RE.match(name or "")
+    if match and match.group(1) in phases.SUITES:
+        return match.group(1)
     match = ARTIFACT_SUITE_RE.match(name or "")
     if not match:
         return ""
@@ -724,7 +730,9 @@ class ArtifactFetcher:
             return None, str(error)
         if not artifacts:
             expected, other = artifact_places(run.get("trigger"), run["repo"], run_id, self.org)
-            return None, f"no osac-logs-[<suite>-]full-install-{run_id} artifact in {expected} or in {other}"
+            return None, (f"no osac-logs-[<suite>-]full-install-{run_id} (E2E) or"
+                          f" osac-logs-it-<suite>-{run_id} (integration) artifact"
+                          f" in {expected} or in {other}")
         files = []
         unfinished = []
         for artifact in artifacts[:MAX_ARTIFACTS_PER_RUN]:

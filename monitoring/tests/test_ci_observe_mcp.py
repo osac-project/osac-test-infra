@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import re
 import socket
 import sys
 import threading
@@ -176,10 +177,22 @@ def test_tools_list_names_every_tool_with_its_required_parameters(config):
     # Every population dimension is required with no default: the agent
     # must ask which suite, trigger, repository and window it means.
     assert tools["suite_health"]["inputSchema"]["required"] == ["suite", "trigger", "repo", "days"]
-    assert "enum" in tools["suite_health"]["inputSchema"]["properties"]["suite"]
+    assert tools["suite_health"]["inputSchema"]["properties"]["suite"]["enum"] == list(mcp.SUITES)
+    assert tools["suite_health"]["inputSchema"]["properties"]["trigger"]["enum"] == list(mcp.TRIGGERS)
     # The incidents tool asks for a window only: an incident is not per
     # suite, trigger or repository.
     assert tools["incidents"]["inputSchema"]["required"] == ["days"]
+
+
+def test_the_suite_vocabulary_covers_the_integration_suites(config):
+    """The four Tests-workflow integration suites are askable, and so is
+    the push trigger they run under."""
+    assert mcp.SUITES == ("vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas")
+    assert "push" in mcp.TRIGGERS
+    _, answer = rpc(config, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    tools = {tool["name"]: tool for tool in answer["result"]["tools"]}
+    for name in ("suite_health", "failing_tests", "test_history", "list_runs"):
+        assert tools[name]["inputSchema"]["properties"]["suite"]["enum"] == list(mcp.SUITES), name
 
 
 def test_a_notification_answers_nothing(config):
@@ -448,6 +461,23 @@ def test_a_bad_capture_id_is_refused_before_any_call(config, web):
     with pytest.raises(mcp.ToolError, match="capture_id must look like"):
         tool_call(config, "run_failed_tests", {"capture_id": "not-a-capture"})
     assert web.calls == []
+
+
+@pytest.mark.parametrize("capture_id", [
+    "it-fulfillment-pr2530-45123456789-a1",
+    "it-operator-main-45123456790-a2",
+    "it-bmf-pr7-45123456791-a1",
+    "it-caas-main-45123456792-a1",
+])
+def test_an_integration_capture_id_names_its_suite_artifact(config, capture_id):
+    """The run_failed_tests capture-id pattern accepts the four integration
+    suites: their bundle is named after the suite the id carries."""
+    assert re.match(mcp.CAPTURE_ID_RULE, capture_id)
+
+
+def test_a_suite_nobody_knows_is_still_refused(config):
+    assert not re.match(mcp.CAPTURE_ID_RULE, "it-nosuchsuite-pr1-45123456789-a1")
+    assert not re.match(mcp.CAPTURE_ID_RULE, "netris-pr1-45123456789-a1")
 
 
 def test_an_unknown_tool_is_a_tool_error(config):

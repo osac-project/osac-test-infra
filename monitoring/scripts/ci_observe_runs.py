@@ -38,7 +38,10 @@ FAILED_STEP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()/-]{0,79}$")
 # workflow names that belong to it (see the exporter's
 # CI_OBSERVE_SUITE_WORKFLOWS); the stored name is not a substring match, so
 # "VMaaS" cannot fold Production Install or Chart Packaging Smoke into vmaas.
-SUITES = {"core", "vmaas", "caas", "bmaas", "netris", "stretched"}
+# The it-* entries are the osac mono-repo Tests workflow's integration legs
+# (see ci_observe_phases.IT_SUITE_WORKFLOWS).
+SUITES = {"core", "vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas",
+          "netris", "stretched"}
 
 # The stored conclusions the page can filter on. A timed-out run is grouped
 # into failure by CI_OBSERVE_RUN_CONCLUSION, so "failure" is its filter.

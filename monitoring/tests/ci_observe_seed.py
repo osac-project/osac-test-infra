@@ -61,6 +61,65 @@ STEPS = {
         ("Run E2E tests (ci-observe capture)", 70.0), ("Gather cluster logs", 3.0), ("Teardown", 2.0),
         ("Scan and upload artifacts", 1.5), ("Complete job", 0.1),
     ],
+    # The Tests workflow's integration legs (the osac mono-repo's
+    # .github/workflows/tests.yml): checkout and toolchains, one install step
+    # that also creates the Kind cluster, the ginkgo suite, then the bundle
+    # upload. The unnamed action steps carry the names GitHub gives them.
+    "it-fulfillment": [
+        ("Set up job", 0.2), ("Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", 0.3),
+        ("Run ./.github/actions/setup-go", 0.9), ("Install Kind", 0.4), ("Install Helm", 0.3),
+        ("Install infrastructure on Kind", 6.0), ("Run integration tests", 46.0),
+        ("Collect diagnostic logs", 1.0), ("Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", 0.2),
+        ("Post Install Kind", 0.1), ("Post Run ./.github/actions/setup-go", 0.1),
+        ("Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", 0.1), ("Complete job", 0.1),
+    ],
+    "it-operator": [
+        ("Set up job", 0.2), ("Checkout repository", 0.3), ("Set up Go", 0.9), ("Install Kind", 0.4),
+        ("Install Helm", 0.3), ("Install ginkgo", 1.2), ("Install infrastructure on Kind", 6.0),
+        ("Run integration tests", 22.0), ("Collect diagnostic logs", 0.8),
+        ("Post Install Kind", 0.1), ("Post Set up Go", 0.1), ("Post Checkout repository", 0.1),
+        ("Complete job", 0.1),
+    ],
+    "it-bmf": [
+        ("Set up job", 0.2), ("Checkout repository", 0.3), ("Set up Python", 0.8), ("Set up Go", 0.9),
+        ("Install Kind", 0.4), ("Install Helm", 0.3), ("Install ginkgo", 1.2),
+        ("Install infrastructure on Kind", 6.0), ("Test BMF NetBox Secret lookup", 1.5),
+        ("Run integration tests", 21.0), ("Collect diagnostic logs", 0.8),
+        ("Post Install Kind", 0.1), ("Post Set up Go", 0.1), ("Post Set up Python", 0.1),
+        ("Post Checkout repository", 0.1), ("Complete job", 0.1),
+    ],
+    "it-caas": [
+        ("Set up job", 0.2), ("Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", 0.3),
+        ("Run ./.github/actions/setup-go", 0.9), ("Install Helm", 0.3), ("Install Kind", 0.4),
+        ("Prepare CaaS integration environment", 16.0), ("Run CaaS integration tests", 44.0),
+        ("Collect CaaS diagnostics", 0.8),
+        ("Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", 0.2),
+        ("Post Install Kind", 0.1), ("Post Run ./.github/actions/setup-go", 0.1),
+        ("Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", 0.1), ("Complete job", 0.1),
+    ],
+}
+
+# The job name a suite's timeline carries: the e2e suites run inside the
+# pull-request flow's "<suite> / e2e-<suite>-full-install / e2e" job, an
+# integration leg is the Tests run's own job, named after its kind.
+JOB_NAMES = {
+    "vmaas": "vmaas / e2e-vmaas-full-install / e2e",
+    "caas": "caas / e2e-caas-full-install / e2e",
+    "bmaas": "bmaas / e2e-bmaas-full-install / e2e",
+    "it-fulfillment": "it-fulfillment-service",
+    "it-operator": "it-osac-operator",
+    "it-bmf": "it-bare-metal-fulfillment-operator",
+    "it-caas": "it-caas",
+}
+# Each suite's own test step, the fallback failure step of a seeded run.
+TEST_STEPS = {
+    "vmaas": "Run E2E tests (ci-observe capture)",
+    "caas": "Run E2E tests (ci-observe capture)",
+    "bmaas": "Run E2E tests (ci-observe capture)",
+    "it-fulfillment": "Run integration tests",
+    "it-operator": "Run integration tests",
+    "it-bmf": "Run integration tests",
+    "it-caas": "Run CaaS integration tests",
 }
 
 # Where a failed run stopped, and how often.
@@ -73,6 +132,10 @@ FAILURE_STEPS = [
     ("Prepare cluster environment", 3),
     ("Fetch and write secrets", 3),
     ("Authorize fork PR", 3),
+    ("Run integration tests", 30),
+    ("Install infrastructure on Kind", 8),
+    ("Prepare CaaS integration environment", 4),
+    ("Test BMF NetBox Secret lookup", 2),
     ("", 7),  # no failed step: a timeout or a lost runner
 ]
 
@@ -102,6 +165,33 @@ TESTS = {
         ("bmaas.sanity.test_bare_metal_network", ["test_bare_metal_attach_subnet"], 800),
         ("references.test_cluster_baremetal_references", ["test_baremetal_references"], 60),
     ],
+    # The ginkgo suites of the Tests workflow's integration legs: a Go
+    # classname and CamelCase test names, as their junit.xml reports them.
+    "it-fulfillment": [
+        ("fulfillment-service.test.integration.compute_instance",
+         ["TestComputeInstanceLifecycle", "TestComputeInstanceCatalogItem"], 380),
+        ("fulfillment-service.test.integration.virtual_network",
+         ["TestVirtualNetworkLifecycle", "TestSubnetLifecycle"], 130),
+        ("fulfillment-service.test.integration.tenant", ["TestTenantUserCanList"], 25),
+        ("fulfillment-service.test.integration.mcp", ["TestMcpToolList"], 40),
+    ],
+    "it-operator": [
+        ("osac-operator.test.integration.compute_instance", ["TestComputeInstanceReconcile"], 620),
+        ("osac-operator.test.integration.virtual_network", ["TestVirtualNetworkReconcile",
+                                                             "TestSubnetReconcile"], 400),
+        ("osac-operator.test.integration.tenant", ["TestTenantDeletion"], 240),
+    ],
+    "it-bmf": [
+        ("bare-metal-fulfillment-operator.test.integration.bare_metal_instance",
+         ["TestBareMetalInstanceProvision", "TestBareMetalInstancePower"], 560),
+        ("bare-metal-fulfillment-operator.test.integration.netbox", ["TestNetBoxSecretLookup",
+                                                                     "TestNetBoxRender"], 90),
+    ],
+    "it-caas": [
+        ("tests.integration.caas.test_cluster", ["TestClusterCreate", "TestClusterDelete"], 1500),
+        ("tests.integration.caas.test_agent", ["TestAgentDeployment"], 700),
+        ("tests.integration.caas.test_networking", ["TestNetworkClass"], 380),
+    ],
 }
 
 # What each suite's tests wait on: (resource kind, description, typical seconds)
@@ -118,11 +208,18 @@ WAITS = {
               ("BareMetalInstance", "BareMetalInstance {id} to be deleted", 240)],
 }
 
-RUNS_PER_DAY = {"vmaas": 10, "caas": 5, "bmaas": 5}
+RUNS_PER_DAY = {"vmaas": 10, "caas": 5, "bmaas": 5,
+                "it-fulfillment": 6, "it-operator": 4, "it-bmf": 3, "it-caas": 2}
+# The four integration suites of the Tests workflow (ci_observe_phases).
+IT_SUITES = ("it-fulfillment", "it-operator", "it-bmf", "it-caas")
 TRIGGERS = [("pr", 55), ("merge_queue", 25), ("scheduled", 15), ("manual", 5)]
+# The integration suites run on pull requests and pushes to a branch; no
+# merge-queue or scheduled variant exists.
+IT_TRIGGERS = [("pr", 80), ("push", 20)]
 FLAKY = {"tests.e2e.vmaas.sanity.test_external_ip::test_external_ip_pool_exhausted": 0.25,
          "tests.e2e.caas.sanity.test_cluster_scale::test_cluster_scale_up": 0.15,
-         "tests.e2e.bmaas.sanity.test_bare_metal_instance::test_bare_metal_instance_power_cycle": 0.2}
+         "tests.e2e.bmaas.sanity.test_bare_metal_instance::test_bare_metal_instance_power_cycle": 0.2,
+         "fulfillment-service.test.integration.mcp::TestMcpToolList": 0.2}
 GETTING_SLOWER = "tests.e2e.vmaas.sanity.test_compute_instance_creation::test_compute_instance_lifecycle"
 MESSAGES = {
     "test": (
@@ -187,6 +284,12 @@ CREATE TABLE captures (
 
 
 def _workflow(suite, trigger, pr, sha):
+    if suite in IT_SUITES:
+        # The Tests workflow's integration legs: pull-request and push
+        # triggered, stored under the suite's own workflow name
+        # (ci_observe_phases.IT_SUITE_WORKFLOWS, kept in step here).
+        workflow_names = sys.modules["ci_observe_phases"].IT_SUITE_WORKFLOWS
+        return workflow_names[suite], ("pull_request" if trigger == "pr" else "push")
     label = {"vmaas": "VMaaS", "caas": "CaaS", "bmaas": "BMaaS"}[suite]
     if trigger == "pr":
         return f"E2E suite · {suite} · #{pr} · {sha}", "workflow_dispatch"
@@ -198,17 +301,23 @@ def _workflow(suite, trigger, pr, sha):
 
 
 def _timeline(rng, suite, created, failed_step, cancel_at, queue_s, slow_factor):
-    """(jobs, steps, completed): the suite job and its steps."""
+    """(jobs, steps, completed): the suite's job and its steps."""
     started = created + timedelta(seconds=queue_s)
     moment = started
     steps = []
     failed = False
     for number, (name, minutes) in enumerate(STEPS[suite], 1):
         seconds = max(3.0, rng.gauss(minutes * 60, minutes * 60 * 0.12))
-        if name.startswith("Run E2E tests"):
+        if name.startswith("Run E2E tests") or name.startswith("Run integration tests") \
+                or name.startswith("Run CaaS integration tests"):
             seconds *= slow_factor
         conclusion = "success"
-        collect = name in ("Gather cluster logs", "Teardown", "Scan and upload artifacts", "Complete job")
+        collect = name in ("Gather cluster logs", "Teardown", "Scan and upload artifacts", "Complete job",
+                           "Collect diagnostic logs", "Collect CaaS diagnostics",
+                           "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+                           "Post Install Kind", "Post Set up Go", "Post Set up Python",
+                           "Post Checkout repository", "Post Run ./.github/actions/setup-go",
+                           "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")
         if failed and not collect:
             steps.append({"number": number, "name": name, "status": "completed", "conclusion": "skipped",
                           "started_at": "", "completed_at": ""})
@@ -227,7 +336,7 @@ def _timeline(rng, suite, created, failed_step, cancel_at, queue_s, slow_factor)
                       "started_at": _iso(moment), "completed_at": _iso(moment + timedelta(seconds=seconds))})
         moment += timedelta(seconds=seconds)
     jobs = [{
-        "name": f"{suite} / e2e-{suite}-full-install / e2e",
+        "name": JOB_NAMES[suite],
         "status": "completed",
         "conclusion": "failure" if failed else "success",
         "created_at": _iso(created),
@@ -268,21 +377,23 @@ def seed(directory, now=None, days=40, rng_seed=7):
         day = (now - timedelta(days=day_index)).replace(hour=0, minute=0, second=0)
         progress = (days - day_index) / days
         for suite, per_day in RUNS_PER_DAY.items():
+            integration = suite in IT_SUITES
             for _ in range(rng.randint(per_day - 2, per_day + 2)):
                 created = day + timedelta(minutes=rng.randint(0, 23 * 60))
                 if created > now - timedelta(hours=3):
                     continue
                 run_id += rng.randint(3, 40)
-                trigger = _pick(rng, TRIGGERS)
+                trigger = _pick(rng, IT_TRIGGERS if integration else TRIGGERS)
                 pr = rng.choice(pr_numbers[: max(3, int(len(pr_numbers) * progress) + 3)])
                 # A pull request's runs share its commit until the next push;
                 # scheduled runs of one day share main's commit; a merge-queue
-                # entry tests a merge commit of its own.
+                # entry tests a merge commit of its own. A push run of an
+                # integration suite tests main's commit of its day.
                 if trigger == "pr":
                     if rng.random() < 0.3:
                         versions[pr] = versions.get(pr, 1) + 1
                     sha = _sha("pr", pr, versions.get(pr, 1))
-                elif trigger in ("scheduled", "manual"):
+                elif trigger in ("scheduled", "manual", "push"):
                     sha = _sha("main", day_index)
                 else:
                     sha = f"{rng.getrandbits(160):040x}"
@@ -290,18 +401,20 @@ def seed(directory, now=None, days=40, rng_seed=7):
                 repo = "osac" if rng.random() < 0.8 else "osac-test-infra"
                 outcome = rng.random()
                 cancelled = outcome < 0.05
-                failed = not cancelled and outcome < (0.26 if suite == "vmaas" else 0.33)
+                failed = not cancelled and outcome < (0.2 if integration else
+                                                      (0.26 if suite == "vmaas" else 0.33))
                 failed_step = _pick(rng, FAILURE_STEPS) if failed else ""
                 if failed_step and failed_step not in [name for name, _ in STEPS[suite]]:
-                    failed_step = "Run E2E tests (ci-observe capture)"
-                cancel_at = "Install OSAC" if failed and not failed_step and rng.random() < 0.5 else ""
-                queue_s = rng.expovariate(1 / (420 if trigger != "scheduled" else 120))
+                    failed_step = TEST_STEPS[suite]
+                install_step = "Install infrastructure on Kind" if integration else "Install OSAC"
+                cancel_at = install_step if failed and not failed_step and rng.random() < 0.5 else ""
+                queue_s = rng.expovariate(1 / (420 if trigger not in ("scheduled", "push") else 120))
                 slow = 1.0 + (0.25 * progress if suite == "vmaas" else 0)
                 timeline, completed = _timeline(rng, suite, created, failed_step, cancel_at, queue_s, slow)
                 if cancelled:
                     completed = created + timedelta(minutes=rng.randint(5, 60))
                 conclusion = "cancelled" if cancelled else ("failure" if failed else "success")
-                job = f"{suite} / e2e-{suite}-full-install / e2e"
+                job = JOB_NAMES[suite]
                 steps = [
                     {"name": step["name"], "duration_s": round(
                         phases.seconds_between(step["started_at"], step["completed_at"]) or 0)}
@@ -316,8 +429,8 @@ def seed(directory, now=None, days=40, rng_seed=7):
                     " ?, ?, ?, ?)",
                     (
                         row_id, repo, workflow,
-                        f"osac / {workflow}", "main" if trigger in ("scheduled", "manual") else f"pr-{pr}",
-                        f"#{pr}" if trigger == "merge_queue" else "",
+                        f"osac / {workflow}", "main" if trigger in ("scheduled", "manual", "push") else f"pr-{pr}",
+                        f"#{pr}" if trigger in ("merge_queue", "pr") else "",
                         conclusion, conclusion, event, trigger,
                         round((completed - created).total_seconds()),
                         f"https://github.com/osac-project/{repo}/actions/runs/{run_id}",
@@ -330,8 +443,19 @@ def seed(directory, now=None, days=40, rng_seed=7):
                 )
                 if trigger == "pr":
                     pr_runs.setdefault(pr, []).append((suite, conclusion, sha))
-                capture = f"{suite}-{'pr' + str(pr) if trigger == 'pr' else 'main'}-{run_id}-a1"
                 tests_ran = not cancelled and (not failed or "tests" in failed_step)
+                if tests_ran and integration:
+                    # An integration run has no ci-observe capture (the Tests
+                    # workflow runs no capture action), but its bundle holds
+                    # the junit.xml the test history reads.
+                    cases, _ = _tests_for(rng, suite, failed, progress, "", sha)
+                    runs_for_rollup.append({
+                        "run_id": run_id, "day": _iso(created)[:10], "repo": repo, "workflow": workflow,
+                        "created_at": _iso(created), "source_sha": sha[:40], "trigger": trigger,
+                        "pr": str(pr) if trigger == "pr" else "", "cases": cases,
+                    })
+                    continue
+                capture = f"{suite}-{'pr' + str(pr) if trigger == 'pr' else 'main'}-{run_id}-a1"
                 if tests_ran:
                     jobs.execute(
                         "INSERT INTO captures (capture_id, run_id, run_attempt, suite, pr, workflow,"
@@ -392,7 +516,7 @@ def _tests_for(rng, suite, failed, progress, capture, sha):
     index = 0
     for module, names, typical in TESTS[suite]:
         for name in names:
-            classname = f"tests.e2e.{module}"
+            classname = f"tests.e2e.{module}" if suite not in IT_SUITES else module
             key = phases.canonical_test_key(f"{classname}::{name}")
             seconds = max(5.0, rng.gauss(typical, typical * 0.15))
             if key == GETTING_SLOWER:
@@ -404,8 +528,14 @@ def _tests_for(rng, suite, failed, progress, capture, sha):
             elif key in FLAKY and rng.random() < FLAKY[key]:
                 passed = False
                 message = MESSAGES["flaky"].format(id=rng.randint(1, 9))
-            cases.append({"suite": "pytest", "test_id": f"{classname}::{name}", "passed": passed,
+            cases.append({"suite": "pytest" if suite not in IT_SUITES else "ginkgo",
+                          "test_id": f"{classname}::{name}", "passed": passed,
                           "duration_s": round(seconds, 3), "suite_key": suite, "message": message})
+            if suite not in WAITS:
+                # An integration leg's Go tests poll nothing the span rollup
+                # knows (and the Tests workflow captures no spans at all).
+                index += 1
+                continue
             nodeid = f"tests/e2e/{module.replace('.', '/')}.py::{name}"
             setup = seconds * rng.uniform(0.1, 0.25)
             teardown = seconds * rng.uniform(0.05, 0.15)
@@ -577,11 +707,14 @@ def _seed_signatures(trends_db, jobs_db, now):
             phase = phases.failure_cause(conclusion, failed_step, None)["phase"] or "other"
             outcome = "success" if conclusion == "success" else "failure"
             rows_to_write = list(signatures)
-            if outcome == "failure" and failed_step and "Install OSAC" in failed_step:
+            install_steps = ("Install OSAC", "Install infrastructure on Kind",
+                             "Prepare CaaS integration environment")
+            test_steps = ("Run E2E tests", "Run integration tests", "Run CaaS integration tests")
+            if outcome == "failure" and failed_step and any(step in failed_step for step in install_steps):
                 rows_to_write.append(
                     ("unable to read tree <id> (fatal: the AAP project update cannot check out the commit)",
                      "aap-jobs", 4))
-            if outcome == "failure" and failed_step and "Run E2E tests" in failed_step:
+            if outcome == "failure" and failed_step and any(step in failed_step for step in test_steps):
                 rows_to_write.append(
                     ("StuckState: worker Agents installing not reached after N", "test-failure", 6))
             for signature, kind, lines in rows_to_write:

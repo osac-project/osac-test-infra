@@ -135,7 +135,7 @@ def test_the_heading_explains_the_filters_and_the_github_fallback() -> None:
 
 
 def test_the_table_description_explains_recorded_and_the_failed_step() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     description = table["description"].lower()
     assert "no under recorded means no test data" in description
     assert "failed step" in description
@@ -154,19 +154,21 @@ def test_the_filters_are_days_repository_suite_and_result() -> None:
         assert {"text": "All", "value": "all", "selected": True} in variable["options"]
 
 
-def test_the_suites_are_vmaas_caas_and_bmaas(runs) -> None:
-    """The list shows the three suites ci-observe covers; "core" asks the
-    endpoint for all three and nothing else (no Netris, no stretched)."""
+def test_the_suites_are_the_ci_observe_population(runs) -> None:
+    """The list shows the suites ci-observe covers; "core" asks the endpoint
+    for all of them and nothing else (no Netris, no stretched)."""
     suite = variables()["suite"]
     assert suite["current"]["value"] == "core"
-    assert [option["value"] for option in suite["options"]] == ["core", "vmaas", "caas", "bmaas"]
+    assert [option["value"] for option in suite["options"]] == [
+        "core", "vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas",
+    ]
     assert suite["options"][0]["text"] == "All suites"
     for option in suite["options"]:
         assert option["value"] in runs.SUITES, option["value"]
 
 
 def test_a_failed_run_says_why_and_how_long_it_ran() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert display_name(table, "suite_label") == "Suite"
     assert display_name(table, "cause_label") == "Cause"
     assert display_name(table, "duration_s") == "Ran for"
@@ -182,7 +184,7 @@ def test_the_result_options_match_the_endpoint(runs) -> None:
 
 
 def test_the_table_reads_the_runs_endpoint_with_every_filter() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     target = table["targets"][0]
     assert target["url"] == (
         f"{RUNS_URL}?days=${{days}}&repo=${{repo}}&suite=${{suite}}&result=${{result}}"
@@ -192,7 +194,7 @@ def test_the_table_reads_the_runs_endpoint_with_every_filter() -> None:
 
 
 def test_every_column_resolves_against_the_endpoint_contract() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     row = RUNS_DOCUMENT["runs"][0]
     for column in selectors(table):
         assert column in row, column
@@ -201,14 +203,14 @@ def test_every_column_resolves_against_the_endpoint_contract() -> None:
 
 
 def test_the_old_recording_columns_are_gone() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     for gone in ("capture_id", "started_at_ms", "done_at_ms"):
         assert gone not in selectors(table), gone
         assert override(table, gone) is None, gone
 
 
 def test_the_link_fields_are_hidden() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     for field in ("pr_number", "details_url"):
         entry = override(table, field)
         hidden = next(prop["value"] for prop in entry["properties"] if prop["id"] == "custom.hidden")
@@ -216,7 +218,7 @@ def test_the_link_fields_are_hidden() -> None:
 
 
 def test_the_failed_step_is_available_but_hidden() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert "failed_step" in selectors(table)
     entry = override(table, "failed_step")
     hidden = next(prop["value"] for prop in entry["properties"] if prop["id"] == "custom.hidden")
@@ -226,7 +228,7 @@ def test_the_failed_step_is_available_but_hidden() -> None:
 def test_the_failed_step_column_resolves_and_is_filterable() -> None:
     """A failed run names the exact step it stopped in. A pass or a
     cancelled run leaves the cell blank."""
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert display_name(table, "failed_step_name") == "Failed step"
     assert "failed_step_name" in selectors(table)
     entry = override(table, "failed_step_name")
@@ -237,19 +239,19 @@ def test_the_failed_step_column_resolves_and_is_filterable() -> None:
 
 
 def test_the_area_column_is_gone_but_failure_area_stays_in_the_api() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert "failure_area" not in selectors(table)
     assert override(table, "failure_area") is None
     assert RUNS_DOCUMENT["runs"][0]["failure_area"] == "setup"
 
 
 def test_the_newest_run_is_first() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert table["options"]["sortBy"] == [{"displayName": "Started", "desc": True}]
 
 
 def test_column_labels_are_plain_words() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert {
         "id": "Run",
         "workflow": "Workflow",
@@ -272,12 +274,12 @@ def test_column_labels_are_plain_words() -> None:
 
 
 def test_a_run_opens_its_details_url_or_github_when_unrecorded() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert link_url(table, "id") == "${__data.fields.details_url}"
 
 
 def test_a_pr_cell_opens_the_pull_requests_page() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     url = link_url(table, "pr")
     assert "/d/ci-observe-pull-requests/" in url
     assert "var-pr_number=${__data.fields.pr_number}" in url
@@ -285,12 +287,12 @@ def test_a_pr_cell_opens_the_pull_requests_page() -> None:
 
 
 def test_a_run_opens_github() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert link_url(table, "url") == "${__value.raw}"
 
 
 def test_the_table_can_be_filtered() -> None:
-    table = panel("Recent E2E runs, last $days days")
+    table = panel("Recent suite runs, last $days days")
     assert table["fieldConfig"]["defaults"]["custom"]["filterable"] is True
 
 

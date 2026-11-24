@@ -1,6 +1,8 @@
 # CI Observe model
 
-CI Observe covers the VMaaS, CaaS and BMaaS E2E suites. Four pages look across runs, three look at one thing.
+CI Observe covers the VMaaS, CaaS and BMaaS E2E suites and the four
+integration suites of the osac mono-repo's Tests workflow. Four pages look
+across runs, three look at one thing.
 
 | Page | Unit | Question |
 |---|---|---|
@@ -21,17 +23,30 @@ The four across-runs pages share four filters, and keep them when you move betwe
 | Filter | Values |
 |---|---|
 | Window | 7, 14, 30 or 90 days. **vs before** compares with the same span before it, inside the 90-day archive. |
-| Suite | All suites, VMaaS, CaaS, BMaaS. |
-| Started by | Any trigger, pull requests, merge queue, scheduled (main), manual. |
+| Suite | All suites, VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF, IT CaaS. |
+| Started by | Any trigger, pull requests, merge queue, scheduled (main), manual, pushes. |
 | Repository | Both, `osac`, `osac-test-infra`: the repository whose CI started the run. |
 
-A suite is its full-install workflows, its pull-request suite runs and its merge-queue rows:
+A suite is its full-install workflows, its pull-request suite runs, its
+merge-queue rows, or — for the four integration suites — its runs of the
+osac mono-repo's Tests workflow:
 
 | Suite | Workflows |
 |---|---|
 | VMaaS | E2E VMaaS, E2E VMaaS Full Install, E2E VMaaS PR suite, `E2E suite · vmaas · …` runs, E2E vmaas merge-queue rows |
 | CaaS | E2E CaaS Full Install, E2E CaaS PR suite, `E2E suite · caas · …` runs, E2E caas merge-queue rows |
 | BMaaS | E2E BMaaS Full Install, E2E BMaaS PR suite, `E2E suite · bmaas · …` runs, E2E bmaas merge-queue rows |
+| IT fulfillment | `IT fulfillment (Tests)`: the Tests workflow's it-fulfillment-service leg |
+| IT operator | `IT operator (Tests)`: the Tests workflow's it-osac-operator leg |
+| IT BMF | `IT BMF (Tests)`: the Tests workflow's it-bare-metal-fulfillment-operator leg |
+| IT CaaS | `IT CaaS (Tests)`: the Tests workflow's it-caas leg |
+
+The Tests workflow's runs are pull-request and push triggered, on
+GitHub-hosted runners; no merge-queue or scheduled variant exists today.
+The exporter stores each in-scope run under its suite's name, so the
+readers map it like any other suite run. Every other leg of that workflow —
+the unit tests, the contract checks, the installer, preflight and AAP
+suites — is out of scope.
 
 Netris, stretched, CaaS agentless-net, full regression and the named installs (**E2E VMaaS Production Install**, **E2E VMaaS Staging Install**, **E2E VMaaS Chart Packaging Smoke**, **OSAC CI Large**) test other scenarios and are never counted.
 
@@ -42,7 +57,7 @@ Netris, stretched, CaaS agentless-net, full regression and the named installs (*
 | Pass rate | Passed ÷ (passed + failed). Cancelled runs are left out. GitHub's conclusion decides. |
 | Time to result | First job created → last job completed, on passing runs. Includes the wait for a runner. Runs stored before job timelines were kept fall back to their stored duration. |
 | Wait for a runner | The E2E job's `created_at` → `started_at`. Not measured for runs stored before job timelines were kept. |
-| Phase | Every step of the three suites' workflows maps to one phase (`ci_observe_phases.py`, pinned by a test against the workflow files): queue, CI setup, cluster and hosts, build, install OSAC, tests, logs and teardown, other. |
+| Phase | Every step of the in-scope workflows maps to one phase (`ci_observe_phases.py`, pinned by a test against the workflow files): queue, CI setup, cluster and hosts, build, install OSAC, tests, logs and teardown, other. The Tests workflow's integration legs name their own steps (checkout and toolchains, the Kind install and the environment make prepare builds, the ginkgo suite, the bundle upload) and map onto the same phases. |
 | Cause | The phase of the first failed step decides; a blocked step (fork authorization, refused inputs) is **Blocked**; a timed-out conclusion or a cancelled step in a failed job is **Timed out**; no failed step at all is **Runner lost**. Causes roll up to five areas: Tests, Build, OSAC install, CI infrastructure, Blocked. |
 | Flaky test | Passed and failed on the same commit in the window. |
 | A test's time | From the trace: setup minus its waits, all `poll_until` waits, the call phase minus its waits (test actions), teardown minus its waits. The four add up to setup + call + teardown. A session or module fixture is charged to the first test that sets it up. |
@@ -55,7 +70,7 @@ Netris, stretched, CaaS agentless-net, full regression and the named installs (*
 | Section | Contents |
 |---|---|
 | Numbers | Pass rate and its change, typical and slow (p90) time to result, typical wait for a runner, share of failures caused by CI, runs, failed runs, runner hours, share of hours on failed runs, flaky tests, tests with a failure. |
-| Suite health | One row per suite and all three: runs, pass rate, time to result and its change, runner wait, the top failure cause, links to the suite's time and failure pages. |
+| Suite health | One row per suite and all of them together: runs, pass rate, time to result and its change, runner wait, the top failure cause, links to the suite's time and failure pages. |
 | Two bars | The average passing run by phase, failed runs by area. |
 | Two lines | Pass rate per day, time to result per day. |
 | Inside the tests | The tests' time split and what they wait for, from recorded runs. |
@@ -148,7 +163,7 @@ A run is keyed by its GitHub run id; a recording id adds the suite and rerun num
 - The workflow exporter keeps its own job history for 30 days, and a gap check proves it complete once an hour: one count per repo per fully-past day against GitHub, a run-by-run verification only where the counts differ (`day_checks`, `github_actions_gap_check_*`). GitHub keeps the JUnit artifact for 30 days, so a run's tests are read within that window.
 - The pull request backfill covers `osac` and `osac-test-infra` only, the two repositories the Repository filter names; no other repository of the organization is listed.
 - An insight window may end at any past moment, not only at now: the `end` parameter takes a UTC date (`2026-11-01`) or a UTC second-precision time (`2026-11-01T12:00:00Z`). The dashboards' own windows keep ending at now.
-- A run's logs artifact (with its JUnit file) is in one place, by the run's trigger: on the run for pull-request and merge-queue runs, in the private repository `osac-ci-artifacts` for scheduled and manual runs (since 2026-11-13). Reading those needs a token that can see that repository.
+- A run's logs artifact (with its JUnit file) is in one place, by the run's trigger: on the run for pull-request, merge-queue and push runs, in the private repository `osac-ci-artifacts` for scheduled and manual runs (since 2026-11-13). The Tests workflow's integration runs are pull-request and push triggered, so their `osac-logs-it-<suite>-<run id>` bundles are on the run. Reading those needs a token that can see that repository.
 - The exporter fetches the job timeline (needed for the wait for a runner and for timeouts) of a run stored before timelines existed a few runs per poll, counted suite runs only, newest first.
 - The exporter polls the newest completed runs and the runs it saw active, and every 30 minutes lists every completed run created in the last 48 hours to store what the polling missed or kept with an outdated result. A run missed while the exporter was down for longer than that is recovered by a one-off backfill (`BACKFILL_DAYS`).
 - `ci_observe_audit.py` checks the pages against GitHub daily (`ci-observe-audit.timer`): every completed E2E run of the last 28 days is looked up in the job history, a sample of stored suite runs and of merged pull requests is compared field by field with GitHub's record, and the Overview's counts are recounted from the stored rows by the scope above. For tests, it checks that the token can read `osac-ci-artifacts`, that every suite run that ran its tests has test results, and, for the newest runs that failed in their test step, the run page's failed tests and the test history against the run's own JUnit file. It imports nothing from the code it checks. Its result is on every page, under **About these numbers**.
@@ -161,4 +176,4 @@ No Kubernetes events, no per-test trace links, no service call summary, no CI SL
 
 ## Out of scope
 
-Fleet health (runners, machines, queue infrastructure) belongs to the **CI Fleet** folder. Netris, stretched, full regression, unit and integration tests are not ci-observe.
+Fleet health (runners, machines, queue infrastructure) belongs to the **CI Fleet** folder. Netris, stretched, full regression, the unit tests and every Tests-workflow leg outside the four integration suites are not ci-observe.

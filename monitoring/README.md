@@ -513,7 +513,8 @@ Runner Health**, **CI Fleet — Runner Status**, **CI Fleet — Workflow Jobs**,
 **CI Fleet — Workflow Metrics**, and **CI Fleet — Health Overview** (a
 team-facing summary -- pass rate trend, flake rate, MTTR -- for standups and
 sprint reviews, see OSAC-2064). **ci-observe** holds seven pages for the
-VMaaS, CaaS and BMaaS E2E suites: **CI Observe — Overview** (the entry page),
+VMaaS, CaaS and BMaaS E2E suites and the four integration suites of the
+Tests workflow: **CI Observe — Overview** (the entry page),
 **CI Observe — Where the time goes**, **CI Observe — Why runs fail**, **CI
 Observe — Test history**, **CI Observe — Pull requests**, **CI Observe — Runs**
 and **CI Observe — E2E run**. See
@@ -539,7 +540,7 @@ the shortest store shows gaps, not zeros.
 | Run artifact: failed tests, JUnit, `failure.json`, pod logs, cluster snapshots | GitHub | 30 days |
 | Job history | workflow exporter SQLite | 30 days; every 30 minutes the exporter lists the completed runs of the last 48 hours and stores what its polling missed |
 | The last check against GitHub | `ci-observe-audit.json` next to the stores | until the next daily check |
-| VMaaS, CaaS and BMaaS suite runs with their job timelines | `trends.db` (`suite_runs`) | 90 days (`CI_OBSERVE_KEEP_DAYS`) |
+| ci-observe suite runs (E2E and integration) with their job timelines | `trends.db` (`suite_runs`) | 90 days (`CI_OBSERVE_KEEP_DAYS`) |
 | Per-test results and the daily rollup | `trends.db` | 90 days |
 | Per-test time split, waits and fixtures from the traces | `trends.db` (span rollup) | 90 days |
 | Pull request history, rebases, reviews and queue attempts | exporter `prs.db` | 90 days |

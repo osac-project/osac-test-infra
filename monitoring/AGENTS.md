@@ -4,7 +4,7 @@ Read [`ci-observe/observability.md`](ci-observe/observability.md) before you add
 
 Hard rules:
 
-- ci-observe covers the VMaaS, CaaS and BMaaS E2E suites only. Netris, stretched, agentless, full regression, unit and integration tests are out of scope; `ci_observe_phases.SUITE_WORKFLOWS` is the list.
+- ci-observe covers the VMaaS, CaaS and BMaaS E2E suites and the four integration suites of the osac mono-repo's Tests workflow (fulfillment, operator, BMF, CaaS). Netris, stretched, agentless, full regression, every other Tests leg (unit tests, contract checks, the installer, preflight and AAP suites) and the unit tests are out of scope; `ci_observe_phases.SUITE_WORKFLOWS` is the list.
 - There are seven ci-observe pages. **Overview** is the entry page. **Where the time goes**, **Why runs fail** and **Test history** look across runs and share the Window, Suite, Started by and Repository filters. **Pull requests** covers all pull requests of a window, then one. **All runs** lists runs and opens one. **E2E run** shows one recorded run; `capture_id` remains its internal key. A new question becomes a section on one of them, not a new page.
 - One vocabulary: suites, triggers, phases, failure causes and test keys come from `scripts/ci_observe_phases.py`. A new workflow step needs a phase there; a test pins every step of the in-scope workflows.
 - Every panel description ends with "Population: … Time: … Unit: …": its population, its time axis and its unit. A windowed panel follows `$days`.

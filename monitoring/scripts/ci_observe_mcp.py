@@ -118,11 +118,15 @@ MAX_LOGINS_IN_FLIGHT = 500
 MAX_CODES_IN_FLIGHT = 500
 MAX_REDIRECT_URIS = 10
 
-SUITES = ("vmaas", "caas", "bmaas")
-TRIGGERS = ("pr", "merge_queue", "scheduled", "manual")
+SUITES = ("vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas")
+# The triggers a tool may ask for. The integration suites of the Tests
+# workflow are pull-request and push triggered, so "push" is askable.
+TRIGGERS = ("pr", "merge_queue", "scheduled", "manual", "push")
 REPOS = ("osac", "osac-test-infra")
 RESULTS = ("success", "failure", "cancelled")
-CAPTURE_ID_RULE = "^(vmaas|caas|bmaas)-(?:pr\\d+|main)-\\d+-a\\d+$"
+# A capture id names the suite whose artifact holds the run's JUnit file:
+# the three E2E suites and the Tests workflow's four integration suites.
+CAPTURE_ID_RULE = "^(vmaas|caas|bmaas|it-fulfillment|it-operator|it-bmf|it-caas)-(?:pr\\d+|main)-\\d+-a\\d+$"
 
 # The window a tool may ask for, by where its answer lives: the suite-run
 # archive and the pull requests are kept 90 days, the exporter's job
@@ -629,7 +633,8 @@ def _insight_tool(name: str, description: str, kind: str,
             "type": "object",
             "properties": {
                 "suite": {"type": "string", "enum": list(SUITES),
-                          "description": "The suite: vmaas, caas or bmaas. There is no default."},
+                          "description": "The suite: vmaas, caas, bmaas, it-fulfillment, it-operator, it-bmf"
+                                         " or it-caas. There is no default."},
                 "trigger": {"type": "string", "enum": list(TRIGGERS),
                             "description": "What started the runs. There is no default."},
                 "repo": {"type": "string", "enum": list(REPOS),
