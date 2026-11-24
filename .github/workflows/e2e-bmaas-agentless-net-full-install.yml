@@ -255,7 +255,11 @@ jobs:
   e2e:
     needs: [provision, push-secrets]
     runs-on: ${{ needs.provision.outputs.runner-label }}
-    timeout-minutes: 360
+    # 400m: the install steps sum to 360. A job timeout cancels the run, so the
+    # always() gathers and the redacting upload need time after "Prove one BMI"
+    # uses its full budget. The JIT runner is self-hosted and is not bound by
+    # the GitHub-hosted 6h cap.
+    timeout-minutes: 400
     permissions:
       contents: read
     steps:

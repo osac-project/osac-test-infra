@@ -374,7 +374,7 @@ class WorkflowContractTest(unittest.TestCase):
         e2e = document["jobs"]["e2e"]
         self.assertEqual(e2e["needs"], ["provision", "push-secrets"])
         self.assertEqual(e2e["runs-on"], "${{ needs.provision.outputs.runner-label }}")
-        self.assertEqual(e2e["timeout-minutes"], 360)
+        self.assertEqual(e2e["timeout-minutes"], 400)
         self.assertEqual(e2e["permissions"], {"contents": "read"})
         steps = e2e["steps"]
         joined = "\n".join(step.get("run", "") + str(step.get("uses", "")) for step in steps)
@@ -425,6 +425,13 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(names.index("Prove one BMI"), names.index("Gather infra diagnostics"))
         self.assertLess(names.index("Gather infra diagnostics"), names.index("Gather BMaaS diagnostics"))
         self.assertLess(names.index("Gather BMaaS diagnostics"), names.index("Gather and redact artifacts"))
+        install_budget = []
+        for step in steps:
+            if step.get("name") == "Gather infra diagnostics":
+                break
+            if "timeout-minutes" in step:
+                install_budget.append(step["timeout-minutes"])
+        self.assertGreaterEqual(e2e["timeout-minutes"] - sum(install_budget), 15)
         for step in steps:
             if "timeout-minutes" in step:
                 self.assertLessEqual(step["timeout-minutes"], 150)
