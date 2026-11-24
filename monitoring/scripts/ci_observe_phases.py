@@ -5,8 +5,8 @@ names a phase and a failure cause the same way:
 
 - a *suite run* is one VMaaS, CaaS or BMaaS E2E execution (a full-install
   run, a pull-request suite run, or one suite of a merge-queue run), or one
-  run of the osac mono-repo's "Tests" workflow for the four integration
-  suites (fulfillment, operator, BMF, CaaS; see IT_WORKFLOW);
+  run of the osac mono-repo's "Integration Tests" workflow for the four
+  integration suites (fulfillment, operator, BMF, CaaS; see IT_WORKFLOW);
 - a *phase* is a group of workflow steps (queue, CI setup, cluster and
   hosts, build, install OSAC, tests, logs and teardown);
 - a *cause* is the phase of the first step that failed, plus three causes no
@@ -97,10 +97,10 @@ SUITE_WORKFLOWS = {
         "e2e bmaas (pull requests)",
         "e2e bmaas (merge queue)",
     ),
-    # The osac mono-repo's "Tests" workflow: the exporter stores one of its
-    # runs under the name of the integration suite its one job ran (see
-    # workflow-exporter.py's _refine_integration_suite), so these read like
-    # any other suite's workflows.
+    # The osac mono-repo's "Integration Tests" workflow: the exporter stores
+    # one of its runs under the name of the integration suite its one job
+    # ran (see workflow-exporter.py's _refine_integration_suite), so these
+    # read like any other suite's workflows.
     "it-fulfillment": ("it fulfillment (tests)",),
     "it-operator": ("it operator (tests)",),
     "it-bmf": ("it bmf (tests)",),
@@ -109,17 +109,21 @@ SUITE_WORKFLOWS = {
 SUITE_PREFIXES = {suite: (f"e2e suite · {suite} · ",) for suite in SUITES if not suite.startswith("it-")}
 _WORKFLOW_SUITE = {name: suite for suite, names in SUITE_WORKFLOWS.items() for name in names}
 
-# The osac mono-repo's reusable "Tests" workflow (.github/workflows/tests.yml
-# of osac-project/osac). One run of it is one integration-test leg, and the
-# leg is the run's single job, named after its `kind` input
-# ("it-fulfillment-service", "it-osac-operator",
-# "it-bare-metal-fulfillment-operator", "it-caas"; a leg with a `dir` input
-# names that instead). The workflow also runs the unit, contract, installer,
-# preflight and AAP legs; those are out of scope, and a Tests run whose job
-# names none of the four kinds below stays outside the ci-observe population.
-# The runs are pull-request and push triggered on GitHub-hosted runners; no
-# merge-queue or scheduled variant exists today.
-IT_WORKFLOW = "Tests"
+# The osac mono-repo's integration-test matrix caller (.github/workflows/
+# integration-tests.yml of osac-project/osac, workflow name "Integration
+# Tests"). It calls the reusable tests.yml once per leg, and GitHub names
+# each run after the CALLER — so a run's workflow is "Integration Tests",
+# never tests.yml's own name "Tests". The leg is the run's single called
+# job, named after its `kind` input ("it-fulfillment-service",
+# "it-osac-operator", "it-bare-metal-fulfillment-operator", "it-caas";
+# the called job carries the caller's job name as a prefix, so the last
+# " / " part is the leg; a leg with a `dir` input names that instead).
+# The matrix also runs the unit, contract, installer, preflight and AAP
+# legs; those are out of scope, and an Integration Tests run whose job
+# names none of the four kinds below stays outside the ci-observe
+# population. The runs are pull-request and push triggered on
+# GitHub-hosted runners; no merge-queue or scheduled variant exists today.
+IT_WORKFLOW = "Integration Tests"
 IT_JOB_SUITES = {
     "it-fulfillment-service": "it-fulfillment",
     "it-osac-operator": "it-operator",

@@ -1198,14 +1198,15 @@ class WorkflowExporter:
 
     @staticmethod
     def _refine_integration_suite(record, jobs):
-        """Name a run of the osac mono-repo's Tests workflow after the
-        integration suite its one job ran, and make it an e2e row.
+        """Name a run of the osac mono-repo's Integration Tests workflow
+        after the integration suite its one job ran, and make it an e2e row.
 
-        A Tests run is one leg of the mono-repo's unit and integration matrix,
-        and the leg is the run's single job, named after its kind
-        ("it-fulfillment-service", ...; a called run may prefix the caller's
-        job name, so the last " / " part is the leg). The four in-scope kinds
-        become suite runs under their suite's workflow name
+        An Integration Tests run (the matrix caller of the reusable
+        tests.yml) is one leg of the mono-repo's unit and integration
+        matrix, and the leg is the run's single job, named after its kind
+        ("it-fulfillment-service", ...; the called job carries the caller's
+        job name as a prefix, so the last " / " part is the leg). The four
+        in-scope kinds become suite runs under their suite's workflow name
         (ci_observe_phases.IT_SUITE_WORKFLOWS), category "e2e", so every
         ci-observe reader maps them like any other suite run and the run
         index, the archive and the rollups count them. Every other leg (unit
@@ -3182,11 +3183,12 @@ class WorkflowExporter:
         this run, so the caller can skip the extra _fetch_run_jobs API call
         entirely.
 
-        A row still stored under the Tests workflow's own name is re-fetched
-        whatever its attempt says: its integration leg (and with it the
-        suite _refine_integration_suite names) is only readable from its
-        jobs, so a row stored before that refinement ran is re-examined
-        until it carries a suite's name or proves to be an out-of-scope leg.
+        A row still stored under the Integration Tests workflow's own name
+        is re-fetched whatever its attempt says: its integration leg (and
+        with it the suite _refine_integration_suite names) is only readable
+        from its jobs, so a row stored before that refinement ran is
+        re-examined until it carries a suite's name or proves to be an
+        out-of-scope leg.
         """
         with self._db() as conn:
             row = conn.execute(

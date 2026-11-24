@@ -192,7 +192,7 @@ def test_the_verify_job_of_a_pr_suite_is_ci_setup(phases):
         ("pull_request", "IT operator (Tests)", "it-operator", "pr"),
         ("pull_request", "IT BMF (Tests)", "it-bmf", "pr"),
         ("pull_request", "IT CaaS (Tests)", "it-caas", "pr"),
-        ("push", "Tests", "", "push"),
+        ("push", "Integration Tests", "", "push"),
     ],
 )
 def test_suite_and_trigger(phases, event, workflow, suite, trigger):

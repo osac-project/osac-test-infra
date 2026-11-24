@@ -1,7 +1,8 @@
-"""How workflow-exporter.py records the Tests workflow's runs.
+"""How workflow-exporter.py records the Integration Tests workflow's runs.
 
-The osac mono-repo's reusable "Tests" workflow (.github/workflows/tests.yml)
-runs one unit- or integration-test leg per run, and the leg is the run's
+The osac mono-repo's integration-test matrix caller (.github/workflows/
+integration-tests.yml, workflow name "Integration Tests") calls the reusable
+tests.yml once per unit- or integration-test leg, and the leg is the run's
 single job, named after its kind. The four integration legs ci-observe covers
 (it-fulfillment-service, it-osac-operator, it-bare-metal-fulfillment-operator,
 it-caas) are stored as e2e rows under their suite's workflow name, so every
@@ -21,7 +22,7 @@ import pytest
 
 from helpers import FakeResponse, make_gh_job, make_run, make_step
 
-TESTS = "Tests"
+TESTS = "Integration Tests"
 
 
 @pytest.fixture

@@ -658,7 +658,7 @@ def test_suite_workflows_are_the_counted_ones():
     assert audit.counted_workflow("IT CaaS (Tests)")
     assert not audit.counted_workflow("E2E VMaaS Netris Full Install")
     assert not audit.counted_workflow("E2E review relay")
-    assert not audit.counted_workflow("Tests")
+    assert not audit.counted_workflow("Integration Tests")
 
 
 def test_the_integration_suites_recount_and_place_their_bundles_like_model_md_says():
