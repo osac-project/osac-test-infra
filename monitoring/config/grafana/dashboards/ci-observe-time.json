@@ -185,7 +185,7 @@
         "label": "Started by",
         "type": "custom",
         "hide": 0,
-        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual,Pushes : push",
+        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual,Pushes : push,Flake detection : flake",
         "options": [
           {
             "text": "Any trigger",
@@ -216,6 +216,11 @@
             "text": "Pushes",
             "value": "push",
             "selected": false
+          },
+          {
+            "text": "Flake detection",
+            "value": "flake",
+            "selected": false
           }
         ],
         "current": {
@@ -226,7 +231,7 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0,
-        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, manual runs, or pushes to a branch (the integration suites)."
+        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, manual runs, pushes to a branch (the integration suites), or the flake-detection campaigns -- counted only when picked here, never under Any trigger."
       },
       {
         "name": "repo",

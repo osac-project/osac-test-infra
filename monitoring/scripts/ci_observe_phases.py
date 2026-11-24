@@ -5,8 +5,9 @@ names a phase and a failure cause the same way:
 
 - a *suite run* is one VMaaS, CaaS or BMaaS E2E execution (a full-install
   run, a pull-request suite run, or one suite of a merge-queue run), or one
-  run of the osac mono-repo's "Integration Tests" workflow for the four
-  integration suites (fulfillment, operator, BMF, CaaS; see IT_WORKFLOW);
+  in-scope integration leg of the osac mono-repo's Tests workflow for the
+  four integration suites (fulfillment, operator, BMF, CaaS; see
+  IT_WORKFLOW, CI_WORKFLOW and FLAKE_WORKFLOW);
 - a *phase* is a group of workflow steps (queue, CI setup, cluster and
   hosts, build, install OSAC, tests, logs and teardown);
 - a *cause* is the phase of the first step that failed, plus three causes no
@@ -97,33 +98,51 @@ SUITE_WORKFLOWS = {
         "e2e bmaas (pull requests)",
         "e2e bmaas (merge queue)",
     ),
-    # The osac mono-repo's "Integration Tests" workflow: the exporter stores
-    # one of its runs under the name of the integration suite its one job
-    # ran (see workflow-exporter.py's _refine_integration_suite), so these
-    # read like any other suite's workflows.
-    "it-fulfillment": ("it fulfillment (tests)",),
-    "it-operator": ("it operator (tests)",),
-    "it-bmf": ("it bmf (tests)",),
-    "it-caas": ("it caas (tests)",),
+    # The osac mono-repo's integration-test legs: the exporter stores each
+    # in-scope leg of an "Integration Tests" or "CI" run under its suite's
+    # name, and each flake-campaign repetition under the suite's
+    # flake-detection name (see workflow-exporter.py's
+    # _integration_leg_records), so these read like any other suite's
+    # workflows.
+    "it-fulfillment": ("it fulfillment (tests)", "it fulfillment (flake detection)"),
+    "it-operator": ("it operator (tests)", "it operator (flake detection)"),
+    "it-bmf": ("it bmf (tests)", "it bmf (flake detection)"),
+    "it-caas": ("it caas (tests)", "it caas (flake detection)"),
 }
 SUITE_PREFIXES = {suite: (f"e2e suite · {suite} · ",) for suite in SUITES if not suite.startswith("it-")}
 _WORKFLOW_SUITE = {name: suite for suite, names in SUITE_WORKFLOWS.items() for name in names}
 
-# The osac mono-repo's integration-test matrix caller (.github/workflows/
-# integration-tests.yml of osac-project/osac, workflow name "Integration
-# Tests"). It calls the reusable tests.yml once per leg, and GitHub names
-# each run after the CALLER — so a run's workflow is "Integration Tests",
-# never tests.yml's own name "Tests". The leg is the run's single called
-# job, named after its `kind` input ("it-fulfillment-service",
-# "it-osac-operator", "it-bare-metal-fulfillment-operator", "it-caas";
-# the called job carries the caller's job name as a prefix, so the last
-# " / " part is the leg; a leg with a `dir` input names that instead).
-# The matrix also runs the unit, contract, installer, preflight and AAP
-# legs; those are out of scope, and an Integration Tests run whose job
-# names none of the four kinds below stays outside the ci-observe
-# population. The runs are pull-request and push triggered on
-# GitHub-hosted runners; no merge-queue or scheduled variant exists today.
+# The osac mono-repo's three callers of the reusable tests.yml, which runs
+# one job per unit- or integration-test leg (.github/ci-tests.yml). GitHub
+# names each run after the CALLER, never tests.yml's own name "Tests", and
+# each leg is a called job named after its `kind` input ("it-fulfillment-service",
+# "it-osac-operator", "it-bare-metal-fulfillment-operator", "it-caas"; the
+# called job carries the caller's job name as a prefix, so the last " / "
+# part is the leg; a leg with a `dir` input names that instead).
+#
+# "Integration Tests" (.github/workflows/integration-tests.yml) runs EVERY
+# integration leg on a schedule (2x/day), by hand and from the nightly
+# build: one run holds all of them at once.
+# "CI" (.github/workflows/ci.yml) runs on every pull request and merge
+# queue entry: its `plan` job picks the legs the change touches, so a run
+# holds zero or more of them among its other checks (unit, contract, helm,
+# ui) -- the bulk of all integration volume.
+# "Flake detection" (.github/workflows/flake-detection.yml) runs campaigns
+# (~2x/week, by hand): a matrix of repetition jobs ("Integration repetition
+# N", up to 256) each calls Integration Tests again, so ONE campaign run
+# holds a hundred-plus executions of every leg on one FIXED commit,
+# deliberately repeated to measure flakiness. The exporter stores one suite
+# row per repetition (each repetition job has its own id) under the suite's
+# flake-detection name below, with the trigger "flake".
+#
+# The matrices also run the unit, contract, installer, preflight and AAP
+# legs; those are out of scope, and only the four kinds below name a suite
+# ci-observe counts. The exporter stores one suite row per in-scope leg job
+# a run contains (workflow-exporter.py's _integration_leg_records), so a
+# multi-leg run counts each leg with its own conclusion.
 IT_WORKFLOW = "Integration Tests"
+CI_WORKFLOW = "CI"
+FLAKE_WORKFLOW = "Flake detection"
 IT_JOB_SUITES = {
     "it-fulfillment-service": "it-fulfillment",
     "it-osac-operator": "it-operator",
@@ -137,6 +156,18 @@ IT_SUITE_WORKFLOWS = {
     "it-operator": "IT operator (Tests)",
     "it-bmf": "IT BMF (Tests)",
     "it-caas": "IT CaaS (Tests)",
+}
+# The stored workflow name of one integration suite's flake-campaign
+# repetition rows: the same suites, named by their caller so trigger_key
+# reads "flake" off them (the way "(merge queue)" names the merge queue)
+# and the default population can leave the campaigns out -- a hundred
+# repetitions of one fixed commit would swamp every pass rate. They are
+# counted only when the Started by filter asks for them by name.
+IT_FLAKE_SUITE_WORKFLOWS = {
+    "it-fulfillment": "IT fulfillment (Flake detection)",
+    "it-operator": "IT operator (Flake detection)",
+    "it-bmf": "IT BMF (Flake detection)",
+    "it-caas": "IT CaaS (Flake detection)",
 }
 
 PR_IN_NAME_RE = re.compile(r"#(\d+)")
@@ -161,13 +192,14 @@ def suite_label(suite: str) -> str:
 
 # -- triggers -----------------------------------------------------------------
 
-TRIGGERS = ("pr", "merge_queue", "scheduled", "manual", "push", "other")
+TRIGGERS = ("pr", "merge_queue", "scheduled", "manual", "push", "flake", "other")
 TRIGGER_LABELS = {
     "pr": "Pull request",
     "merge_queue": "Merge queue",
     "scheduled": "Scheduled",
     "manual": "Manual",
     "push": "Push",
+    "flake": "Flake detection",
     "other": "Other",
 }
 
@@ -179,6 +211,8 @@ def trigger_key(event: str | None, workflow: str | None) -> str:
     name = (workflow or "").strip().lower()
     if event == "merge_group" or name.endswith("(merge queue)"):
         return "merge_queue"
+    if name.endswith("(flake detection)") or name == FLAKE_WORKFLOW.lower():
+        return "flake"
     if event == "pull_request" or name.startswith("e2e suite · ") or name.endswith((" pr suite", "(pull requests)")):
         return "pr"
     if event == "schedule":
@@ -188,6 +222,19 @@ def trigger_key(event: str | None, workflow: str | None) -> str:
     if event == "push":
         return "push"
     return "other"
+
+
+def trigger_selected(selected: str, trigger: str) -> bool:
+    """Whether a row's trigger passes the Started by filter. "all" is the
+    suite-health population: every trigger except the flake-detection
+    campaigns, whose hundred-plus repetitions of one fixed commit would
+    swamp every pass rate -- their pass rate IS the flake rate, so they are
+    counted only when asked for by name."""
+    if selected == "flake":
+        return trigger == "flake"
+    if trigger == "flake":
+        return False
+    return selected == "all" or trigger == selected
 
 
 def pr_number(pr_display: str | None, workflow: str | None) -> str:

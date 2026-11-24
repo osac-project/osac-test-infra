@@ -185,10 +185,12 @@ def test_tools_list_names_every_tool_with_its_required_parameters(config):
 
 
 def test_the_suite_vocabulary_covers_the_integration_suites(config):
-    """The four Tests-workflow integration suites are askable, and so is
-    the push trigger they run under."""
+    """The four Tests-workflow integration suites are askable, and so are
+    the push trigger they run under and the flake-detection campaigns
+    (which only an explicit trigger picks)."""
     assert mcp.SUITES == ("vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas")
     assert "push" in mcp.TRIGGERS
+    assert "flake" in mcp.TRIGGERS
     _, answer = rpc(config, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     tools = {tool["name"]: tool for tool in answer["result"]["tools"]}
     for name in ("suite_health", "failing_tests", "test_history", "list_runs"):

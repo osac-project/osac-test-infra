@@ -89,7 +89,7 @@ def test_the_filters_are_window_suite_trigger_and_repository(name):
         "all", "vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas",
     ]
     assert [option["value"] for option in variables["trigger"]["options"]] == [
-        "all", "pr", "merge_queue", "scheduled", "manual", "push",
+        "all", "pr", "merge_queue", "scheduled", "manual", "push", "flake",
     ]
     assert [option["value"] for option in variables["repo"]["options"]] == ["all", "osac", "osac-test-infra"]
     for variable in variables.values():

@@ -27,14 +27,16 @@ a note in the document, never an error):
 
 Common parameters: days (7 by default, at most KEEP_DAYS), suite (all,
 vmaas, caas, bmaas, it-fulfillment, it-operator, it-bmf, it-caas), repo (all, osac, osac-test-infra), trigger (all, pr,
-merge_queue, scheduled, manual). Every number compares the window with the
+merge_queue, scheduled, manual, push, flake). Every number compares the window with the
 window just before it when the stores reach back that far.
 
 The population is the standard VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs
 (ci_observe_phases.suite_key): a full-install run, a pull-request suite run,
-one suite of a merge-queue run, or one run of the osac mono-repo's Tests
-workflow for the four integration suites (pull-request and push triggered).
-GitHub owns pass or fail.
+one suite of a merge-queue run, or one in-scope leg of the osac mono-repo's
+Tests workflow for the four integration suites (pull-request, merge-queue
+and push triggered). The flake-detection campaigns re-run one fixed commit
+a hundred-plus times, so their rows are counted only when the trigger
+filter asks for them by name. GitHub owns pass or fail.
 
 Stores, all read-only here:
 - workflow-exporter.db `jobs` (live, 30 days) and `captures` (run page
@@ -78,6 +80,12 @@ import ci_observe_phases as phases
 import ci_observe_spans
 
 logger = logging.getLogger(__name__)
+
+# The clause every population string ends with: the flake-detection
+# campaigns re-run one fixed commit a hundred-plus times, so the Started by
+# filter counts them only when asked for by name
+# (ci_observe_phases.trigger_selected).
+FLAKE_POPULATION_NOTE = "flake-detection campaign runs are counted only when asked for by name"
 
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 KEEP_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
@@ -215,7 +223,7 @@ class Filters:
     """The common parameters, validated. An unknown value is ignored with a
     note, never an error."""
 
-    TRIGGERS = ("pr", "merge_queue", "scheduled", "manual", "push", "other")
+    TRIGGERS = ("pr", "merge_queue", "scheduled", "manual", "push", "flake", "other")
 
     def __init__(self, params, now):
         self.notes = []
@@ -279,7 +287,7 @@ class Filters:
             return False
         if self.repo and fact["repo"] != self.repo:
             return False
-        return self.trigger == "all" or fact["trigger"] == self.trigger
+        return phases.trigger_selected(self.trigger, fact["trigger"])
 
     def window(self):
         return {
@@ -991,7 +999,7 @@ class CIObserveInsights:
             if filters.repo and row.get("repo") != filters.repo:
                 continue
             trigger = row.get("trigger") or phases.trigger_key("", row.get("workflow"))
-            if filters.trigger != "all" and trigger != filters.trigger:
+            if not phases.trigger_selected(filters.trigger, trigger):
                 continue
             row["suite_key"] = suite
             row["trigger"] = trigger
@@ -1094,7 +1102,8 @@ class CIObserveInsights:
             "population": (
                 f"VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs created in"
                 f" the last {filters.days} days (full-install, pull-request and merge-queue E2E suite runs,"
-                " and the Tests workflow's pull-request and push integration runs); GitHub owns pass or fail"
+                " and the Tests workflow's pull-request and push integration runs);"
+                f" {FLAKE_POPULATION_NOTE}; GitHub owns pass or fail"
             ),
             "tiles": [tile],
             "suites": suites,
@@ -1275,7 +1284,8 @@ class CIObserveInsights:
             "population": (
                 f"passing VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs in"
                 f" the last {filters.days} days for the phases and "
-                "steps; every finished run for the runner wait and the hours"
+                "steps; every finished run for the runner wait and the hours; "
+                f"{FLAKE_POPULATION_NOTE}"
             ),
             "phases": self._phase_rows(finished, filters),
             "phase_table": phase_table,
@@ -1444,7 +1454,7 @@ class CIObserveInsights:
             "population": (
                 f"failed VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs in the"
                 f" last {filters.days} days; a run's cause is the "
-                "phase of its first failed step"
+                f"phase of its first failed step; {FLAKE_POPULATION_NOTE}"
             ),
             "tiles": [tile],
             "by_suite": self._cause_rows(finished, filters),
@@ -1644,7 +1654,7 @@ class CIObserveInsights:
             "population": (
                 f"tests of VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs in"
                 f" the last {filters.days} days, from the JUnit "
-                "artifacts; a skipped test is not a run"
+                f"artifacts; a skipped test is not a run; {FLAKE_POPULATION_NOTE}"
             ),
             "tests": tests[:limit],
             "options": options,
@@ -1676,7 +1686,8 @@ class CIObserveInsights:
             "population": (
                 f"runs of one test in the VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS"
                 f" suite runs of the last {filters.days} days, from "
-                "the JUnit reports; where its time goes, from the recorded runs' traces"
+                f"the JUnit reports; where its time goes, from the recorded runs' traces; "
+                f"{FLAKE_POPULATION_NOTE}"
             ),
             "summary": [], "runs": [], "daily": [], "breakdown": [], "breakdown_daily": [], "waits": [],
             "fixtures": [], "messages": [],
@@ -1958,7 +1969,7 @@ class CIObserveInsights:
             "population": (
                 f"poll_until waits of recorded VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT"
                 f" CaaS runs in the last {filters.days} days, from "
-                "the span rollup of their traces"
+                f"the span rollup of their traces; {FLAKE_POPULATION_NOTE}"
             ),
             "kinds": kinds,
             "waits": signatures[:100],

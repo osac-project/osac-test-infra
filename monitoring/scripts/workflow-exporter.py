@@ -127,6 +127,15 @@ JOB_COLUMNS = [
 TIMELINE_BACKFILL_PER_CYCLE = int(os.getenv("TIMELINE_BACKFILL_PER_CYCLE", "12"))
 TIMELINE_BACKFILL_MIN_RATE_LIMIT = int(os.getenv("TIMELINE_BACKFILL_MIN_RATE_LIMIT", "1500"))
 
+# How many stored CI and Integration Tests runs get their integration legs
+# examined per poll cycle (see WorkflowExporter._backfill_integration_legs_
+# if_needed), and the GitHub budget below which that catch-up waits. One run
+# costs one jobs call; forty per 90-second cycle re-reads a month of CI runs
+# (~6,700, each holding zero or more legs) in a few hours, then stays idle:
+# rows ingested after the first examination already carry their legs.
+INTEGRATION_LEG_BACKFILL_PER_CYCLE = int(os.getenv("INTEGRATION_LEG_BACKFILL_PER_CYCLE", "40"))
+INTEGRATION_LEG_BACKFILL_MIN_RATE_LIMIT = int(os.getenv("INTEGRATION_LEG_BACKFILL_MIN_RATE_LIMIT", "1500"))
+
 # The polling reads the 50 newest completed runs per repo and follows the runs
 # it saw active. A burst of more than 50 runs between two polls, a restart or a
 # failed poll loses runs for good, and a run whose result changes under the same
@@ -981,10 +990,10 @@ class WorkflowExporter:
                        "e2e on unlock label", "reserve e2e comment"],
         "ai":         ["ai diagnostic"],
         # Every suite workflow's stored name categorizes as e2e, not just the
-        # ones with "e2e" in them: the integration suites' refined names
+        # ones with "e2e" in them: the integration suites' leg-row names
         # ("IT fulfillment (Tests)", ...) carry "tests", which the ci patterns
         # below would otherwise catch -- flipping rows the exporter's
-        # _refine_integration_suite already stored as e2e (the startup
+        # _integration_leg_records already stores as e2e (the startup
         # recategorization does exactly that). Derived from
         # ci_observe_phases.SUITE_WORKFLOWS so a future suite whose name
         # lacks "e2e" cannot hit the same bug.
@@ -1138,10 +1147,12 @@ class WorkflowExporter:
     @staticmethod
     def _is_plumbing(job):
         """A job that is not a test of its own run row: a gate/precondition job
-        (any workflow), or a job of the pull-request flow's run (orchestration,
-        or a suite: marked by _refine_pipeline_category, only in that flow's own
-        workflows). A flow run's suites are stored as rows of their own (see
-        _suite_records), so the run's row holds none of their steps."""
+        (any workflow), or a job whose steps belong to a row of its own -- a
+        suite of the pull-request flow's run, or an integration leg of an
+        Integration Tests or CI run (marked by _refine_pipeline_category and
+        _refine_integration_legs, only in those workflows). Such a suite or
+        leg is stored as a row of its own (see _suite_records), so the run's
+        row holds none of its steps."""
         return (
             bool(job.get("pipeline_plumbing"))
             or bool(job.get("pipeline_suite"))
@@ -1184,11 +1195,11 @@ class WorkflowExporter:
     def _refine_run_record(record, jobs, active=False):
         """Refine a run record from its jobs, wherever they are known: the
         pull-request flow's job marks (see _refine_pipeline_category), then
-        the Tests workflow's leg-to-suite naming (see
-        _refine_integration_suite). Both read the jobs before the record's
+        the integration legs' stored-elsewhere marks (see
+        _refine_integration_legs). Both read the jobs before the record's
         steps and failure classification are built."""
         WorkflowExporter._refine_pipeline_category(record, jobs, active=active)
-        WorkflowExporter._refine_integration_suite(record, jobs)
+        WorkflowExporter._refine_integration_legs(record, jobs)
 
     @staticmethod
     def _refine_pipeline_category(record, jobs, active=False):
@@ -1207,50 +1218,85 @@ class WorkflowExporter:
                 j["pipeline_suite"] = True
 
     @staticmethod
-    def _refine_integration_suite(record, jobs):
-        """Name a run of the osac mono-repo's Integration Tests workflow
-        after the integration suite its one job ran, and make it an e2e row.
+    def _integration_leg_kind(job):
+        """The integration-test kind of a called Tests job ("it-fulfillment-service"),
+        "" for any other job. A leg of the osac mono-repo's unit and integration
+        matrix is a called job of the reusable tests.yml, and it carries its
+        caller's job name as a prefix, so the last " / " part is the leg."""
+        return (job.get("name") or "").strip().rsplit(" / ", 1)[-1].lower()
 
-        An Integration Tests run (the matrix caller of the reusable
-        tests.yml) is one leg of the mono-repo's unit and integration
-        matrix, and the leg is the run's single job, named after its kind
-        ("it-fulfillment-service", ...; the called job carries the caller's
-        job name as a prefix, so the last " / " part is the leg). The four
-        in-scope kinds become suite runs under their suite's workflow name
-        (ci_observe_phases.IT_SUITE_WORKFLOWS), category "e2e", so every
-        ci-observe reader maps them like any other suite run and the run
-        index, the archive and the rollups count them. Every other leg (unit
+    @staticmethod
+    def _is_integration_leg_run(record):
+        """True for a run of the osac mono-repo's three integration-test
+        callers (ci_observe_phases.IT_WORKFLOW, CI_WORKFLOW,
+        FLAKE_WORKFLOW): the scheduled, manual and nightly Integration Tests
+        workflow, the pull-request and merge-queue CI workflow whose matrix
+        holds the legs most runs actually contain, and the flake-detection
+        campaigns whose repetition matrix holds a hundred-plus executions of
+        every leg on one fixed commit."""
+        name = (record.get("workflow") or "").strip().lower()
+        return name in (ci_observe_phases.IT_WORKFLOW.lower(), ci_observe_phases.CI_WORKFLOW.lower(),
+                        ci_observe_phases.FLAKE_WORKFLOW.lower())
+
+    @staticmethod
+    def _refine_integration_legs(record, jobs):
+        """Mark the in-scope integration legs of an Integration Tests, CI or
+        Flake detection run as stored elsewhere (see
+        _integration_leg_records): each of the four in-scope kinds
+        (ci_observe_phases.IT_JOB_SUITES) becomes an e2e row of its own
+        under its suite's workflow name, so the run's own row keeps the
+        workflow's name and category and holds none of their steps -- the
+        same shape the pull-request flow's suites follow (see
+        _refine_pipeline_category). A scheduled Integration Tests run
+        contains every leg; a CI run contains the legs its paths-filter
+        plan picked, zero or more; a flake-detection campaign contains a
+        repetition of every leg per repetition job. Every other leg (unit
         tests, contract checks, the installer, preflight and AAP suites) is
-        out of scope: the row keeps the workflow's own name and category.
-        Called wherever _refine_pipeline_category is, before the failure
-        classification, which reads the category. No-op for any other
-        workflow."""
-        if (record.get("workflow") or "").strip().lower() != ci_observe_phases.IT_WORKFLOW.lower():
+        out of scope and stays a job of the run's own row. Called wherever
+        _refine_pipeline_category is, before the failure classification.
+        No-op for any other workflow."""
+        if not WorkflowExporter._is_integration_leg_run(record):
             return
         for job in jobs or []:
-            leg = (job.get("name") or "").strip().rsplit(" / ", 1)[-1].lower()
-            suite = ci_observe_phases.IT_JOB_SUITES.get(leg)
-            if not suite:
-                continue
-            workflow = ci_observe_phases.IT_SUITE_WORKFLOWS[suite]
-            record["workflow"] = workflow
-            record["display_name"] = f"{record.get('repo') or ''} / {workflow}"
-            record["category"] = "e2e"
-            return
+            if ci_observe_phases.IT_JOB_SUITES.get(WorkflowExporter._integration_leg_kind(job)):
+                job["pipeline_suite"] = True
 
     SUITE_ROW_KIND: ClassVar[dict[str, str]] = {
         "E2E for pull requests": "pull requests",
         "E2E for the merge queue": "merge queue",
     }
 
+    # The stored workflow names of the integration suites' leg rows,
+    # lowercased (ci_observe_phases.IT_SUITE_WORKFLOWS,
+    # IT_FLAKE_SUITE_WORKFLOWS): a leg row wears one with a job id; a
+    # run-level row wearing the plain Tests name is a stale rename of the
+    # old single-suite refine (see git history: _refine_integration_suite),
+    # which named a whole Integration Tests run after its first in-scope
+    # leg whatever the job order happened to be. The leg catch-up restores
+    # those run rows to the workflow's own name.
+    INTEGRATION_SUITE_WORKFLOWS = frozenset(
+        name.lower()
+        for names in (ci_observe_phases.IT_SUITE_WORKFLOWS, ci_observe_phases.IT_FLAKE_SUITE_WORKFLOWS)
+        for name in names.values()
+    )
+
     def _suite_records(self, record, jobs, active=False):
-        """One "e2e" row per suite that produced a result in a pull-request-flow
-        run (vmaas, caas, bmaas, netris ...), each counted as one e2e test,
-        built from the run's row and the suite's own jobs. [] for any other
-        workflow. The row's id is the id of the suite's test job, its "suite"
-        and "run_id" keys tell it from a run (the active-run tracking is by run)."""
-        if record.get("workflow") not in WorkflowExporter.PIPELINE_WORKFLOW_NAMES or not jobs:
+        """One "e2e" row per suite that produced a result in a run, each
+        counted as one e2e test and built from the run's row and the suite's
+        own jobs: the pull-request flow's suites (vmaas, caas, bmaas,
+        netris ...), and the integration legs of an Integration Tests or CI
+        run. [] for any other workflow. The row's id is the id of the
+        suite's main job, its "suite" and "run_id" keys tell it from a run
+        (the active-run tracking is by run)."""
+        if not jobs:
             return []
+        if record.get("workflow") in WorkflowExporter.PIPELINE_WORKFLOW_NAMES:
+            return self._flow_suite_records(record, jobs, active)
+        return self._integration_leg_records(record, jobs, active)
+
+    def _flow_suite_records(self, record, jobs, active=False):
+        """The pull-request flow's rows (see _suite_records): one per suite
+        whose caller job appears in the run's jobs."""
         groups = {}
         for job in jobs:
             suite = self._suite_of(job)
@@ -1259,59 +1305,95 @@ class WorkflowExporter:
         kind = self.SUITE_ROW_KIND.get(record["workflow"], record["workflow"])
         rows = []
         for suite, group in groups.items():
-            result = self._suite_result(group, active)
-            if not result:
-                continue
             main = next((j for j in group if (j.get("name") or "").rstrip().endswith(" / e2e")), group[0])
-            started = min((j["started_at"] for j in group if j.get("started_at")), default="")
-            ended = max((j["completed_at"] for j in group if j.get("completed_at")), default="")
-            duration_s = 0.0
-            if started:
-                try:
-                    t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
-                    t1 = (
-                        datetime.fromisoformat(ended.replace("Z", "+00:00"))
-                        if ended and result in ("success", "failure")
-                        else datetime.now(timezone.utc)
-                    )
-                    duration_s = max(0.0, (t1 - t0).total_seconds())
-                except (ValueError, TypeError):
-                    pass
-            workflow = f"E2E {suite} ({kind})"
-            row = {k: v for k, v in record.items() if k != "zombie"}
-            row.update({
-                "id": main["id"],
-                "workflow": workflow,
-                "display_name": f"{record['repo']} / {workflow}",
-                "category": "e2e",
-                "status": result,
-                "conclusion": "" if result in ("in_progress", "queued") else result,
-                "duration_s": round(duration_s) if duration_s is not None else None,
-                "duration": self._fmt_duration(duration_s),
-                "updated_at": ended if result in ("success", "failure") else "",
-                "url": main.get("html_url") or record.get("url", ""),
-                "runner_name": self._extract_runner_names(group),
-                "steps": self._extract_step_durations(group),
-                # The suite's own jobs, not the run's: a merge-queue run
-                # holds every suite, and each row times only its own.
-                "timeline_json": json.dumps(self._extract_timeline(group), separators=(",", ":")),
-                "failure_reason": "",
-                "failed_step": "",
-                "suite": True,
-                "run_id": record["id"],
-                # The attempt the suite's own test job ran in. A re-run of the
-                # failed jobs moves the run to the next attempt, and a suite
-                # that did not run again keeps its job, and its attempt.
-                "run_attempt": main.get("run_attempt") or record.get("run_attempt"),
-            })
-            failed = self._extract_failed_steps(group) if result == "failure" else []
-            if result == "failure":
-                row["failure_reason"] = self._classify_failure_reason("e2e", failed, group)
-                if failed:
-                    row["failed_step"] = "; ".join(f["display"] for f in failed)
-            row["_failed"] = failed
-            rows.append(row)
+            row = self._suite_row(record, group, f"E2E {suite} ({kind})", main, active)
+            if row:
+                rows.append(row)
         return rows
+
+    def _integration_leg_records(self, record, jobs, active=False):
+        """The integration rows (see _suite_records): one per in-scope
+        integration leg JOB the run contains -- a leg is one called job, so
+        a CI or Integration Tests run yields one row per leg it holds and a
+        flake-detection campaign one row per repetition (each repetition
+        job has its own id) -- each built from the run's record and that
+        job, under the suite's workflow name so every ci-observe reader
+        maps it like any other suite run: IT_SUITE_WORKFLOWS for the Tests
+        callers, IT_FLAKE_SUITE_WORKFLOWS for the campaigns (the name is
+        what trigger_key reads "flake" off, and what keeps the campaigns
+        out of the default population). A leg that was skipped, never
+        started or was cancelled produced no result and gets no row: the
+        run's own row still shows it."""
+        if not WorkflowExporter._is_integration_leg_run(record):
+            return []
+        flake = (record.get("workflow") or "").strip().lower() == ci_observe_phases.FLAKE_WORKFLOW.lower()
+        names = ci_observe_phases.IT_FLAKE_SUITE_WORKFLOWS if flake else ci_observe_phases.IT_SUITE_WORKFLOWS
+        rows = []
+        for job in jobs:
+            suite = ci_observe_phases.IT_JOB_SUITES.get(WorkflowExporter._integration_leg_kind(job))
+            if not suite:
+                continue
+            group = [{**job, "pipeline_suite": False}]
+            row = self._suite_row(record, group, names[suite], group[0], active)
+            if row:
+                rows.append(row)
+        return rows
+
+    def _suite_row(self, record, group, workflow, main, active=False):
+        """One suite's row (a pull-request flow's suite or an integration
+        leg): the run's record under the suite's own workflow name, its id
+        the suite's main job id, its status, conclusion, duration, steps and
+        timeline the group's own -- a merge-queue run holds every suite and
+        a CI run every leg, and each row times only its own. None when the
+        group produced no result (skipped, cancelled, never started)."""
+        result = self._suite_result(group, active)
+        if not result:
+            return None
+        started = min((j["started_at"] for j in group if j.get("started_at")), default="")
+        ended = max((j["completed_at"] for j in group if j.get("completed_at")), default="")
+        duration_s = 0.0
+        if started:
+            try:
+                t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                t1 = (
+                    datetime.fromisoformat(ended.replace("Z", "+00:00"))
+                    if ended and result in ("success", "failure")
+                    else datetime.now(timezone.utc)
+                )
+                duration_s = max(0.0, (t1 - t0).total_seconds())
+            except (ValueError, TypeError):
+                pass
+        row = {k: v for k, v in record.items() if k != "zombie"}
+        row.update({
+            "id": main["id"],
+            "workflow": workflow,
+            "display_name": f"{record['repo']} / {workflow}",
+            "category": "e2e",
+            "status": result,
+            "conclusion": "" if result in ("in_progress", "queued") else result,
+            "duration_s": round(duration_s) if duration_s is not None else None,
+            "duration": self._fmt_duration(duration_s),
+            "updated_at": ended if result in ("success", "failure") else "",
+            "url": main.get("html_url") or record.get("url", ""),
+            "runner_name": self._extract_runner_names(group),
+            "steps": self._extract_step_durations(group),
+            "timeline_json": json.dumps(self._extract_timeline(group), separators=(",", ":")),
+            "failure_reason": "",
+            "failed_step": "",
+            "suite": True,
+            "run_id": record["id"],
+            # The attempt the suite's own test job ran in. A re-run of the
+            # failed jobs moves the run to the next attempt, and a suite
+            # that did not run again keeps its job, and its attempt.
+            "run_attempt": main.get("run_attempt") or record.get("run_attempt"),
+        })
+        failed = self._extract_failed_steps(group) if result == "failure" else []
+        if result == "failure":
+            row["failure_reason"] = self._classify_failure_reason("e2e", failed, group)
+            if failed:
+                row["failed_step"] = "; ".join(f["display"] for f in failed)
+        row["_failed"] = failed
+        return row
 
     @staticmethod
     def _is_gate_only_failure(jobs):
@@ -1648,6 +1730,19 @@ class WorkflowExporter:
                     refreshed INTEGER,
                     error TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (repo, day)
+                )
+            """)
+            # One row per run whose integration legs the leg catch-up
+            # examined (see _backfill_integration_legs_if_needed): the mark
+            # that keeps a runless re-examination from repeating forever, and
+            # the timestamp whose minimum bounds the catch-up to rows stored
+            # before the first examination -- rows ingested since already
+            # carry their legs. The table holds one small row per examined
+            # run and never grows after the initial catch-up drains.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS integration_leg_checks (
+                    run_id INTEGER PRIMARY KEY,
+                    checked_at TEXT NOT NULL
                 )
             """)
             # The capture registry the request path reads (see
@@ -2000,12 +2095,8 @@ class WorkflowExporter:
 
     def _upsert_job(self, record):
         """Insert a job record, or overwrite it if a row with the same id
-        already exists but with an older run_attempt, with the same attempt
-        and another, non-empty conclusion, or with the Tests workflow's own
-        name where the new row names the integration suite its leg ran (see
-        _refine_integration_suite: the leg is only readable from the jobs,
-        so a row stored before that refinement ran is re-examined and then
-        overwritten with the suite's name).
+        already exists but with an older run_attempt, or with the same attempt
+        and another, non-empty conclusion.
 
         A GitHub run keeps the same id across re-runs (e.g. "re-run failed
         jobs") -- only run_attempt increments and the run's own
@@ -2039,10 +2130,8 @@ class WorkflowExporter:
                 f"ON CONFLICT(id) DO UPDATE SET {update_clause} "
                 f"WHERE excluded.run_attempt > jobs.run_attempt "
                 f"OR (excluded.run_attempt = jobs.run_attempt AND COALESCE(excluded.conclusion, '') != '' "
-                f"AND COALESCE(excluded.conclusion, '') != COALESCE(jobs.conclusion, '')) "
-                f"OR (LOWER(COALESCE(jobs.workflow, '')) = :tests_name "
-                f"AND LOWER(COALESCE(excluded.workflow, '')) != :tests_name)",
-                {**row, "tests_name": ci_observe_phases.IT_WORKFLOW.lower()},
+                f"AND COALESCE(excluded.conclusion, '') != COALESCE(jobs.conclusion, ''))",
+                row,
             )
             return cur.rowcount > 0
 
@@ -2137,14 +2226,7 @@ class WorkflowExporter:
                 self._refine_pipeline_category(stub, jobs)
                 group = jobs
             else:
-                # A suite row: its jobs are the ones under its suite's caller
-                # job ("vmaas / e2e-vmaas-full-install / e2e"), unmarked.
-                suite = (row["workflow"] or "").split(" ", 2)[1] if " " in (row["workflow"] or "") else ""
-                group = [
-                    {**job, "pipeline_suite": False}
-                    for job in jobs
-                    if self._suite_of(job) and self._suite_of(job).lower() == suite.lower()
-                ]
+                group = self._suite_row_group(jobs, row["workflow"], row["id"])
             timeline = json.dumps(self._extract_timeline(group), separators=(",", ":"))
             with self._db() as conn:
                 conn.execute(
@@ -2155,6 +2237,127 @@ class WorkflowExporter:
         if updated:
             logger.info("Stored the job timeline of %d earlier E2E row(s)", updated)
         return updated
+
+    def _suite_row_group(self, jobs, workflow, row_id):
+        """The jobs a stored suite row keeps (see _backfill_timelines_if_needed):
+        the ones under its suite's caller job ("vmaas / e2e-vmaas-full-install
+        / e2e"), or, for an integration leg row, its own job -- a flake
+        campaign holds a repetition per leg, and the row's id is the
+        repetition job's. Unmarked either way, the same group the row was
+        stored from."""
+        name = (workflow or "").strip().lower()
+        if name in WorkflowExporter.INTEGRATION_SUITE_WORKFLOWS:
+            return [
+                {**job, "pipeline_suite": False}
+                for job in jobs
+                if job.get("id") == row_id
+            ]
+        suite = (workflow or "").split(" ", 2)[1] if " " in (workflow or "") else ""
+        return [
+            {**job, "pipeline_suite": False}
+            for job in jobs
+            if self._suite_of(job) and self._suite_of(job).lower() == suite.lower()
+        ]
+
+    def _backfill_integration_legs_if_needed(self, limit=None):
+        """Give the integration legs of already-stored runs the suite rows
+        this refinement introduced (see _integration_leg_records).
+
+        A run's legs are only readable from its jobs, and its own row never
+        changes shape once they are stored, so rows stored before the
+        refinement ran are examined here instead of on every listing pass
+        (see _needs_upsert): every stored CI, Integration Tests and Flake
+        detection run row created before the first examination -- roughly
+        the ~6,700 CI rows of a full 30-day window, most holding one or
+        more legs -- plus the rows the old single-suite refine renamed to a
+        suite's name, which are restored to the workflow's own name and
+        category while their legs become rows of their own. A few runs per
+        poll cycle, newest first, refetch their jobs (one call each); the
+        rest wait for the next cycle, and the pass waits while the shared
+        GitHub budget is below INTEGRATION_LEG_BACKFILL_MIN_RATE_LIMIT.
+
+        Each examined run is marked in integration_leg_checks whatever its
+        jobs hold: a CI run whose plan picked no in-scope leg has no leg
+        rows to show for the fetch, and without the mark it would be
+        examined again on every cycle. The minimum checked_at bounds the
+        examination to rows created before it -- rows ingested since
+        already carry their legs -- and a run that already has a leg row
+        (a late-listed run stored by the new code) is skipped without a
+        fetch. A failed fetch leaves the run for a later cycle. Returns
+        the number of runs examined.
+        """
+        limit = INTEGRATION_LEG_BACKFILL_PER_CYCLE if limit is None else limit
+        if not TOKEN or limit <= 0:
+            return 0
+        if (self._rate_limit_remaining is not None
+                and self._rate_limit_remaining < INTEGRATION_LEG_BACKFILL_MIN_RATE_LIMIT):
+            return 0
+        now_stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self._db() as conn:
+            # Rows created after the first examination were ingested with
+            # their legs; before it (or with no examination yet) they were
+            # not, and neither the workflow name nor the stored steps can
+            # tell the two apart -- a run whose legs sit past the jobs
+            # page cap has no leg steps stored either.
+            since = conn.execute(
+                "SELECT MIN(checked_at) FROM integration_leg_checks"
+            ).fetchone()[0] or now_stamp
+            rows = conn.execute(
+                "SELECT * FROM jobs j"
+                " WHERE j.run_id = CAST(j.id AS TEXT)"
+                " AND COALESCE(j.conclusion, '') != '' AND COALESCE(j.created_at, '') != ''"
+                " AND j.created_at < ?"
+                " AND (LOWER(COALESCE(j.workflow, '')) IN (?, ?, ?)"
+                f" OR LOWER(COALESCE(j.workflow, '')) IN ({', '.join('?' * len(WorkflowExporter.INTEGRATION_SUITE_WORKFLOWS))}))"
+                " AND NOT EXISTS (SELECT 1 FROM integration_leg_checks c WHERE c.run_id = j.id)"
+                " AND NOT EXISTS (SELECT 1 FROM jobs l"
+                " WHERE l.run_id = CAST(j.id AS TEXT) AND l.id != j.id)"
+                " ORDER BY j.created_at DESC"
+                " LIMIT ?",
+                (since, ci_observe_phases.IT_WORKFLOW.lower(), ci_observe_phases.CI_WORKFLOW.lower(),
+                 ci_observe_phases.FLAKE_WORKFLOW.lower(),
+                 *WorkflowExporter.INTEGRATION_SUITE_WORKFLOWS, limit),
+            ).fetchall()
+        examined = 0
+        for row in rows:
+            jobs = self._fetch_run_jobs(row["repo"], row["id"], row["run_attempt"] or 1)
+            if jobs is None:
+                continue  # a failed fetch leaves the run for a later cycle
+            record = dict(row)
+            record["steps"] = json.loads(record.pop("steps_json") or "[]")
+            renamed = (record.get("workflow") or "").strip().lower() in WorkflowExporter.INTEGRATION_SUITE_WORKFLOWS
+            if renamed:
+                # The old single-suite refine renamed the run's own row to
+                # its first leg's suite: back to the workflow's own name,
+                # the legs are rows of their own now.
+                record["workflow"] = ci_observe_phases.IT_WORKFLOW
+                record["display_name"] = f"{record['repo']} / {ci_observe_phases.IT_WORKFLOW}"
+                record["category"] = WorkflowExporter._category_of_run(
+                    ci_observe_phases.IT_WORKFLOW, record.get("conclusion") or "")
+            self._refine_run_record(record, jobs)
+            for suite in self._suite_records(record, jobs):
+                self._upsert_job(suite)
+            if renamed:
+                with self._db() as conn:
+                    # failure_reason was classified under the rename's e2e
+                    # category; a ci row's classification is "n/a", the
+                    # value a fresh ingestion of this run would store (a
+                    # passing row never carried one).
+                    conn.execute(
+                        "UPDATE jobs SET workflow = ?, display_name = ?, category = ?,"
+                        " failure_reason = CASE WHEN conclusion = 'failure' THEN 'n/a'"
+                        " ELSE failure_reason END WHERE id = ?",
+                        (ci_observe_phases.IT_WORKFLOW, record["display_name"], record["category"], row["id"]),
+                    )
+            with self._db() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO integration_leg_checks (run_id, checked_at) VALUES (?, ?)",
+                    (row["id"], now_stamp),
+                )
+            examined += 1
+        if examined:
+            logger.info("Examined the integration legs of %d earlier run(s)", examined)
+        return examined
 
     def start_capture_poll(self):
         """Start the 60-second capture registry poll on a daemon thread.
@@ -2971,7 +3174,12 @@ class WorkflowExporter:
                         record["zombie"] = True
                     suites = []
                     if status == "in_progress":
-                        jobs = self._fetch_run_jobs(repo, run["id"])
+                        # Two pages, not every page: this list is rebuilt
+                        # every cycle, and a flake-detection campaign holds
+                        # two thousand jobs -- reading them all every 90
+                        # seconds for the hours it runs would starve the
+                        # poller (see _fetch_run_jobs' max_pages).
+                        jobs = self._fetch_run_jobs(repo, run["id"], max_pages=2)
                         if jobs:
                             record["runner_name"] = self._extract_runner_names(jobs)
                             self._refine_run_record(record, jobs, active=True)
@@ -3040,16 +3248,27 @@ class WorkflowExporter:
             return []
         return resp.json().get("workflow_runs", [])
 
-    def _fetch_run_jobs(self, repo, run_id, run_attempt=None):
-        """Fetch job-level details for a run.
+    def _fetch_run_jobs(self, repo, run_id, run_attempt=None, max_pages=None):
+        """Fetch job-level details for a run, every page of them.
 
         With run_attempt, fetches that attempt's jobs; without it, the
-        latest attempt's. Returns the raw jobs list from the GitHub API,
-        [] if the run genuinely has no jobs, or None if the fetch itself
-        failed. Callers must treat None as "try again later" -- persisting
-        a record built from a failed fetch would look like a complete,
-        jobless run forever, since a run already stored looks "seen" to
-        _needs_upsert.
+        latest attempt's. A run's jobs can exceed one 30-entry page: the
+        CI workflow's matrix holds a job per unit and integration leg next
+        to its other checks, so a full pull-request run passes 30 -- the
+        legs beyond the first page would be invisible to the suite rows and
+        the failed-step extraction alike. Follows the Link headers the same
+        way the run listings do. max_pages caps the fetch for the active
+        list, which is rebuilt every cycle and must not spend the budget on
+        one run: a flake-detection campaign holds two thousand jobs (a
+        repetition of every leg per repetition job), and reading all of
+        them every 90 seconds for the hours it runs would starve the
+        poller; a capped fetch there undercounts that one run's in-progress
+        legs, it never stores anything partial. Returns the raw jobs list
+        from the GitHub API, [] if the run genuinely has no jobs, or None
+        if the fetch itself failed -- any page of it, or a malformed one:
+        a partial list would be stored as a complete, jobless-looking run
+        forever, since a run already stored looks "seen" to _needs_upsert.
+        Callers must treat None as "try again later".
         """
         if run_attempt is None:
             url = (
@@ -3061,15 +3280,25 @@ class WorkflowExporter:
                 f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}"
                 f"/attempts/{run_attempt}/jobs?per_page=30"
             )
-        resp = self._get(url)
-        if not resp.ok:
-            return None
-        jobs = resp.json().get("jobs")
-        if not isinstance(jobs, list):
-            # A malformed answer is a failed fetch, not a jobless run: []
-            # here would be stored forever as a complete-looking run.
-            logger.error("The jobs answer of run %s named no jobs list", run_id)
-            return None
+        jobs = []
+        pages = 0
+        while url:
+            resp = self._get(url)
+            if not resp.ok:
+                return None
+            page = resp.json().get("jobs")
+            if not isinstance(page, list):
+                # A malformed answer is a failed fetch, not a jobless run: []
+                # here would be stored forever as a complete-looking run.
+                logger.error("The jobs answer of run %s named no jobs list", run_id)
+                return None
+            jobs.extend(page)
+            pages += 1
+            url = resp.links.get("next", {}).get("url")
+            if url and max_pages is not None and pages >= max_pages:
+                logger.info("The jobs of run %s span more than %d page(s); reading the first %d",
+                            run_id, max_pages, pages)
+                break
         return jobs
 
     def _extract_failed_steps(self, jobs):
@@ -3193,20 +3422,18 @@ class WorkflowExporter:
         this run, so the caller can skip the extra _fetch_run_jobs API call
         entirely.
 
-        A row still stored under the Integration Tests workflow's own name
-        is re-fetched whatever its attempt says: its integration leg (and
-        with it the suite _refine_integration_suite names) is only readable
-        from its jobs, so a row stored before that refinement ran is
-        re-examined until it carries a suite's name or proves to be an
-        out-of-scope leg.
+        A run's integration legs (see _integration_leg_records) are only
+        readable from its jobs, but its own row never changes shape once
+        they are stored, so a listing-side guard would re-fetch the same
+        rows on every pass. Rows stored before that refinement ran are
+        re-examined by _backfill_integration_legs_if_needed instead, which
+        examines each stored row once and then leaves it alone.
         """
         with self._db() as conn:
             row = conn.execute(
-                "SELECT run_attempt, conclusion, workflow FROM jobs WHERE id = ?", (run["id"],)
+                "SELECT run_attempt, conclusion FROM jobs WHERE id = ?", (run["id"],)
             ).fetchone()
         if row is None:
-            return True
-        if (row["workflow"] or "").strip().lower() == ci_observe_phases.IT_WORKFLOW.lower():
             return True
         attempt = run.get("run_attempt", 1)
         if attempt != row[0]:
@@ -4156,11 +4383,17 @@ class WorkflowExporter:
             logger.exception("Gap check failed this cycle")
 
         # Last, after this cycle's own work: older E2E rows get their job
-        # timeline a few at a time. Best-effort; it must never stop a cycle.
+        # timeline a few at a time, and older CI and Integration Tests runs
+        # get the integration-leg rows they were stored without. Best-effort;
+        # neither must ever stop a cycle.
         try:
             self._backfill_timelines_if_needed()
         except Exception:
             logger.exception("Timeline catch-up failed this cycle")
+        try:
+            self._backfill_integration_legs_if_needed()
+        except Exception:
+            logger.exception("Integration-leg catch-up failed this cycle")
 
         with self._db() as conn:
             total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
@@ -5592,9 +5825,14 @@ class WorkflowExporter:
         ),
     }
     # The four integration suites of the osac mono-repo's Tests workflow, as
-    # the exporter stores them (see _refine_integration_suite).
+    # the exporter stores them (see _integration_leg_records): a leg row of
+    # the Tests callers or of a flake-detection campaign. The campaign names
+    # are in each suite's list but not in "core": the runs page lists them
+    # under their suite, and the ci-observe population (insights, the audit)
+    # counts them only when the Started by filter asks for them by name.
     CI_OBSERVE_SUITE_WORKFLOWS.update({
-        suite: (name.lower(),) for suite, name in ci_observe_phases.IT_SUITE_WORKFLOWS.items()
+        suite: (name.lower(), ci_observe_phases.IT_FLAKE_SUITE_WORKFLOWS[suite].lower())
+        for suite, name in ci_observe_phases.IT_SUITE_WORKFLOWS.items()
     })
 
     # The osac-ci dispatcher names a PR suite run "E2E suite · <suite> ·
@@ -5604,15 +5842,17 @@ class WorkflowExporter:
     # "core" is the ci-observe population together: the three E2E suites and
     # the four integration suites every other ci-observe page reads
     # (ci_observe_phases). The agentless-net CaaS variant runs on other
-    # infrastructure and is not one.
+    # infrastructure and is not one; neither are the flake-detection
+    # campaigns, which the Started by filter counts only when asked for by
+    # name (see ci_observe_phases.trigger_selected).
     CI_OBSERVE_SUITE_WORKFLOWS["core"] = (
         CI_OBSERVE_SUITE_WORKFLOWS["vmaas"]
         + tuple(filter(lambda name: "agentless" not in name, CI_OBSERVE_SUITE_WORKFLOWS["caas"]))
         + CI_OBSERVE_SUITE_WORKFLOWS["bmaas"]
-        + CI_OBSERVE_SUITE_WORKFLOWS["it-fulfillment"]
-        + CI_OBSERVE_SUITE_WORKFLOWS["it-operator"]
-        + CI_OBSERVE_SUITE_WORKFLOWS["it-bmf"]
-        + CI_OBSERVE_SUITE_WORKFLOWS["it-caas"]
+        + tuple(filter(lambda name: "flake detection" not in name, CI_OBSERVE_SUITE_WORKFLOWS["it-fulfillment"]))
+        + tuple(filter(lambda name: "flake detection" not in name, CI_OBSERVE_SUITE_WORKFLOWS["it-operator"]))
+        + tuple(filter(lambda name: "flake detection" not in name, CI_OBSERVE_SUITE_WORKFLOWS["it-bmf"]))
+        + tuple(filter(lambda name: "flake detection" not in name, CI_OBSERVE_SUITE_WORKFLOWS["it-caas"]))
     )
 
     CI_OBSERVE_SUITE_PREFIXES: ClassVar[dict[str, tuple[str, ...]]] = {

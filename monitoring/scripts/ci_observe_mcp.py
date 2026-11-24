@@ -120,8 +120,11 @@ MAX_REDIRECT_URIS = 10
 
 SUITES = ("vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas")
 # The triggers a tool may ask for. The integration suites of the Tests
-# workflow are pull-request and push triggered, so "push" is askable.
-TRIGGERS = ("pr", "merge_queue", "scheduled", "manual", "push")
+# workflow are pull-request, merge-queue and push triggered, and the
+# flake-detection campaigns are the only population "all" leaves out -- a
+# hundred-plus repetitions of one fixed commit -- so "flake" is askable by
+# name.
+TRIGGERS = ("pr", "merge_queue", "scheduled", "manual", "push", "flake")
 REPOS = ("osac", "osac-test-infra")
 RESULTS = ("success", "failure", "cancelled")
 # A capture id names the suite whose artifact holds the run's JUnit file:

@@ -674,6 +674,36 @@ def test_the_integration_suites_recount_and_place_their_bundles_like_model_md_sa
         [{"name": "Run CaaS integration tests", "duration_s": 60}])}) == (True, False, False)
 
 
+def test_flake_campaign_rows_map_to_their_suites_but_leave_the_recount():
+    """The campaigns' repetition rows wear their suite's flake-detection
+    name: the audit traces them to the suite, leaves them out of the
+    recount of the default population (the served one), and a flake run
+    has no single artifact place to check."""
+    for suite, workflow in audit.IT_FLAKE_SUITE_WORKFLOWS.items():
+        assert audit.documented_suite(workflow) == suite
+        row = {"event": "schedule", "workflow": workflow, "conclusion": "failure"}
+        assert audit.run_trigger(row) == "flake"
+    assert audit.run_trigger({"event": "schedule", "workflow": "Flake detection"}) == "flake"
+    served = {"suites": [
+        {"suite": suite, "runs": 0, "passed": 0, "failed": 0, "cancelled": 0}
+        for suite in (*audit.SUITES, "all")
+    ]}
+    counted = next(entry for entry in served["suites"] if entry["suite"] == "it-fulfillment")
+    counted.update({"runs": 1, "passed": 1})
+    served["suites"][-1].update({"runs": 1, "passed": 1})
+    checks, names = audit.e2e_recount(
+        [
+            {"repo": "osac", "workflow": "IT fulfillment (Tests)", "conclusion": "success"},
+            {"repo": "osac", "workflow": "IT fulfillment (Flake detection)", "conclusion": "success"},
+            {"repo": "osac", "workflow": "IT fulfillment (Flake detection)", "conclusion": "failure"},
+        ],
+        served,
+    )
+    assert all(check["ok"] for check in checks), checks
+    flake_family = next(f for f in names if "Flake detection" in f["workflow"])
+    assert flake_family["suite"] == "it-fulfillment" and flake_family["rows"] == 2
+
+
 def test_a_rerun_of_failed_jobs_keeps_each_suite_on_its_own_attempt(exporter, wfe, trends, artifact_github, tmp_path,
                                                                     monkeypatch, capsys):
     """Attempt 2 re-runs the failed caas suite; GitHub's latest jobs keep vmaas's attempt-1 job (the API's

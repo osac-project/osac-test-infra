@@ -39,7 +39,8 @@ FAILED_STEP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()/-]{0,79}$")
 # CI_OBSERVE_SUITE_WORKFLOWS); the stored name is not a substring match, so
 # "VMaaS" cannot fold Production Install or Chart Packaging Smoke into vmaas.
 # The it-* entries are the osac mono-repo Tests workflow's integration legs
-# (see ci_observe_phases.IT_SUITE_WORKFLOWS).
+# (see ci_observe_phases.IT_SUITE_WORKFLOWS) and the flake campaigns'
+# repetitions of them (IT_FLAKE_SUITE_WORKFLOWS).
 SUITES = {"core", "vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas",
           "netris", "stretched"}
 

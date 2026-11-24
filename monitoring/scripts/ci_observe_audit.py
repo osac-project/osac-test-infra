@@ -463,12 +463,21 @@ def window_checks(db, github, api, repo, days, now, api_get=read_api):
 SUITES = ("vmaas", "caas", "bmaas", "it-fulfillment", "it-operator", "it-bmf", "it-caas")
 # The Tests workflow's integration suites, as the exporter stores them
 # (model.md's suite table): kept here by hand, like everything else this
-# checker reads, so it stays independent of the code it checks.
+# checker reads, so it stays independent of the code it checks. The flake
+# campaign names map to the same suites; their rows are left out of the
+# recount below, the way the Started by filter leaves them out of the
+# population it serves.
 IT_SUITE_WORKFLOWS = {
     "it-fulfillment": "IT fulfillment (Tests)",
     "it-operator": "IT operator (Tests)",
     "it-bmf": "IT BMF (Tests)",
     "it-caas": "IT CaaS (Tests)",
+}
+IT_FLAKE_SUITE_WORKFLOWS = {
+    "it-fulfillment": "IT fulfillment (Flake detection)",
+    "it-operator": "IT operator (Flake detection)",
+    "it-bmf": "IT BMF (Flake detection)",
+    "it-caas": "IT CaaS (Flake detection)",
 }
 # ci-observe/model.md: "Netris, stretched, CaaS agentless-net, full regression
 # and the named installs (...) test other scenarios and are never counted."
@@ -496,6 +505,9 @@ def documented_suite(workflow):
     if any(word in name for word in NEVER_COUNTED):
         return ""
     for suite, workflow_name in IT_SUITE_WORKFLOWS.items():
+        if name == workflow_name.lower():
+            return suite
+    for suite, workflow_name in IT_FLAKE_SUITE_WORKFLOWS.items():
         if name == workflow_name.lower():
             return suite
     for suite in SUITES:
@@ -570,6 +582,11 @@ def e2e_recount(rows, served):
         family["conclusions"][row.get("conclusion") or "(none)"] += 1
         result = RESULTS.get((row.get("conclusion") or "").lower())
         if not suite or gate or not result:
+            continue
+        if run_trigger(row) == "flake":
+            # The campaigns are counted only when asked for by name, and
+            # the served population this recount is checked against is the
+            # default one (trigger=all).
             continue
         for name in (suite, "all"):
             mine[name][result] += 1
@@ -939,6 +956,8 @@ def run_trigger(row):
     name = (row.get("workflow") or "").lower()
     if event == "merge_group" or name.endswith("(merge queue)"):
         return "merge_queue"
+    if name.endswith("(flake detection)") or name == "flake detection":
+        return "flake"
     if event == "pull_request" or name.startswith("e2e suite · ") or name.endswith((" pr suite", "(pull requests)")):
         return "pr"
     return {"schedule": "scheduled", "workflow_dispatch": "manual", "push": "push"}.get(event, event or "unknown")

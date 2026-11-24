@@ -105,8 +105,11 @@ class Stores:
     def run(self, created, conclusion="success", suite="vmaas", queue_s=60, failed=None, repo="osac",
             event="schedule", workflow=None, sha="a" * 40, with_timeline=True, duration_s=None, attempt=1):
         self.next_id += 1
-        label = {"vmaas": "VMaaS", "caas": "CaaS", "bmaas": "BMaaS"}[suite]
-        workflow = workflow or f"E2E {label} Full Install"
+        workflow = workflow or {
+            "vmaas": "E2E VMaaS Full Install", "caas": "E2E CaaS Full Install", "bmaas": "E2E BMaaS Full Install",
+            "it-fulfillment": "IT fulfillment (Tests)", "it-operator": "IT operator (Tests)",
+            "it-bmf": "IT BMF (Tests)", "it-caas": "IT CaaS (Tests)",
+        }[suite]
         jobs = timeline(created, queue_s, failed=failed, conclusion=conclusion) if with_timeline else []
         ended = phases.parse_time(jobs[0]["completed_at"]) if jobs else created + timedelta(seconds=duration_s or 0)
         steps = [{"name": name, "duration_s": seconds} for name, seconds in STEPS]
@@ -407,6 +410,29 @@ def test_the_suite_trigger_and_repository_filters_narrow_the_runs(stores):
     assert get(api, "health", trigger="pr")["tiles"][0]["runs"] == 1
     assert get(api, "health", trigger="merge_queue")["tiles"][0]["runs"] == 1
     assert get(api, "health", repo="osac-test-infra")["tiles"][0]["runs"] == 1
+
+
+def test_flake_campaign_runs_are_counted_only_when_asked_for_by_name(stores):
+    """A campaign re-runs one fixed commit a hundred-plus times; under Any
+    trigger its rows would swamp every pass rate, so "all" leaves them out
+    and "flake" is the only selection that shows them -- their pass rate is
+    the flake rate."""
+    stores.run(NOW - timedelta(hours=2), suite="it-fulfillment", event="schedule")
+    stores.run(NOW - timedelta(hours=3), suite="it-fulfillment", event="schedule",
+               workflow="IT fulfillment (Flake detection)")
+    stores.run(NOW - timedelta(hours=4), "failure", suite="it-caas", event="schedule",
+               workflow="IT CaaS (Flake detection)")
+    api = stores.api()
+
+    assert get(api, "health")["tiles"][0]["runs"] == 1, "only the plain Tests run counts by default"
+    assert get(api, "health", trigger="scheduled")["tiles"][0]["runs"] == 1
+    flake = get(api, "health", trigger="flake")
+    assert flake["tiles"][0]["runs"] == 2
+    assert flake["tiles"][0]["failed"] == 1
+    by_suite = {row["suite"]: row for row in flake["suites"]}
+    assert by_suite["it-fulfillment"]["runs"] == 1
+    assert by_suite["it-caas"]["runs"] == 1
+    assert "only when asked for by name" in get(api, "health")["population"]
 
 
 # -- time -------------------------------------------------------------------------------------------

@@ -24,29 +24,38 @@ The four across-runs pages share four filters, and keep them when you move betwe
 |---|---|
 | Window | 7, 14, 30 or 90 days. **vs before** compares with the same span before it, inside the 90-day archive. |
 | Suite | All suites, VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF, IT CaaS. |
-| Started by | Any trigger, pull requests, merge queue, scheduled (main), manual, pushes. |
+| Started by | Any trigger, pull requests, merge queue, scheduled (main), manual, pushes, flake detection. Any trigger leaves the flake-detection campaigns out; they are counted only when picked by name. |
 | Repository | Both, `osac`, `osac-test-infra`: the repository whose CI started the run. |
 
 A suite is its full-install workflows, its pull-request suite runs, its
-merge-queue rows, or — for the four integration suites — its runs of the
-osac mono-repo's Tests workflow:
+merge-queue rows, or — for the four integration suites — its in-scope legs
+of the osac mono-repo's Tests workflow:
 
 | Suite | Workflows |
 |---|---|
 | VMaaS | E2E VMaaS, E2E VMaaS Full Install, E2E VMaaS PR suite, `E2E suite · vmaas · …` runs, E2E vmaas merge-queue rows |
 | CaaS | E2E CaaS Full Install, E2E CaaS PR suite, `E2E suite · caas · …` runs, E2E caas merge-queue rows |
 | BMaaS | E2E BMaaS Full Install, E2E BMaaS PR suite, `E2E suite · bmaas · …` runs, E2E bmaas merge-queue rows |
-| IT fulfillment | `IT fulfillment (Tests)`: the Tests workflow's it-fulfillment-service leg |
-| IT operator | `IT operator (Tests)`: the Tests workflow's it-osac-operator leg |
-| IT BMF | `IT BMF (Tests)`: the Tests workflow's it-bare-metal-fulfillment-operator leg |
-| IT CaaS | `IT CaaS (Tests)`: the Tests workflow's it-caas leg |
+| IT fulfillment | `IT fulfillment (Tests)`: the Tests workflow's it-fulfillment-service leg; `IT fulfillment (Flake detection)`: the flake campaigns' repetitions of it |
+| IT operator | `IT operator (Tests)`: the Tests workflow's it-osac-operator leg; `IT operator (Flake detection)`: the flake campaigns' repetitions of it |
+| IT BMF | `IT BMF (Tests)`: the Tests workflow's it-bare-metal-fulfillment-operator leg; `IT BMF (Flake detection)`: the flake campaigns' repetitions of it |
+| IT CaaS | `IT CaaS (Tests)`: the Tests workflow's it-caas leg; `IT CaaS (Flake detection)`: the flake campaigns' repetitions of it |
 
-The Tests workflow's runs are pull-request and push triggered, on
-GitHub-hosted runners; no merge-queue or scheduled variant exists today.
-The exporter stores each in-scope run under its suite's name, so the
-readers map it like any other suite run. Every other leg of that workflow —
-the unit tests, the contract checks, the installer, preflight and AAP
-suites — is out of scope.
+The Tests workflow's legs run from three callers: the Integration Tests
+workflow (scheduled 2x/day, by hand, from the nightly build — every leg per
+run), the CI workflow (every pull request and merge queue entry — the
+legs its paths-filter plan picked, zero or more per run, the bulk of all
+integration volume) and the Flake detection workflow (campaigns ~2x/week —
+a repetition of every leg per repetition job, on one fixed commit), on
+GitHub-hosted runners. The exporter stores one suite row per in-scope leg
+job a run contains, with the leg's own conclusion, so the readers map it
+like any other suite run. A campaign's rows wear the suite's
+flake-detection name, and the Started by filter counts them only when
+asked for by name: a campaign re-runs one fixed commit a hundred-plus
+times, and its pass rate — the flake rate — would swamp every other
+number under Any trigger. Every other leg of that workflow — the unit
+tests, the contract checks, the installer, preflight and AAP suites — is
+out of scope.
 
 Netris, stretched, CaaS agentless-net, full regression and the named installs (**E2E VMaaS Production Install**, **E2E VMaaS Staging Install**, **E2E VMaaS Chart Packaging Smoke**, **OSAC CI Large**) test other scenarios and are never counted.
 
@@ -163,8 +172,9 @@ A run is keyed by its GitHub run id; a recording id adds the suite and rerun num
 - The workflow exporter keeps its own job history for 30 days, and a gap check proves it complete once an hour: one count per repo per fully-past day against GitHub, a run-by-run verification only where the counts differ (`day_checks`, `github_actions_gap_check_*`). GitHub keeps the JUnit artifact for 30 days, so a run's tests are read within that window.
 - The pull request backfill covers `osac` and `osac-test-infra` only, the two repositories the Repository filter names; no other repository of the organization is listed.
 - An insight window may end at any past moment, not only at now: the `end` parameter takes a UTC date (`2026-11-01`) or a UTC second-precision time (`2026-11-01T12:00:00Z`). The dashboards' own windows keep ending at now.
-- A run's logs artifact (with its JUnit file) is in one place, by the run's trigger: on the run for pull-request, merge-queue and push runs, in the private repository `osac-ci-artifacts` for scheduled and manual runs (since 2026-11-13). The Tests workflow's integration runs are pull-request and push triggered, so their `osac-logs-it-<suite>-<run id>` bundles are on the run. Reading those needs a token that can see that repository.
+- A run's logs artifact (with its JUnit file) is in one place, by the run's trigger: on the run for pull-request, merge-queue and push runs, in the private repository `osac-ci-artifacts` for scheduled and manual runs (since 2026-11-13). The Tests workflow's integration legs run from two callers — the CI workflow (pull requests and the merge queue, its bundles on the run) and the Integration Tests workflow (scheduled, manual, nightly, its bundles in `osac-ci-artifacts`). Reading those needs a token that can see that repository.
 - The exporter fetches the job timeline (needed for the wait for a runner and for timeouts) of a run stored before timelines existed a few runs per poll, counted suite runs only, newest first.
+- The exporter examines the integration legs of CI, Integration Tests and Flake detection runs stored before those legs became rows of their own a few runs per poll, newest first, and marks each examined run; rows ingested since already carry their legs.
 - The exporter polls the newest completed runs and the runs it saw active, and every 30 minutes lists every completed run created in the last 48 hours to store what the polling missed or kept with an outdated result. A run missed while the exporter was down for longer than that is recovered by a one-off backfill (`BACKFILL_DAYS`).
 - `ci_observe_audit.py` checks the pages against GitHub daily (`ci-observe-audit.timer`): every completed E2E run of the last 28 days is looked up in the job history, a sample of stored suite runs and of merged pull requests is compared field by field with GitHub's record, and the Overview's counts are recounted from the stored rows by the scope above. For tests, it checks that the token can read `osac-ci-artifacts`, that every suite run that ran its tests has test results, and, for the newest runs that failed in their test step, the run page's failed tests and the test history against the run's own JUnit file. It imports nothing from the code it checks. Its result is on every page, under **About these numbers**.
 - Tempo keeps traces for 30 days; the span rollup reads a run once, 20 minutes after it finished.

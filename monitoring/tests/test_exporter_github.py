@@ -234,6 +234,50 @@ def test_fetch_run_jobs(exporter, github, R):
     assert exporter._fetch_run_jobs("osac", 9) is None
 
 
+def test_fetch_run_jobs_reads_every_page(wfe, exporter, github, R):
+    """A CI matrix run holds more than 30 jobs (unit, integration, contract,
+    helm and ui legs next to the plan and the relay job), so the legs past
+    the first page must be fetched too -- a run's integration legs decide
+    its suite rows, and a failed step past the page cap its failure cause."""
+    page1 = f"{wfe.API_URL}/repos/{wfe.ORG}/osac/actions/runs/1/jobs?filter=latest&per_page=30"
+    page2 = f"{page1}&page=2"
+    github.add(R("osac/actions/runs/1/jobs?filter=latest&per_page=30"),
+               FakeResponse(payload={"jobs": [{"id": n} for n in range(30)]}, next_url=page2))
+    github.add(f"/repos/{wfe.ORG}/osac/actions/runs/1/jobs?filter=latest&per_page=30&page=2",
+               FakeResponse(payload={"jobs": [{"id": "the leg past the cap"}]}))
+    jobs = exporter._fetch_run_jobs("osac", 1)
+    assert len(jobs) == 31
+    assert jobs[-1] == {"id": "the leg past the cap"}
+
+
+def test_a_failed_page_of_the_jobs_is_a_failed_fetch(wfe, exporter, github, R):
+    page1 = f"{wfe.API_URL}/repos/{wfe.ORG}/osac/actions/runs/1/jobs?filter=latest&per_page=30"
+    github.add(R("osac/actions/runs/1/jobs?filter=latest&per_page=30"),
+               FakeResponse(payload={"jobs": [1]}, next_url=f"{page1}&page=2"))
+    github.add(f"/repos/{wfe.ORG}/osac/actions/runs/1/jobs?filter=latest&per_page=30&page=2",
+               FakeResponse(status=502, text="boom"))
+    assert exporter._fetch_run_jobs("osac", 1) is None, (
+        "a partial jobs list would be stored as a complete, jobless-looking run forever"
+    )
+
+
+def test_the_active_list_caps_the_pages_it_reads_of_one_run(wfe, exporter, github, R):
+    """A flake-detection campaign holds two thousand jobs; the active list
+    is rebuilt every 90-second cycle and must not read them all every
+    time (see _fetch_run_jobs' max_pages)."""
+    page1 = f"{wfe.API_URL}/repos/{wfe.ORG}/osac/actions/runs/1/jobs?filter=latest&per_page=30"
+    github.add(R("osac/actions/runs/1/jobs?filter=latest&per_page=30"),
+               FakeResponse(payload={"jobs": [{"id": 1}]}, next_url=f"{page1}&page=2"))
+    github.add(f"/repos/{wfe.ORG}/osac/actions/runs/1/jobs?filter=latest&per_page=30&page=2",
+               FakeResponse(payload={"jobs": [{"id": 2}]}, next_url=f"{page1}&page=3"))
+    jobs = exporter._fetch_run_jobs("osac", 1, max_pages=2)
+    assert [job["id"] for job in jobs] == [1, 2]
+    assert github.calls == [
+        f"/repos/{wfe.ORG}/osac/actions/runs/1/jobs?filter=latest&per_page=30",
+        f"/repos/{wfe.ORG}/osac/actions/runs/1/jobs?filter=latest&per_page=30&page=2",
+    ], "the third page is never asked for"
+
+
 def test_recent_completed_and_history(exporter, github, R):
     github.add(R("osac/actions/runs?status=completed&per_page=50"), runs_page(make_run()))
     github.add(R("osac/actions/runs?status=completed&per_page=100"), runs_page(make_run(), make_run(id=2)))

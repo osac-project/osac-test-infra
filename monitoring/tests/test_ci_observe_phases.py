@@ -185,14 +185,19 @@ def test_the_verify_job_of_a_pr_suite_is_ci_setup(phases):
         ("workflow_dispatch", "E2E VMaaS Production Install", "", "manual"),
         ("workflow_dispatch", "E2E CaaS Agentless-Net Full Install", "", "manual"),
         ("workflow_dispatch", "E2E Full Regression", "", "manual"),
-        # The Tests workflow's integration suites: pull-request and push
-        # triggered, named per suite by the exporter. The workflow's own
+        # The Tests workflow's integration suites: pull-request, merge-queue
+        # and push triggered, named per suite by the exporter. The workflow's own
         # name is not a suite: its other legs stay out of scope.
         ("pull_request", "IT fulfillment (Tests)", "it-fulfillment", "pr"),
         ("pull_request", "IT operator (Tests)", "it-operator", "pr"),
         ("pull_request", "IT BMF (Tests)", "it-bmf", "pr"),
         ("pull_request", "IT CaaS (Tests)", "it-caas", "pr"),
         ("push", "Integration Tests", "", "push"),
+        # The flake-detection campaigns' repetition rows: the caller's name
+        # says what they are, whatever their event.
+        ("schedule", "IT fulfillment (Flake detection)", "it-fulfillment", "flake"),
+        ("workflow_dispatch", "IT CaaS (Flake detection)", "it-caas", "flake"),
+        ("schedule", "Flake detection", "", "flake"),
     ],
 )
 def test_suite_and_trigger(phases, event, workflow, suite, trigger):
@@ -206,6 +211,21 @@ def test_the_integration_suites_trigger_on_pushes_too(phases):
     assert phases.suite_label("it-bmf") == "IT BMF"
     assert set(phases.IT_JOB_SUITES.values()) == {"it-fulfillment", "it-operator", "it-bmf", "it-caas"}
     assert set(phases.IT_SUITE_WORKFLOWS) == set(phases.IT_JOB_SUITES.values())
+    assert set(phases.IT_FLAKE_SUITE_WORKFLOWS) == set(phases.IT_JOB_SUITES.values())
+
+
+def test_the_started_by_filter_leaves_the_flake_campaigns_out_of_all(phases):
+    """A campaign re-runs one fixed commit a hundred-plus times: "all" is
+    the suite-health population without them, and "flake" the only
+    selection that shows them."""
+    for trigger in ("pr", "merge_queue", "scheduled", "manual", "push", "other"):
+        assert phases.trigger_selected("all", trigger)
+        assert phases.trigger_selected(trigger, trigger)
+        assert not phases.trigger_selected("flake", trigger)
+    assert not phases.trigger_selected("all", "flake")
+    assert phases.trigger_selected("flake", "flake")
+    assert not phases.trigger_selected("pr", "flake")
+    assert not phases.trigger_selected("flake", "pr")
 
 
 def test_event_triggers(phases):
