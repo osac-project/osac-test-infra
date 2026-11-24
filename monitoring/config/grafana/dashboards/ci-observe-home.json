@@ -1781,7 +1781,7 @@
       "type": "table",
       "id": 14,
       "title": "Suite health",
-      "description": "One row per suite and one for all three. 'Time' and 'Failures' open that suite's pages. First try: share that passed without a re-run. Re-runs: runs someone re-ran on GitHub. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs, percent and duration as named.",
+      "description": "One row per suite and one for all of them. 'Time' and 'Failures' open that suite's pages. First try: share that passed without a re-run. Re-runs: runs someone re-ran on GitHub. Population: finished VMaaS, CaaS, BMaaS, IT fulfillment, IT operator, IT BMF and IT CaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs, percent and duration as named.",
       "gridPos": {
         "x": 0,
         "y": 9,
