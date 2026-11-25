@@ -217,6 +217,62 @@ exec /usr/bin/timeout -k 0.2 "$seconds" "$@"
         self.assertTrue((self.consumer.artifacts / ".redaction-complete").exists())
         self.assertFalse(self.tree.exists())
 
+    def test_compact_mco_precedes_native_collection_and_survives_staged_release(self) -> None:
+        compact = self.consumer.artifacts / "compact-boot"
+        compact.mkdir()
+        (compact / ".collection-complete").touch()
+        host = compact / "host.log"
+        host.write_text("validated host diagnostics\n")
+        result = self.collect()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn(SENTINEL, result.stdout + result.stderr)
+        commands = (self.temp / "timeout-arguments").read_text()
+        self.assertLess(commands.index("get controllerconfig"), commands.index("oc adm must-gather"))
+        management = self.consumer.artifacts / "mgmt-cluster"
+        self.assertTrue((management / "mco/controllerconfig.json").is_file())
+        self.assertTrue((management / "mco/00-master-identity.json").is_file())
+        self.assertTrue((self.tree / IMAGE / "version").is_file())
+        self.assertEqual(list(self.temp.glob("osac-cluster-artifacts.*")), [])
+        self.consumer.scanner("clean")
+        for step in ("Verify redaction complete", "Scan artifacts with gitleaks", "Release gate - censor secrets"):
+            result = self.consumer.run_step(step)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(host.read_text(), "validated host diagnostics\n")
+        self.assertFalse((self.tree / IMAGE / "encoded-archive.log").exists())
+
+    def test_compact_host_bundle_survives_failed_cluster_redaction(self) -> None:
+        compact = self.consumer.artifacts / "compact-boot"
+        compact.mkdir()
+        (compact / ".collection-complete").touch()
+        (compact / "host.log").write_text("validated host diagnostics\n")
+        python = self.temp / "bin/python3"
+        python.write_text("#!/bin/bash\nexit 1\n")
+        python.chmod(0o755)
+        result = self.collect()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.temp / "native-arguments").exists())
+        self.assertFalse(self.tree.exists())
+        self.assertTrue((self.consumer.artifacts / ".redaction-complete").is_file())
+        self.assertTrue((compact / "host.log").is_file())
+        self.assertEqual(list(self.temp.glob("osac-cluster-artifacts.*")), [])
+        self.assertEqual(self.consumer.run_step("Verify redaction complete").returncode, 0)
+
+    def test_interrupted_cluster_copy_withholds_native_tree_but_retains_compact(self) -> None:
+        compact = self.consumer.artifacts / "compact-boot"
+        compact.mkdir()
+        (compact / ".collection-complete").touch()
+        (compact / "host.log").write_text("validated host diagnostics\n")
+        self.tree.mkdir(parents=True)
+        (self.tree / "unredacted.log").write_text(SENTINEL)
+        copying = self.consumer.artifacts / ".cluster-copy-in-progress"
+        copying.touch()
+        result = self.consumer.run_step("Verify redaction complete")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.tree.exists())
+        self.assertFalse(copying.exists())
+        self.assertTrue((compact / "host.log").is_file())
+        self.assertTrue((self.consumer.artifacts / ".redaction-complete").is_file())
+
 
 class WorkflowTests(unittest.TestCase):
     def test_all_nine_workflow_families_collect_before_teardown_and_upload_safely(self) -> None:

@@ -64,26 +64,6 @@ if [[ -L "$ARTIFACT_DIR" || -L "$MGMT_CLUSTER_DIR" ]]; then
     exit 1
 fi
 mkdir -p "$ARTIFACT_DIR" "$MGMT_CLUSTER_DIR"
-rm -rf -- "$MUST_GATHER_DIR"
-mkdir -p "$MUST_GATHER_DIR"
-gather_deadline="${OSAC_COLLECTION_DEADLINE:-$(( $(date +%s) + 900 ))}"
-gather_seconds=$(( gather_deadline - $(date +%s) - 60 ))
-(( gather_seconds > 600 )) && gather_seconds=600
-if (( gather_seconds > 0 )); then
-    native_seconds=$(( gather_seconds > 10 ? gather_seconds - 10 : 1 ))
-    if ! timeout -k 5 "${gather_seconds}" oc adm must-gather \
-        --dest-dir="$MUST_GATHER_DIR" --timeout="${native_seconds}s" \
-        > "$MUST_GATHER_DIR/command.log" 2>&1; then
-        echo "::warning::Management must-gather did not complete; only downloaded output is available"
-    fi
-else
-    echo "::warning::No time remains for management must-gather before shared redaction"
-fi
-gather_bytes=$(du -sb -- "$MUST_GATHER_DIR" | cut -f1) || exit 1
-if (( gather_bytes > 128 * 1024 * 1024 )); then
-    rm -rf -- "$MUST_GATHER_DIR"
-    echo "::warning::Management must-gather exceeds 128 MiB; withholding that subtree"
-fi
 
 # ── Collect ──────────────────────────────────────────────────────────
 
@@ -303,6 +283,27 @@ collect_router_evidence() {
 if [[ -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
     echo "Collecting compact boot MCO diagnostics..."
     collect_compact_mco_diagnostics
+fi
+
+rm -rf -- "$MUST_GATHER_DIR"
+mkdir -p "$MUST_GATHER_DIR"
+gather_deadline="${OSAC_COLLECTION_DEADLINE:-$(( $(date +%s) + 900 ))}"
+gather_seconds=$(( gather_deadline - $(date +%s) - 60 ))
+(( gather_seconds > 600 )) && gather_seconds=600
+if (( gather_seconds > 0 )); then
+    native_seconds=$(( gather_seconds > 10 ? gather_seconds - 10 : 1 ))
+    if ! timeout -k 5 "${gather_seconds}" oc adm must-gather \
+        --dest-dir="$MUST_GATHER_DIR" --timeout="${native_seconds}s" \
+        > "$MUST_GATHER_DIR/command.log" 2>&1; then
+        echo "::warning::Management must-gather did not complete; only downloaded output is available"
+    fi
+else
+    echo "::warning::No time remains for management must-gather before shared redaction"
+fi
+gather_bytes=$(du -sb -- "$MUST_GATHER_DIR" | cut -f1) || exit 1
+if (( gather_bytes > 128 * 1024 * 1024 )); then
+    rm -rf -- "$MUST_GATHER_DIR"
+    echo "::warning::Management must-gather exceeds 128 MiB; withholding that subtree"
 fi
 
 collect_namespace_logs "$E2E_NAMESPACE" "$MGMT_CLUSTER_DIR/namespaces/$E2E_NAMESPACE"
