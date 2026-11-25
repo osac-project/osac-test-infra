@@ -7,11 +7,15 @@ import unittest
 import json
 import os
 import select
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 from unittest import mock
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SETUP_SCRIPT = ROOT / ".github/scripts/setup-virtual-bmh.sh"
@@ -216,12 +220,110 @@ class SetupVirtualBmhTests(unittest.TestCase):
                 else:
                     self.assertFalse((artifacts / "bmh-history").exists())
 
+    def test_compact_collection_preserves_host_bundle_and_guards_event_copy(self) -> None:
+        cases = ((False, 0, False), (True, 0, False), (True, 1, False),
+                 (True, 124, False), (True, 0, True))
+        for kubeconfig_available, gather_status, interrupt_copy in cases:
+            with self.subTest(kubeconfig=kubeconfig_available, gather=gather_status, interrupt=interrupt_copy), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                workspace = base / "workspace"
+                (workspace / "scripts").mkdir(parents=True)
+                (workspace / ".github").mkdir()
+                (workspace / ".github/scripts").symlink_to(ROOT / ".github/scripts", target_is_directory=True)
+                artifacts = base / "osac-artifacts"
+                compact = artifacts / "compact-boot"
+                compact.mkdir(parents=True)
+                (compact / ".collection-complete").touch()
+                (compact / "host.txt").write_text("completed host diagnostics\n")
+                (artifacts / ".redaction-complete").touch()
+                stale = artifacts / "bmh-history"
+                stale.mkdir()
+                (stale / "events.log").write_text("stale event artifact\n")
+                inventory = base / "virtual-bmh-inventory-test.json"
+                inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
+                history = bmh_history.history_dir(inventory)
+                history.mkdir(mode=0o700)
+                (history / "status.json").write_text(json.dumps({"stopped": "fixture completed"}))
+                fixture_secret = "synthetic-history-token-0123456789"
+                (base / "pull-secret.json").write_text(json.dumps({"auths": {"example.invalid": {"auth": fixture_secret}}}))
+                (history / "events.log").write_text(f"first boot\n{fixture_secret}\n")
+                kubeconfig = base / "kubeconfig"
+                if kubeconfig_available:
+                    kubeconfig.touch()
+                gather = workspace / "scripts/gather-osac-logs.sh"
+                gather.write_text('#!/bin/bash\nprintf "%s\\n" "$1" > "$RUNNER_TEMP/gather-target"\n'
+                                  'mkdir -p "$1/mgmt-cluster/mco"\nprintf "fixture MCO evidence\\n" > "$1/mgmt-cluster/mco/state.txt"\n'
+                                  f'exit {gather_status}\n')
+                gather.chmod(0o755)
+                binaries = base / "bin"
+                binaries.mkdir()
+                oc = binaries / "oc"
+                oc.write_text('#!/bin/bash\nprintf \'{"items":[]}\\n\'\n')
+                oc.chmod(0o755)
+                copy = binaries / "cp"
+                real_copy = shlex.quote(shutil.which("cp"))
+                copy.write_text('#!/bin/bash\nif [[ "$2" == */. ]]; then\n'
+                                '  printf "%s\\n" "$2" > "$RUNNER_TEMP/event-copy-source"\n'
+                                '  [[ -f "$2/bmh-history/events.log" && ! -e "$3/bmh-history" ]] || exit 91\n'
+                                '  if [[ "$INTERRUPT_COPY" == true ]]; then\n'
+                                f'    {real_copy} -a "$2/bmh-history" "$3/"\n'
+                                '    exit 1\n  fi\nfi\n'
+                                f'exec {real_copy} "$@"\n')
+                copy.chmod(0o755)
+                environment = os.environ | dict(RUNNER_TEMP=str(base), GITHUB_WORKSPACE=str(workspace), HOME=str(base),
+                                                CLONE_NAME="test", KUBECONFIG=str(kubeconfig), INTERRUPT_COPY=str(interrupt_copy).lower(),
+                                                PATH=f"{binaries}:{Path(sys.executable).parent}:{os.defpath}")
+                command = ["bash", str(ROOT / ".github/scripts/collect-artifacts.sh")]
+                result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, int(interrupt_copy), result.stderr)
+                self.assertNotIn(fixture_secret, result.stdout + result.stderr)
+                self.assertTrue((history / "stop").exists())
+                self.assertTrue((artifacts / ".redaction-complete").exists())
+                self.assertEqual((compact / "host.txt").read_text(), "completed host diagnostics\n")
+                self.assertEqual((base / "gather-target").exists(), kubeconfig_available)
+                self.assertEqual((base / "osac-secret-inventory/k8s-secrets.json").exists(), kubeconfig_available)
+                if interrupt_copy:
+                    self.assertTrue((artifacts / ".cluster-copy-in-progress").exists())
+                    self.assertTrue((artifacts / "bmh-history/events.log").exists())
+                    self.assertNotIn(fixture_secret, (artifacts / "bmh-history/events.log").read_text())
+                    action = yaml.safe_load((ROOT / ".github/actions/upload-artifacts/action.yml").read_text())
+                    recovery = next(step["run"] for step in action["runs"]["steps"] if step["name"] == "Verify redaction complete")
+                    recovered = subprocess.run(["bash", "-eo", "pipefail", "-c", recovery],
+                                               env=environment | {"ARTIFACT_DIR": str(artifacts)},
+                                               capture_output=True, text=True, timeout=10)
+                    self.assertEqual(recovered.returncode, 0, recovered.stderr)
+                    self.assertEqual({path.name for path in artifacts.iterdir()}, {"compact-boot", ".redaction-complete"})
+                    result = subprocess.run(command, env=environment | {"INTERRUPT_COPY": "false"},
+                                            capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn(fixture_secret, result.stdout + result.stderr)
+                if kubeconfig_available and gather_status == 0:
+                    source = Path((base / "event-copy-source").read_text().strip())
+                    self.assertNotEqual(source, artifacts)
+                    self.assertEqual(source, Path((base / "gather-target").read_text().strip()))
+                    self.assertIn("first boot", (artifacts / "bmh-history/events.log").read_text())
+                    self.assertTrue((artifacts / "mgmt-cluster/mco/state.txt").exists())
+                else:
+                    self.assertFalse((artifacts / "bmh-history").exists())
+                    self.assertFalse((artifacts / "mgmt-cluster").exists())
+                    self.assertFalse((base / "event-copy-source").exists())
+                for path in artifacts.rglob("*"):
+                    if path.is_file():
+                        self.assertNotIn(fixture_secret, path.read_text())
+                self.assertFalse((artifacts / ".cluster-copy-in-progress").exists())
+                self.assertEqual(list(base.glob("osac-cluster-artifacts.*")), [])
+                self.assertEqual(list(history.glob("staging-*")), [])
+                self.assertIn(fixture_secret, (history / "events.log").read_text())
+
     def test_recording_wiring_and_collection_order(self) -> None:
         setup = SETUP_SCRIPT.read_text()
         self.assertIn("--record-history", setup)
         self.assertLess(setup.index('echo "INVENTORY_FILE='), setup.index('python3 "${SCRIPT_DIR}/manage-virtual'))
         collection = (ROOT / ".github/scripts/collect-artifacts.sh").read_text()
         self.assertLess(collection.index("oc get secrets"), collection.index('bmh_history.py" collect'))
+        self.assertIn('"${BMH_INVENTORY}" "${COLLECTION_DIR}/bmh-history"', collection)
+        self.assertLess(collection.index('bmh_history.py" stop'), collection.index('if [[ -f "${ARTIFACT_DIR}/compact-boot/.collection-complete"'))
+        self.assertLess(collection.index('bmh_history.py" collect'), collection.index('touch "${ARTIFACT_DIR}/.cluster-copy-in-progress"'))
         self.assertLess(collection.index('bmh_history.py" collect'), collection.index('touch "${ARTIFACT_DIR}/.redaction-complete"', collection.index('bmh_history.py" collect')))
         self.assertIn('bmh_history.py" cleanup', TEARDOWN_SCRIPT.read_text())
 

@@ -197,9 +197,12 @@ directories are not overwritten by another recorder.
 
 Private raw files live beside the inventory in its `.history` directory.
 Collection stops recording, privately stages only events and status, and runs
-the existing release gate with the collected secret inventory before copying
-to `bmh-history/` in the artifact tree and creating the completion marker.
-Failed gathering leaves no marker; failed event redaction releases no history.
+the existing release gate with the collected secret inventory before staging
+`bmh-history/` with successful cluster collection. Compact runs publish that
+staging through the existing guarded copy; an interrupted copy discards partial
+cluster/event files while retaining completed compact host diagnostics.
+Failed gathering releases no event history; completed compact host diagnostics
+retain their independent completion marker. Failed event redaction releases no history.
 Teardown retains the inventory/history if libvirt is unreachable or any domain
 of the run remains, and removes history after confirmed domain removal.
 If recorder exit cannot be confirmed (for example, pidfd is unavailable),
