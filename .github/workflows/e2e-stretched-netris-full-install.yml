@@ -435,6 +435,15 @@ jobs:
           echo "OSAC CLI source revision: ${sha}"
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
+      - name: Start component image builds
+        shell: bash
+        env:
+          COMPONENTS_JSON_INPUT: ${{ inputs.components }}
+          OSAC_REPO: ${{ inputs.osac-repo || 'https://github.com/osac-project/osac.git' }}
+          OSAC_BRANCH: ${{ steps.osac-source.outputs.sha }}
+          COMPONENT_STATE_DIR: ${{ runner.temp }}/component-build
+        run: ./scripts/ec2-runner/build-components.sh start
+
       - name: Deploy Netris lab
         shell: bash
         timeout-minutes: 45
@@ -451,121 +460,15 @@ jobs:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make deploy-ocp INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
-      - name: Build and load component images
+      # Built in the background since "Start component image builds".
+      - name: Load component images
         id: components
-        timeout-minutes: 30
+        timeout-minutes: 45
         shell: bash
         env:
-          COMPONENTS_JSON_INPUT: ${{ inputs.components }}
-          OSAC_REPO: ${{ inputs.osac-repo || 'https://github.com/osac-project/osac.git' }}
-          OSAC_BRANCH: ${{ steps.osac-source.outputs.sha }}
           KUBECONFIG: /root/.kube/config
-        run: |
-          CORE_COMPONENTS=$(jq -nc \
-            --arg repo "${OSAC_REPO}" \
-            --arg ref "${OSAC_BRANCH}" \
-            '[
-              {repo: $repo, ref: $ref, containerfile: "fulfillment-service/Containerfile", context: ".", imageKey: "service.images.service"},
-              {repo: $repo, ref: $ref, containerfile: "osac-operator/Containerfile", context: ".", imageKey: "operator.image.repository"},
-              {repo: $repo, ref: $ref, containerfile: "osac-aap/execution-environment/execution-environment.yaml", imageKey: "aap.bootstrap.image", buildType: "ansible-builder"},
-              {repo: $repo, ref: $ref, containerfile: "bare-metal-fulfillment-operator/Containerfile", context: ".", imageKey: "bmf.image.repository"}
-            ]')
-
-          if [[ -z "${COMPONENTS_JSON_INPUT}" || "${COMPONENTS_JSON_INPUT}" == "[]" ]]; then
-            COMPONENTS_JSON="${CORE_COMPONENTS}"
-          else
-            COMPONENTS_JSON=$(echo "${COMPONENTS_JSON_INPUT}" | jq -c --argjson core "${CORE_COMPONENTS}" '
-                map(select(
-                  .imageKey != "service.images.service" and
-                  .imageKey != "operator.image.repository" and
-                  .imageKey != "aap.bootstrap.image" and
-                  .imageKey != "aap.configAsCode.eeImage" and
-                  .imageKey != "bmf.image.repository"
-                )) as $additional
-                | $core + $additional
-              ')
-          fi
-
-          COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
-          IMAGE_OVERRIDES="{}"
-          NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
-
-          declare -A REPO_PINNED_SHA
-
-          for i in $(seq 0 $((COUNT - 1))); do
-            repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo")
-            ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref")
-            file=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].containerfile // \"Containerfile\"")
-            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey")
-            build_type=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildType // \"containerfile\"")
-            context=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].context // empty")
-
-            tag="localhost/component-${i}:${GITHUB_RUN_ID}"
-            src="$RUNNER_TEMP/component-${i}-src"
-
-            echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
-            repo_url="${repo}"
-            if [[ "${repo_url}" != *://* && "${repo_url}" != git@* ]]; then
-              repo_url="https://github.com/${repo_url%.git}.git"
-            fi
-            if [[ -n "${REPO_PINNED_SHA[$repo]:-}" ]]; then
-              sha="${REPO_PINNED_SHA[$repo]}"
-              echo "Cloning ${repo} at pinned SHA ${sha} (first clone resolved this from ref '${ref}')."
-              git init "${src}"
-              git -C "${src}" fetch --depth 1 "${repo_url}" "${sha}"
-              git -C "${src}" checkout FETCH_HEAD
-            else
-              git init "${src}"
-              git -C "${src}" fetch --depth 1 "${repo_url}" "${ref}"
-              git -C "${src}" checkout FETCH_HEAD
-              sha=$(git -C "${src}" rev-parse HEAD)
-              REPO_PINNED_SHA[$repo]="${sha}"
-              echo "Pinned ${repo} to SHA ${sha} (resolved from ref '${ref}')."
-            fi
-
-            component_dir="${src}"
-            build_context="${src}"
-            containerfile_name="${file}"
-            if [[ "${file}" == */* ]]; then
-              component_dir="${src}/$(dirname "${file}")"
-              containerfile_name="$(basename "${file}")"
-            fi
-            if [[ -n "${context}" ]]; then
-              build_context="${src}/${context}"
-            else
-              build_context="${component_dir}"
-            fi
-
-            if [[ "${build_type}" == "ansible-builder" ]]; then
-              /usr/bin/python3 -m pip install --ignore-installed --quiet 'ansible-builder~=3.0'
-              ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
-              podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
-            else
-              podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
-            fi
-
-            echo "Loading ${tag} onto node ${NODE_NAME}..."
-            podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
-
-            case "${image_key}" in
-              service.images.service)      var_names=(fulfillment_service_image) ;;
-              operator.image.repository)   var_names=(osac_operator_image) ;;
-              aap.bootstrap.image)         var_names=(osac_aap_image) ;;
-              bmf.image.repository)        var_names=(bmf_operator_image) ;;
-              *)
-                echo "::error::components[$i].imageKey '${image_key}' is not a recognized override key"
-                exit 1
-                ;;
-            esac
-
-            for var_name in "${var_names[@]}"; do
-              IMAGE_OVERRIDES=$(echo "${IMAGE_OVERRIDES}" | jq -c --arg k "${var_name}" --arg v "${tag}" '. + {($k): $v}')
-              echo "Built ${var_name}=${tag}"
-            done
-            echo "::endgroup::"
-          done
-
-          echo "overrides=${IMAGE_OVERRIDES}" >> "$GITHUB_OUTPUT"
+          COMPONENT_STATE_DIR: ${{ runner.temp }}/component-build
+        run: ./scripts/ec2-runner/build-components.sh load
 
       - name: Deploy OSAC
         timeout-minutes: 90
