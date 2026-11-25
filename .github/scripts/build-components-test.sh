@@ -236,6 +236,42 @@ test_load_times_out() {
   assert_eq "$(count_calls '^oc debug')" 0 "oc debug count"
 }
 
+test_abort_stops_running_build_and_prints_log() {
+  reset abort_stops_running_build_and_prints_log
+  export STUB_BUILD_SLEEP=20
+  run start
+  local pid
+  pid=$(cat "${COMPONENT_STATE_DIR}/build.pid")
+  for _ in $(seq 1 50); do
+    grep -q 'Build component\[0\]' "${COMPONENT_STATE_DIR}/build.log" 2> /dev/null && break
+    sleep 0.1
+  done
+  run abort
+  assert_eq "${RC}" 0 "exit code (${OUT})"
+  assert_contains "${OUT}" "Build component[0]" "build log in the abort output"
+  for _ in $(seq 1 30); do
+    kill -0 "${pid}" 2> /dev/null || break
+    sleep 0.1
+  done
+  ! kill -0 "${pid}" 2> /dev/null || fail "the builder is still running after abort"
+}
+
+test_abort_does_not_repeat_a_printed_log() {
+  reset abort_does_not_repeat_a_printed_log
+  run start
+  wait_for_status
+  run load
+  run abort
+  assert_eq "${RC}" 0 "exit code (${OUT})"
+  [[ "${OUT}" != *"stub build output for"* ]] || fail "abort printed a build log that load already printed"
+}
+
+test_abort_without_a_build() {
+  reset abort_without_a_build
+  run abort
+  assert_eq "${RC}" 0 "exit code (${OUT})"
+}
+
 test_build_core_only
 test_start_returns_before_build_finishes
 test_load_success
@@ -244,6 +280,9 @@ test_load_fails_on_build_failure
 test_load_fails_when_builder_died
 test_load_fails_when_build_never_started
 test_load_times_out
+test_abort_stops_running_build_and_prints_log
+test_abort_does_not_repeat_a_printed_log
+test_abort_without_a_build
 test_build_ignores_overridden_core_keys
 test_build_rejects_unknown_image_key
 test_build_uses_venv_for_ansible_builder

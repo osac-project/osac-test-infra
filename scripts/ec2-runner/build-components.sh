@@ -6,6 +6,8 @@
 #   build-components.sh build   build every image in the foreground
 #   build-components.sh load    wait for the build, load the images onto the
 #                               node and write the "overrides" step output
+#   build-components.sh abort   after a failed job: stop a running build and
+#                               print its log if "load" never did
 #
 # The build needs only podman and the OSAC commit, so a job starts it before
 # the lab and OCP deploy and collects the result once the node exists.
@@ -30,6 +32,7 @@
 # Files in COMPONENT_STATE_DIR:
 #   build.log       output of "build"            build.pid  the detached builder
 #   status          exit code of "build", written last
+#   log.printed     marks that build.log already went to the job log
 #   overrides.json  {"<ansible variable>": "<image tag>", ...}
 #   images.txt      one image tag per line, in build order
 set -euo pipefail
@@ -205,6 +208,7 @@ start() {
 print_build_log() {
   if [[ -f "${COMPONENT_STATE_DIR}/build.log" ]]; then
     cat "${COMPONENT_STATE_DIR}/build.log"
+    : > "${COMPONENT_STATE_DIR}/log.printed"
   fi
 }
 
@@ -256,12 +260,30 @@ load() {
   echo "overrides=$(jq -c . "${COMPONENT_STATE_DIR}/overrides.json")" >> "${GITHUB_OUTPUT}"
 }
 
+# For a job that failed or was cancelled: stops a build that is still running
+# and prints its log unless "load" already did, so the output of a build that
+# never reached "load" is not lost with the box. Never fails the step.
+abort() {
+  local pid
+  if builder_alive; then
+    pid=$(cat "${COMPONENT_STATE_DIR}/build.pid")
+    echo "Stopping the component image build (process group ${pid})..."
+    # "start" made the builder a session leader, so its PID names its group.
+    kill -TERM -- "-${pid}" 2> /dev/null || true
+  fi
+  if [[ ! -e "${COMPONENT_STATE_DIR}/log.printed" ]]; then
+    print_build_log
+    echo "::endgroup::"
+  fi
+}
+
 case "${MODE}" in
   build) build ;;
   start) start ;;
   load) load ;;
+  abort) abort ;;
   *)
-    echo "usage: $0 start|build|load" >&2
+    echo "usage: $0 start|build|load|abort" >&2
     exit 2
     ;;
 esac
