@@ -770,7 +770,6 @@ jobs:
           # or an unclosed exposure window. Empty fallback is failure
           # so a crashed summary step cannot look like a clean pass.
           status: ${{ steps.summary.outputs.notify-status || 'failure' }}
-          workflow-name: "Workflow log/artifact audit"
           failed-step: "${{ steps.summary.outputs.notify-message || 'Audit incomplete -- see run logs' }}"
           slack-webhook-url: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
           workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -265,7 +265,6 @@ jobs:
         uses: ./.github/actions/notify-slack
         with:
           status: ${{ job.status }}
-          workflow-name: "Deploy monitoring stack"
           slack-webhook-url: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
           workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           branch-name: ${{ github.ref_name }}

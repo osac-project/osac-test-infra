@@ -7,8 +7,9 @@ inputs:
     description: 'Workflow status: success, failure, or warning'
     required: true
   workflow-name:
-    description: 'Workflow display name (e.g., "E2E VMaaS Full Install")'
-    required: true
+    description: 'Display name of the linked workflow. Override for notifications about another run.'
+    required: false
+    default: ${{ github.workflow }}
   slack-webhook-url:
     description: >-
       Slack incoming webhook URL. Used when slack-bot-token/slack-channel-id

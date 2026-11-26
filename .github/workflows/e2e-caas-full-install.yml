@@ -1159,7 +1159,7 @@ jobs:
           JUNIT_PATH: ${{ runner.temp }}/test-output/junit.xml
           GOOGLE_CLOUD_PROJECT: ${{ steps.vertex-auth.outputs.gcp-project }}
           GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
-          WORKFLOW_NAME: "E2E CaaS Full Install"
+          WORKFLOW_NAME: ${{ github.workflow }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # Also written here (not just GITHUB_STEP_SUMMARY) so the Slack
           # steps below can grab the raw diagnosis text on its own,
@@ -1173,7 +1173,6 @@ jobs:
         uses: ./.github/actions/notify-slack
         with:
           status: failure
-          workflow-name: "E2E CaaS Full Install"
           # Bot-token path (not the webhook) -- only chat.postMessage
           # returns a message ts, which the two threaded replies below
           # need. Same bot/token/channel already used by the daily CI
