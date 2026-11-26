@@ -1173,6 +1173,7 @@ jobs:
         uses: ./.github/actions/notify-slack
         with:
           status: failure
+          workflow-name: ${{ github.workflow }}
           # Bot-token path (not the webhook) -- only chat.postMessage
           # returns a message ts, which the two threaded replies below
           # need. Same bot/token/channel already used by the daily CI
