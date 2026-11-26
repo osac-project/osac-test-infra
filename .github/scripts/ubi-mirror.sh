@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Used by mirror-ubi-bases.yml to collect the UBI refs the osac Containerfiles
-# build on and to name their GHCR counterparts. One place computes the name so
-# the mirror job and its verification steps cannot disagree.
+# build on and to name their GHCR counterparts. The e2e and integration build
+# paths use it too: "prepull" puts the mirrored copies in the local container
+# storage under the source names, so their podman/docker builds do not ask
+# registry.access.redhat.com for an anonymous token. One place computes the
+# name so the mirror job, the builds and the verification steps cannot
+# disagree.
 set -euo pipefail
 
 registry=${UBI_SOURCE_REGISTRY:-registry.access.redhat.com}
 mirror=${UBI_MIRROR:-ghcr.io/osac-project}
+# Container tool prepull uses: podman on the e2e runners, docker in osac CI.
+runtime=${UBI_RUNTIME:-podman}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repos_file=${script_dir}/../ubi-mirror-repos.txt
 
@@ -84,6 +90,23 @@ mirror_ref() {
   printf '%s/%s:%s\n' "$mirror" "${repo//\//-}" "${tag}"
 }
 
+# Best effort: a failed pull or retag is reported and left alone, because the
+# build can still pull the ref from the source registry. This keeps a base bump
+# working between the bump and the next mirror refresh.
+prepull_ref() {
+  local ref=$1 target
+  target=$(mirror_ref "${ref}") || return 0
+  if ! "${runtime}" image inspect "${target}" > /dev/null 2>&1; then
+    if ! "${runtime}" pull "${target}"; then
+      echo "::warning title=ubi-prepull::could not pull ${target}; the build will pull ${ref} from ${registry}"
+      return 0
+    fi
+  fi
+  if ! "${runtime}" tag "${target}" "${ref}"; then
+    echo "::warning title=ubi-prepull::could not retag ${target} as ${ref}"
+  fi
+}
+
 case ${1:-} in
   list)
     shift
@@ -92,8 +115,19 @@ case ${1:-} in
   mirror)
     mirror_ref "${2:?usage: $0 mirror <ref>}"
     ;;
+  prepull)
+    shift
+    containerfiles=()
+    for containerfile in "$@"; do
+      [ -f "${containerfile}" ] && containerfiles+=("${containerfile}")
+    done
+    ((${#containerfiles[@]})) || exit 0
+    list_refs "${containerfiles[@]}" | filter_repos | while IFS= read -r ref; do
+      prepull_ref "${ref}"
+    done
+    ;;
   *)
-    echo "usage: $0 list <Containerfile>... | mirror <ref>" >&2
+    echo "usage: $0 list <Containerfile>... | mirror <ref> | prepull <Containerfile>..." >&2
     exit 2
     ;;
 esac

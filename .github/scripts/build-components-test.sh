@@ -13,7 +13,15 @@ cat > "${WORK}/bin/git" <<'STUB'
 #!/usr/bin/env bash
 echo "git $*" >> "${STUB_LOG}"
 case "$*" in
-  "init "*) mkdir -p "$2" ;;
+  "init "*)
+    mkdir -p "$2/fulfillment-service" "$2/osac-operator" "$2/bare-metal-fulfillment-operator"
+    for dir in fulfillment-service osac-operator bare-metal-fulfillment-operator; do
+      {
+        echo 'FROM registry.access.redhat.com/ubi10/go-toolset:1.26.10-1793622842 AS builder'
+        echo 'FROM registry.access.redhat.com/ubi10-minimal:10.2-1793642335'
+      } > "$2/$dir/Containerfile"
+    done
+    ;;
   *"rev-parse HEAD"*) echo "${STUB_SHA:-abc123}" ;;
 esac
 STUB
@@ -26,19 +34,35 @@ case "$1" in
     echo "stub build output for $*"
     exit "${STUB_PODMAN_RC:-0}"
     ;;
+  image) exit "${STUB_IMAGE_INSPECT_RC:-0}" ;;
+  pull) exit "${STUB_PODMAN_PULL_RC:-0}" ;;
   save) echo "image-bytes" ;;
 esac
 STUB
-# Stands in for the system Python: only "-m venv <dir>" does anything.
+# Stands in for the system Python: only "-m venv <dir>" does anything. The
+# ansible-builder stub writes the context/Containerfile that "create" would.
 cat > "${WORK}/bin/fake-python" <<'STUB'
 #!/usr/bin/env bash
 echo "python3 $*" >> "${STUB_LOG}"
 if [[ "${1:-}" == "-m" && "${2:-}" == "venv" ]]; then
   mkdir -p "$3/bin"
-  for tool in pip ansible-builder; do
-    printf '#!/usr/bin/env bash\necho "venv-%s $*" >> "${STUB_LOG}"\n' "${tool}" > "$3/bin/${tool}"
-    chmod +x "$3/bin/${tool}"
+  printf '#!/usr/bin/env bash\necho "venv-pip $*" >> "${STUB_LOG}"\n' > "$3/bin/pip"
+  cat > "$3/bin/ansible-builder" <<'AB'
+#!/usr/bin/env bash
+echo "venv-ansible-builder $*" >> "${STUB_LOG}"
+if [[ "${1:-}" == "create" ]]; then
+  context=""
+  while (($#)); do
+    case "$1" in
+      --context) context=$2; shift 2 ;;
+      *) shift ;;
+    esac
   done
+  mkdir -p "${context}"
+  echo 'FROM registry.access.redhat.com/ubi10-minimal:10.2-1793642999' > "${context}/Containerfile"
+fi
+AB
+  chmod +x "$3/bin/"*
 fi
 STUB
 cat > "${WORK}/bin/oc" <<'STUB'
@@ -79,7 +103,7 @@ reset() {
   rm -rf "${COMPONENT_STATE_DIR}"
   : > "${STUB_LOG}"
   : > "${GITHUB_OUTPUT}"
-  unset STUB_PODMAN_RC STUB_BUILD_SLEEP
+  unset STUB_PODMAN_RC STUB_BUILD_SLEEP STUB_PODMAN_PULL_RC STUB_IMAGE_INSPECT_RC
   export COMPONENTS_JSON_INPUT='[]'
 }
 
@@ -137,6 +161,45 @@ test_build_fails_when_podman_fails() {
   run build
   [[ "${RC}" -ne 0 ]] || fail "expected a non-zero exit"
   [[ ! -e "${COMPONENT_STATE_DIR}/overrides.json" ]] || fail "overrides.json was written after a failed build"
+}
+
+test_build_prepulls_and_retags_ubi_bases() {
+  reset build_prepulls_and_retags_ubi_bases
+  run build
+  assert_eq "${RC}" 0 "exit code (${OUT})"
+  assert_eq "$(count_calls '^podman build')" 4 "podman build count"
+  # Three components build on the two mirrored bases, and the generated
+  # ansible-builder Containerfile adds a third ref. Every copy is already in
+  # local storage, so prepull retags it without pulling.
+  assert_eq "$(count_calls '^podman image inspect ghcr.io/osac-project/')" 7 "prepull inspections"
+  assert_eq "$(count_calls '^podman pull ')" 0 "prepull pulls for images already local"
+  assert_eq "$(count_calls '^podman tag ghcr.io/osac-project/')" 7 "prepull retags"
+  assert_contains "$(grep '^podman tag ' "${STUB_LOG}")" \
+    "ghcr.io/osac-project/ubi10-minimal:10.2-1793642335 registry.access.redhat.com/ubi10-minimal:10.2-1793642335" \
+    "mirror retagged as the source reference"
+  assert_contains "$(grep '^podman tag ' "${STUB_LOG}")" \
+    "ghcr.io/osac-project/ubi10-minimal:10.2-1793642999 registry.access.redhat.com/ubi10-minimal:10.2-1793642999" \
+    "generated ansible-builder Containerfile is prepulled"
+}
+
+test_build_pulls_mirror_when_missing_locally() {
+  reset build_pulls_mirror_when_missing_locally
+  export STUB_IMAGE_INSPECT_RC=1
+  run build
+  assert_eq "${RC}" 0 "exit code (${OUT})"
+  assert_eq "$(count_calls '^podman pull ghcr.io/osac-project/')" 7 "prepull pulls"
+  assert_eq "$(count_calls '^podman tag ghcr.io/osac-project/')" 7 "prepull retags"
+}
+
+test_build_falls_back_when_mirror_pull_fails() {
+  reset build_falls_back_when_mirror_pull_fails
+  export STUB_IMAGE_INSPECT_RC=1
+  export STUB_PODMAN_PULL_RC=1
+  run build
+  assert_eq "${RC}" 0 "exit code (${OUT})"
+  assert_contains "${OUT}" "could not pull ghcr.io/osac-project/ubi10-minimal" "fallback warning"
+  assert_eq "$(count_calls '^podman tag ')" 0 "prepull retags after a failed pull"
+  assert_eq "$(count_calls '^podman build')" 4 "podman build count"
 }
 
 test_requires_state_dir() {
@@ -287,6 +350,9 @@ test_build_ignores_overridden_core_keys
 test_build_rejects_unknown_image_key
 test_build_uses_venv_for_ansible_builder
 test_build_fails_when_podman_fails
+test_build_prepulls_and_retags_ubi_bases
+test_build_pulls_mirror_when_missing_locally
+test_build_falls_back_when_mirror_pull_fails
 test_requires_state_dir
 
 if [[ "${FAILED}" -ne 0 ]]; then

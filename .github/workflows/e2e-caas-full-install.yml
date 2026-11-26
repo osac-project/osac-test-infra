@@ -480,11 +480,16 @@ jobs:
               build_context="${component_dir}"
             fi
 
+            # Prefer the CI mirror of the UBI bases; prepull retags the GHCR
+            # copies to the source names and falls back on a miss. The
+            # ansible-builder input only exists after create generates it.
             if [[ "${build_type}" == "ansible-builder" ]]; then
               python3 -m pip install --quiet 'ansible-builder~=3.0'
               ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
+              .github/scripts/ubi-mirror.sh prepull "${component_dir}/context/Containerfile" || true
               podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
             else
+              .github/scripts/ubi-mirror.sh prepull "${component_dir}/${containerfile_name}" || true
               podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
             fi
 
