@@ -1,8 +1,14 @@
 # CODEOWNERS
 #
 # Patterns are evaluated top-to-bottom (last matching pattern takes precedence). A team that wants to own a folder adds
-# a line here in a pull request that wg-infra approves (see the self-protection rule below). Leave a folder out and any
-# maintainer's approval is enough.
+# a line here in a pull request that wg-infra approves (see the self-protection rule below). Leave a folder out and the
+# default rule below applies: a member of any working group has to approve it.
+
+# Default owner: every path that no later rule names. maintainers is the parent of the working-group teams, so a member of
+# any of them (other than the author) has to approve. A bot, CodeRabbit included, is in none of them, so a pull request
+# is not merged on a bot's approval alone. A rule below with no owner at all is the only way to leave a path to any
+# approval.
+* @osac-project/maintainers
 
 # CODEOWNERS Self-Protection
 /CODEOWNERS @osac-project/wg-infra
