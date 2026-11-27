@@ -34,6 +34,16 @@ endif
 KUBECONFIG ?= $(HOME)/.kube/$(MGMT_CLONE_NAME).kubeconfig
 
 export DEPLOY_SUITE OSAC_PROFILE MGMT_CLONE_NAME OSAC_NAMESPACE OSAC_VALUES_FILE OSAC_PULL_SECRET_PATH KUBECONFIG OSAC_KUBECONFIG_FROM_CALLER
+# One virtual BMH per fabric access port. The BMaaS networking suite needs
+# two so it can place BMIs on separate hosts. Override for a smaller lab.
+BMH_COUNT ?= 2
+# The secondary libvirt network a host's management NIC attaches to; it is
+# what the host-side test SSHes to (OSAC_BMH_SSH_HOSTS).
+MGMT_LIBVIRT_NETWORK ?=
+export BMH_COUNT
+ifneq ($(MGMT_LIBVIRT_NETWORK),)
+export MGMT_LIBVIRT_NETWORK
+endif
 
 # ─── Contract targets ──────────────────────────────────────────────
 #
@@ -68,7 +78,7 @@ setup-caas:
 	$(SCRIPTS)/setup-caas.sh
 
 setup-bmaas:
-	@echo "=== Registering one virtual BMH and publishing its AgentlessNet inventory ==="
+	@echo "=== Registering virtual BMHs, their management NICs and AgentlessNet inventory ==="
 	$(SCRIPTS)/setup-bmaas.sh
 
 prove-bmi:

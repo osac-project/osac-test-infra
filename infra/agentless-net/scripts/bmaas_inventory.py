@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Render the AgentlessNet inventory for one virtual BMH fabric port.
+"""Render the AgentlessNet inventory for the virtual BMH fabric ports.
 
 The networking worker reads this document from AGENTLESS_NET_VN_INVENTORY.
 Access ports used by a host must not also be listed as trunks.
+
+A BMaaS networking run needs more than one host: the Netris-style suite places
+BMIs on several hosts and checks same-VirtualNetwork connectivity and
+cross-VirtualNetwork isolation between them. Each host therefore gets its own
+fabric access port, and every port must be unique.
 """
 
 from __future__ import annotations
@@ -12,24 +17,33 @@ import json
 import sys
 from typing import Any
 
-
 FABRIC_INTERFACE = "eth9"
-FABRIC_MAC = "52:54:00:bb:dd:01"
 PROVISIONING_VLAN_ID = 2
+# The lab exposes one access port on each leaf. A host maps to exactly one.
+SUPPORTED_PORTS = {("leaf-1", "swp2"), ("leaf-2", "swp2")}
 
 
-def inventory_document(
-    *,
-    mgmt_prefix: str,
-    host_name: str,
-    switch: str = "leaf-1",
-    port: str = "swp2",
-) -> dict[str, Any]:
-    """Return the inventory for host_name's eth9 on the selected fabric port."""
-    if not mgmt_prefix or not host_name:
-        raise ValueError("mgmt_prefix and host_name are required")
-    if (switch, port) not in {("leaf-1", "swp2"), ("leaf-2", "swp2")}:
-        raise ValueError(f"unsupported fabric port {switch}/{port}")
+def inventory_document(*, mgmt_prefix: str, hosts: list[tuple[str, str, str]]) -> dict[str, Any]:
+    """Return the inventory for `hosts`, a list of (host_name, switch, port) triples."""
+    if not mgmt_prefix:
+        raise ValueError("mgmt_prefix is required")
+    if not hosts:
+        raise ValueError("at least one host is required")
+    seen_hosts: set[str] = set()
+    seen_ports: set[tuple[str, str]] = set()
+    host_ports: dict[str, dict[str, dict[str, str]]] = {}
+    for host_name, switch, port in hosts:
+        if not host_name:
+            raise ValueError("host_name is required")
+        if (switch, port) not in SUPPORTED_PORTS:
+            raise ValueError(f"unsupported fabric port {switch}/{port}")
+        if host_name in seen_hosts:
+            raise ValueError(f"duplicate host_name {host_name}")
+        if (switch, port) in seen_ports:
+            raise ValueError(f"duplicate fabric port {switch}/{port} from {host_name}")
+        seen_hosts.add(host_name)
+        seen_ports.add((switch, port))
+        host_ports[host_name] = {FABRIC_INTERFACE: {"switch": switch, "port": port}}
     prefix = mgmt_prefix.rstrip(".")
     return {
         "all": {
@@ -38,23 +52,12 @@ def inventory_document(
                     "name": "agentless-provisioning",
                     "vlan_id": PROVISIONING_VLAN_ID,
                 },
-                "agentless_net_host_ports": {
-                    host_name: {
-                        FABRIC_INTERFACE: {
-                            "switch": switch,
-                            "port": port,
-                        }
-                    }
-                },
+                "agentless_net_host_ports": host_ports,
             },
             "children": {
                 "net_nodes": {
                     "hosts": {
-                        "network-node": {
-                            "ansible_host": f"{prefix}.30",
-                            "ansible_user": "root",
-                            "ansible_port": 22,
-                        }
+                        "network-node": {"ansible_host": f"{prefix}.30", "ansible_user": "root", "ansible_port": 22}
                     }
                 },
                 "switches": {
@@ -78,20 +81,31 @@ def inventory_document(
     }
 
 
-def render_inventory(*, mgmt_prefix: str, host_name: str, switch: str = "leaf-1", port: str = "swp2") -> str:
-    return json.dumps(inventory_document(mgmt_prefix=mgmt_prefix, host_name=host_name, switch=switch, port=port))
+def render_inventory(*, mgmt_prefix: str, hosts: list[tuple[str, str, str]]) -> str:
+    return json.dumps(inventory_document(mgmt_prefix=mgmt_prefix, hosts=hosts))
+
+
+def _parse_host(value: str) -> tuple[str, str, str]:
+    """Parse `name=switch:port`, the CLI form of one host mapping."""
+    name, sep, port = value.partition("=")
+    switch, sep2, iface = port.partition(":")
+    if not sep or not sep2 or not name or not switch or not iface:
+        raise argparse.ArgumentTypeError(f"expected name=switch:port, got {value!r}")
+    return name, switch, iface
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mgmt-prefix", required=True)
-    parser.add_argument("--host-name", required=True)
-    parser.add_argument("--switch", default="leaf-1")
-    parser.add_argument("--port", default="swp2")
-    args = parser.parse_args(argv)
-    sys.stdout.write(
-        render_inventory(mgmt_prefix=args.mgmt_prefix, host_name=args.host_name, switch=args.switch, port=args.port)
+    parser.add_argument(
+        "--host",
+        action="append",
+        type=_parse_host,
+        required=True,
+        help="Host mapping name=switch:port (repeatable, one per fabric access port)",
     )
+    args = parser.parse_args(argv)
+    sys.stdout.write(render_inventory(mgmt_prefix=args.mgmt_prefix, hosts=args.host))
     return 0
 
 
