@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import json
@@ -21,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bmaas_inventory  # noqa: E402
 import prove_bmi  # noqa: E402
 
-
 ROOT = Path(__file__).resolve().parents[3]
 INFRA = ROOT / "infra" / "agentless-net"
 WORKFLOW = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install.yml"
@@ -32,22 +32,17 @@ CLEANUP = ROOT / ".github" / "workflows" / "e2e-pr-cancel.yml"
 
 class InventoryTest(unittest.TestCase):
     def test_access_port_is_not_a_trunk_and_no_secrets_are_embedded(self) -> None:
-        document = bmaas_inventory.inventory_document(mgmt_prefix="192.168.160", host_name="virtual-bmh-1")
-        rendered = bmaas_inventory.render_inventory(mgmt_prefix="192.168.160", host_name="virtual-bmh-1")
+        hosts = [("virtual-bmh-1", "leaf-1", "swp2"), ("virtual-bmh-2", "leaf-2", "swp2")]
+        document = bmaas_inventory.inventory_document(mgmt_prefix="192.168.160", hosts=hosts)
+        rendered = bmaas_inventory.render_inventory(mgmt_prefix="192.168.160", hosts=hosts)
 
         self.assertNotIn("password", rendered)
         self.assertNotIn("private_key", rendered)
         host_ports = document["all"]["vars"]["agentless_net_host_ports"]
         self.assertEqual(host_ports["virtual-bmh-1"]["eth9"], {"switch": "leaf-1", "port": "swp2"})
-        second = bmaas_inventory.inventory_document(
-            mgmt_prefix="192.168.160", host_name="virtual-bmh-1", switch="leaf-2", port="swp2"
-        )
-        self.assertEqual(
-            second["all"]["vars"]["agentless_net_host_ports"]["virtual-bmh-1"]["eth9"],
-            {"switch": "leaf-2", "port": "swp2"},
-        )
+        self.assertEqual(host_ports["virtual-bmh-2"]["eth9"], {"switch": "leaf-2", "port": "swp2"})
         with self.assertRaises(ValueError):
-            bmaas_inventory.inventory_document(mgmt_prefix="192.168.160", host_name="virtual-bmh-1", switch="leaf-9", port="swp2")
+            bmaas_inventory.inventory_document(mgmt_prefix="192.168.160", hosts=[("host-a", "leaf-9", "swp2")])
         switches = document["all"]["children"]["switches"]["hosts"]
         for switch in switches.values():
             self.assertNotIn("swp2", switch["trunk_ports"])
@@ -56,12 +51,33 @@ class InventoryTest(unittest.TestCase):
         self.assertEqual(net_nodes["network-node"]["ansible_host"], "192.168.160.30")
         self.assertEqual(document["all"]["vars"]["agentless_net_provisioning_network"]["vlan_id"], 2)
 
+    def test_each_host_gets_a_unique_access_port(self) -> None:
+        # Two hosts on one access port would share a VLAN and hide a cross-VNet
+        # isolation failure, so the renderer must reject it.
+        with self.assertRaises(ValueError):
+            bmaas_inventory.inventory_document(
+                mgmt_prefix="192.168.160", hosts=[("host-a", "leaf-1", "swp2"), ("host-b", "leaf-1", "swp2")]
+            )
+        with self.assertRaises(ValueError):
+            bmaas_inventory.inventory_document(
+                mgmt_prefix="192.168.160", hosts=[("host-a", "leaf-1", "swp2"), ("host-a", "leaf-2", "swp2")]
+            )
+        with self.assertRaises(ValueError):
+            bmaas_inventory.inventory_document(mgmt_prefix="192.168.160", hosts=[])
+
+    def test_cli_host_flag_parses_name_switch_and_port(self) -> None:
+        # A regression here silently produced one bogus host key named
+        # "host=leaf-2:swp3" instead of three host->port mappings.
+        self.assertEqual(bmaas_inventory._parse_host("host-a=leaf-1:swp2"), ("host-a", "leaf-1", "swp2"))
+        self.assertEqual(bmaas_inventory._parse_host("vm-86=leaf-2:swp3"), ("vm-86", "leaf-2", "swp3"))
+        with self.assertRaises(argparse.ArgumentTypeError):
+            bmaas_inventory._parse_host("host-a")
+        with self.assertRaises(argparse.ArgumentTypeError):
+            bmaas_inventory._parse_host("host-a=leaf-1")
+
     def test_prefix_trailing_dot_is_not_doubled(self) -> None:
-        document = bmaas_inventory.inventory_document(mgmt_prefix="10.0.0.", host_name="host-a")
-        self.assertEqual(
-            document["all"]["children"]["switches"]["hosts"]["leaf-1"]["ansible_host"],
-            "10.0.0.11",
-        )
+        document = bmaas_inventory.inventory_document(mgmt_prefix="10.0.0.", hosts=[("host-a", "leaf-1", "swp2")])
+        self.assertEqual(document["all"]["children"]["switches"]["hosts"]["leaf-1"]["ansible_host"], "10.0.0.11")
 
 
 class ProofPayloadTest(unittest.TestCase):
@@ -88,12 +104,22 @@ class ProofPayloadTest(unittest.TestCase):
         self.assertNotIn("security_groups", attachments[0])
 
     def test_address_and_ready_state(self) -> None:
-        ready = {"status": {"state": "BARE_METAL_INSTANCE_STATE_READY", "network_attachments": [{"ip_address": "10.100.1.193"}]}}
+        ready = {
+            "status": {
+                "state": "BARE_METAL_INSTANCE_STATE_READY",
+                "network_attachments": [{"ip_address": "10.100.1.193"}],
+            }
+        }
         camel = {"status": {"state": "STATE_READY", "networkAttachmentStatuses": [{"ipAddress": "10.100.1.50"}]}}
         self.assertEqual(prove_bmi.discovered_address(ready), "10.100.1.193")
         self.assertEqual(prove_bmi.discovered_address(camel), "10.100.1.50")
         self.assertTrue(prove_bmi.is_ready(ready))
-        running = {"status": {"state": "BARE_METAL_INSTANCE_STATE_RUNNING", "network_attachments": [{"ip_address": "10.100.1.193"}]}}
+        running = {
+            "status": {
+                "state": "BARE_METAL_INSTANCE_STATE_RUNNING",
+                "network_attachments": [{"ip_address": "10.100.1.193"}],
+            }
+        }
         self.assertTrue(prove_bmi.is_bmi_running(running))
         self.assertFalse(prove_bmi.is_bmi_running(ready))
         self.assertFalse(prove_bmi.is_ready(running))
@@ -101,7 +127,10 @@ class ProofPayloadTest(unittest.TestCase):
         proto = {"status": {"network_attachment_statuses": [{"ip_address": "10.100.1.194"}]}}
         self.assertEqual(prove_bmi.discovered_address(proto), "10.100.1.194")
         command = prove_bmi.grpcurl_command(
-            address="api.example:443", token="token", ca_file="/tmp/ca.crt", service="osac.public.v1.BareMetalInstances/Get"
+            address="api.example:443",
+            token="token",
+            ca_file="/tmp/ca.crt",
+            service="osac.public.v1.BareMetalInstances/Get",
         )
         self.assertNotIn("-insecure", command)
         self.assertIn("-cacert", command)
@@ -154,10 +183,7 @@ class ProofPayloadTest(unittest.TestCase):
     def test_call_records_the_grpc_status_code(self) -> None:
         test_token = "super-secret-token"
         completed = subprocess.CompletedProcess(
-            args=[],
-            returncode=1,
-            stdout="",
-            stderr=f"rpc error: code = Unavailable desc = unreachable {test_token}",
+            args=[], returncode=1, stdout="", stderr=f"rpc error: code = Unavailable desc = unreachable {test_token}"
         )
         api = prove_bmi.Api(address="api.example:443", token=test_token, ca_file="/tmp/ca.crt")
         with mock.patch("prove_bmi.subprocess.run", return_value=completed):
@@ -217,7 +243,9 @@ class ProofPayloadTest(unittest.TestCase):
             def call(self, service: str, data: dict | None = None) -> dict:
                 self.services.append(service)
                 if service.endswith("/Get"):
-                    return {"object": {"metadata": {"name": "kept"}, "status": {"state": "VIRTUAL_NETWORK_STATE_READY"}}}
+                    return {
+                        "object": {"metadata": {"name": "kept"}, "status": {"state": "VIRTUAL_NETWORK_STATE_READY"}}
+                    }
                 return {"object": {"id": "created-id", "metadata": {"name": "created"}}}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -330,10 +358,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("workflow_call", document[True])
         self.assertNotIn("workflow_dispatch", document[True])
         self.assertNotIn("pull_request", document[True])
-        self.assertEqual(
-            set(document["jobs"]),
-            {"authorize", "provision", "push-secrets", "e2e", "teardown", "notify"},
-        )
+        self.assertEqual(set(document["jobs"]), {"authorize", "provision", "push-secrets", "e2e", "teardown", "notify"})
         self.assertFalse(document[True]["workflow_call"]["inputs"]["notify-on-failure"]["default"])
         notify = document["jobs"]["notify"]
         self.assertIn("inputs.notify-on-failure", notify["if"])
@@ -351,10 +376,7 @@ class WorkflowContractTest(unittest.TestCase):
         )
         self.assertNotIn("fork-pr-author", caller_trigger["workflow_dispatch"]["inputs"])
         workflow_text = WORKFLOW.read_text()
-        self.assertIn(
-            "inputs.pr-repository != '' && (inputs.pr-number == '' || inputs.pr-sha == '')",
-            workflow_text,
-        )
+        self.assertIn("inputs.pr-repository != '' && (inputs.pr-number == '' || inputs.pr-sha == '')", workflow_text)
         self.assertIn("pr-repository requires both", workflow_text)
         self.assertNotIn("id-token", CALLER.read_text())
         self.assertNotIn("attestations", CALLER.read_text())
@@ -379,23 +401,13 @@ class WorkflowContractTest(unittest.TestCase):
         steps = e2e["steps"]
         joined = "\n".join(step.get("run", "") + str(step.get("uses", "")) for step in steps)
         self.assertIn("push-agentless-net-secrets.sh", document["jobs"]["push-secrets"]["steps"][-1]["run"])
-        for target in (
-            "setup-infra",
-            "deploy-ocp",
-            "deploy-osac",
-            "deploy-suite",
-            "gather-infra",
-            "gather-suite",
-        ):
+        for target in ("setup-infra", "deploy-ocp", "deploy-osac", "deploy-suite", "gather-infra", "gather-suite"):
             self.assertIn(f"make {target} INFRA=agentless-net DEPLOY_SUITE=bmaas", joined)
         self.assertIn("build-osac-images.sh", joined)
         self.assertIn("./.github/actions/gather-artifacts", joined)
         self.assertIn("./.github/actions/gather-ec2-runner-artifacts", joined)
         build = (INFRA / "scripts" / "build-osac-images.sh").read_text()
-        self.assertIn(
-            'export KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/agentless-lab-mgmt.kubeconfig}"',
-            build,
-        )
+        self.assertIn('export KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/agentless-lab-mgmt.kubeconfig}"', build)
         stage = next(step for step in steps if step.get("name") == "Stage Agentless diagnostics for redaction")
         gather = next(step for step in steps if step.get("name") == "Gather and redact artifacts")
         self.assertIn("always()", stage["if"])
@@ -410,14 +422,28 @@ class WorkflowContractTest(unittest.TestCase):
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertIn('sh -s -- "$home" "$PUB_KEY"', setup)
         self.assertIn("--patch-file=/dev/stdin", setup)
-        self.assertNotIn("AGENTLESS_NET_SSH_PRIVATE_KEY\":\"${KEY_B64}\"}}\"", setup)
-        self.assertIn("--switch", setup)
-        self.assertIn("br-host2", setup)
+        self.assertNotIn('AGENTLESS_NET_SSH_PRIVATE_KEY":"${KEY_B64}"}}"', setup)
+        # Multi-host: one access port per BMH, a management NIC per host, and
+        # the host->ssh map published for a Netris-style host-side test.
+        self.assertIn('--host "${host}=${switch}:${port}"', setup)
+        self.assertIn('bridge="br-host$((index + 1))"', setup)
         self.assertIn("detach-interface", setup)
-        self.assertLess(setup.index('"$nic_source" != "$FABRIC_BRIDGE"'), setup.index("Publishing the AgentlessNet inventory"))
+        self.assertLess(setup.index('"$nic_source" != "$bridge"'), setup.index("Publishing the AgentlessNet inventory"))
         self.assertLess(setup.index('domain_state" == "running"'), setup.index("detach-interface"))
         self.assertIn('"${live_flags[@]}" --config', setup)
         self.assertIn("<<'EOF'", setup)
+        self.assertIn("MGMT_LIBVIRT_NETWORK", setup)
+        self.assertIn('attach-interface "$host" network', setup)
+        self.assertIn("OSAC_BMH_SSH_HOSTS", setup)
+        self.assertLess(setup.index("Management NIC"), setup.index("Publishing the AgentlessNet inventory"))
+        self.assertLess(setup.index("OSAC_BMH_SSH_HOSTS"), setup.index("setup-bmaas complete"))
+        # Tenant-only default route: provisioning and management NICs drop
+        # their DHCP default route so egress uses the fabric NIC.
+        self.assertIn("dhcp4-overrides: {use-routes: false}", setup)
+        self.assertIn("OSAC_BMI_USER_DATA_FILE", setup)
+        self.assertLess(setup.index("use-routes: false"), setup.index("OSAC_BMI_USER_DATA_FILE"))
+        destroy = (INFRA / "scripts" / "destroy-bmaas.sh").read_text()
+        self.assertIn("OSAC_BMI_USER_DATA_FILE", destroy)
         names = [step.get("name") for step in steps]
         self.assertLess(names.index("Deploy OCP from snapshot"), names.index("Build and load component images"))
         self.assertLess(names.index("Build and load component images"), names.index("Deploy OSAC"))
@@ -438,8 +464,7 @@ class WorkflowContractTest(unittest.TestCase):
         deploy_osac = next(step for step in steps if step.get("name") == "Deploy OSAC")
         self.assertIn("FULFILLMENT_SERVICE_IMAGE", deploy_osac["env"])
         self.assertIn(
-            "steps.components.outputs.fulfillment_service_image",
-            deploy_osac["env"]["FULFILLMENT_SERVICE_IMAGE"],
+            "steps.components.outputs.fulfillment_service_image", deploy_osac["env"]["FULFILLMENT_SERVICE_IMAGE"]
         )
         self.assertEqual(deploy_osac["env"]["OSAC_BRANCH"], "${{ steps.components.outputs.osac_sha }}")
         self.assertEqual(document["jobs"]["teardown"]["if"], "always()")
@@ -455,7 +480,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("inputs.test-infra-sha", under_test["with"]["ref"])
         self.assertIn("inputs.test-infra-repository", under_test["with"]["repository"])
         privileged = next(
-            step for step in document["jobs"]["authorize"]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
+            step
+            for step in document["jobs"]["authorize"]["steps"]
+            if str(step.get("uses", "")).startswith("actions/checkout")
         )
         self.assertEqual(privileged["with"]["repository"], "${{ job.workflow_repository }}")
         self.assertEqual(privileged["with"]["ref"], "${{ job.workflow_sha }}")
@@ -470,7 +497,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("failed to read virtual BMH inventory", destroy)
         self.assertIn("failed to delete BareMetalHost", destroy)
         self.assertNotIn("|| true", destroy)
-        self.assertLess(destroy.index("failed to read virtual BMH inventory"), destroy.index('if [[ -n "${BMH_NAME:-}" ]]'))
+        self.assertLess(
+            destroy.index("failed to read virtual BMH inventory"), destroy.index('if [[ -n "${BMH_NAME:-}" ]]')
+        )
         self.assertEqual(destroy.count("exit 1"), 1)
         self.assertIn('{"metadata":{"finalizers":null}}', destroy)
         self.assertIn("NotFound", destroy)
@@ -488,7 +517,10 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIsNotNone(pattern)
         program = '$title | capture("' + pattern.group(1) + '")'
         for title, expected in (
-            ("E2E suite · bmaas-agentless-net · #795 · " + ("a" * 40), {"suite": "bmaas-agentless-net", "pr": "795", "sha": "a" * 40}),
+            (
+                "E2E suite · bmaas-agentless-net · #795 · " + ("a" * 40),
+                {"suite": "bmaas-agentless-net", "pr": "795", "sha": "a" * 40},
+            ),
             ("E2E BMaaS Agentless-Net Full Install / PR #795 @ " + ("b" * 40), {"pr": "795", "sha": "b" * 40}),
             ("E2E BMaaS Netris Full Install / PR #12 @ " + ("c" * 40), {"pr": "12", "sha": "c" * 40}),
         ):
@@ -502,35 +534,25 @@ class WorkflowContractTest(unittest.TestCase):
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
         bridges = (INFRA / "scripts" / "prepare-host-bridges.sh").read_text()
-        self.assertIn("net.bridge.bridge-nf-call-iptables=0", bridges)
-        self.assertIn("net.bridge.bridge-nf-call-ip6tables=0", bridges)
+        self.assertIn("net.bridge.bridge-nf-call-iptables = 0", bridges)
+        self.assertIn("net.bridge.bridge-nf-call-ip6tables = 0", bridges)
         self.assertIn("br-host1", bridges)
         self.assertIn("leaf1-swp2", bridges)
-        self.assertIn("sysctl -n net.bridge.bridge-nf-call-iptables", bridges)
-        self.assertIn("sysctl -n net.bridge.bridge-nf-call-ip6tables", bridges)
-        self.assertIn("/var/lib/osac-host-bridges/sysctl.prior", bridges)
-        self.assertIn('sudo test -e "$STATE_FILE"', bridges)
-        self.assertIn('sudo test -L "$STATE_FILE"', bridges)
-        self.assertNotIn('[[ -e "$STATE_FILE" ]]', bridges)
-        self.assertNotIn('[[ -f "$STATE_FILE" ]]', bridges)
-        self.assertLess(bridges.index("not a root-owned private"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
-        self.assertLess(bridges.index("sysctl -n net.bridge.bridge-nf-call-iptables"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
-        self.assertIn("restore_host_bridge_sysctls", bridges)
-        restore = bridges.split("restore_host_bridge_sysctls()", 1)[1].split("prepare_failed()", 1)[0]
-        removal = restore.index('sudo rm -f "$SYSCTL_FILE" "$STATE_FILE"')
-        self.assertLess(restore.index('net.bridge.bridge-nf-call-iptables=${ipt}'), removal)
-        self.assertLess(restore.index('net.bridge.bridge-nf-call-ip6tables=${ip6}'), removal)
-        self.assertLess(restore.rindex("return 1"), removal)
-        corrupt = restore.split("has no saved bridge sysctl values", 1)[1]
-        self.assertLess(corrupt.index("return 1"), corrupt.index("sysctl -w"))
-        self.assertIn("restore_host_bridge_sysctls || exit", bridges)
-        self.assertLess(bridges.index("changed_sysctls=1"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
-        failed = bridges.split("prepare_failed()", 1)[1]
-        removal = failed.index('sudo rm -f "$STATE_FILE"')
-        self.assertLess(failed.index("ipt_restored"), removal)
-        self.assertLess(failed.index("ip6_restored"), removal)
-        self.assertIn('"$ipt_restored" -eq 1 && "$ip6_restored" -eq 1 && "$checkpoint_existed" -ne 1', failed)
-        self.assertIn("sudo -n true", bridges)
+        # The previous values are saved before the change and restored from a
+        # root-owned 600 file, so a shared lab goes back to how it was.
+        self.assertIn("STATE_DIR=/var/lib/osac-host-bridges", bridges)
+        self.assertIn("sysctl.prior", bridges)
+        self.assertIn("sudo sysctl -n", bridges)
+        self.assertIn("state_is_trusted", bridges)
+        self.assertIn('if [[ "${1:-}" == "restore" ]]', bridges)
+        self.assertLess(bridges.index("sysctl -n"), bridges.index("net.bridge.bridge-nf-call-iptables = 0"))
+        restore = bridges.split("restore_sysctls()", 1)[1].split('if [[ "${1:-}"', 1)[0]
+        self.assertLess(
+            restore.index('sudo sysctl -w "${name}=${value}"'), restore.index('sudo rm -f "$SYSCTL_FILE" "$STATE_FILE"')
+        )
+        self.assertLess(restore.index("state_is_trusted || return 1"), restore.index("sudo sysctl -w"))
+        # The sysctl hardening is bounded: the file stays small.
+        self.assertLessEqual(len(bridges.splitlines()), 140)
         fabric_teardown = (INFRA / "scripts" / "destroy-fabric.sh").read_text()
         self.assertIn('prepare-host-bridges.sh" restore', fabric_teardown)
 
@@ -544,8 +566,12 @@ class WorkflowContractTest(unittest.TestCase):
         deploy = (INFRA / "scripts" / "deploy-osac.sh").read_text()
         self.assertIn('PROFILE="$OSAC_PROFILE"', deploy)
         self.assertIn("VALUES_FILE=values/agentless-net-ci/values.yaml", deploy)
-        self.assertLess(deploy.index('if [[ "${DEPLOY_SUITE:-}" != "bmaas" ]];'), deploy.index("Merging values overlay"))
-        self.assertLess(deploy.index('if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]];'), deploy.index("values-bmaas-overlay.yaml"))
+        self.assertLess(
+            deploy.index('if [[ "${DEPLOY_SUITE:-}" != "bmaas" ]];'), deploy.index("Merging values overlay")
+        )
+        self.assertLess(
+            deploy.index('if [[ "${DEPLOY_SUITE:-}" == "bmaas" ]];'), deploy.index("values-bmaas-overlay.yaml")
+        )
         fabric = (INFRA / "scripts" / "deploy-fabric.sh").read_text()
         self.assertLess(fabric.index('"${DEPLOY_SUITE:-}" == "bmaas"'), fabric.index("prepare-host-bridges.sh"))
         self.assertLess(fabric.index("use_kubeconfig"), fabric.index("require_recorded_cluster"))
@@ -574,7 +600,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(helper.index("OSAC_KUBECONFIG_FROM_CALLER"), helper.index("unset KUBECONFIG"))
         self.assertLess(helper.index("unset KUBECONFIG"), helper.index('source "$recorded"'))
         self.assertIn("IFS=':'", helper)
-        self.assertIn('KUBECONFIG="${KUBECONFIG:-$HOME/.kube/${MGMT_CLONE_NAME:-agentless-lab-mgmt}.kubeconfig}"', helper)
+        self.assertIn(
+            'KUBECONFIG="${KUBECONFIG:-$HOME/.kube/${MGMT_CLONE_NAME:-agentless-lab-mgmt}.kubeconfig}"', helper
+        )
         self.assertNotIn(".effective-kubeconfig", helper)
         self.assertIn("require_recorded_cluster", helper)
         ocp = (INFRA / "scripts" / "deploy-ocp.sh").read_text()
@@ -585,7 +613,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("require_cluster_tool_kubeconfig", deploy)
         self.assertIn("require_recorded_cluster", (INFRA / "scripts" / "destroy-caas.sh").read_text())
         self.assertIn("require_recorded_cluster", (INFRA / "scripts" / "destroy-fabric.sh").read_text())
-        self.assertIn('wait --for=delete', (INFRA / "scripts" / "destroy-bmaas.sh").read_text())
+        self.assertIn("wait --for=delete", (INFRA / "scripts" / "destroy-bmaas.sh").read_text())
         self.assertNotIn("The proof already copied diagnostics", WORKFLOW.read_text())
         backend = (INFRA / "Makefile").read_text()
         self.assertIn("prepare-suite && $(MAKE) deploy-suite-workload", backend)
@@ -600,18 +628,21 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(root_suite.index("all|setup"), root_suite.index("prepare-suite"))
         self.assertNotIn('INFRA)" = agentless-net', root_suite)
         run_tests = root.split("run-tests: _validate-backend", 1)[1].split("\ndestroy-ocp:", 1)[0]
-        self.assertLess(run_tests.index("does not run the Netris bmaas suite"), run_tests.index("_validate-suite-contract"))
+        # The "cannot run this selection" rule is declared by the backend, not
+        # hardcoded in the root Makefile: run-tests reads capabilities and
+        # rejects any UNSUPPORTED_TEST_SUITES entry for every backend.
+        self.assertIn("UNSUPPORTED_TEST_SUITES", run_tests)
+        self.assertNotIn('INFRA)" = agentless-net', run_tests)
+        self.assertLess(run_tests.index("UNSUPPORTED_TEST_SUITES"), run_tests.index("_validate-suite-contract"))
         self.assertNotIn("{.data.profile}", deploy)
         self.assertNotIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
-        self.assertLess(setup.index("Reusing the virtual BMH"), setup.index("reconcile-bmhs.py"))
+        self.assertLess(setup.index("Reusing ${host_count} virtual BMH"), setup.index("reconcile-bmhs.py"))
         self.assertLess(setup.index("reconcile-bmhs.py"), setup.index("annotate baremetalhost"))
+        self.assertNotIn("refusing to create another", setup)
         self.assertNotIn("apk add --no-cache dnsmasq supervisor", setup)
         setup_infra = (INFRA / "scripts" / "setup-infra.sh").read_text()
-        self.assertLess(
-            setup_infra.index('"${DEPLOY_SUITE:-}" == "bmaas"'),
-            setup_infra.index("Installing grpcurl"),
-        )
+        self.assertLess(setup_infra.index('"${DEPLOY_SUITE:-}" == "bmaas"'), setup_infra.index("Installing grpcurl"))
         self.assertIn("apk add --no-cache dnsmasq supervisor", fabric)
         self.assertIn("/etc/agentless-net/supervisord.conf", fabric)
         self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf pid", fabric)
@@ -627,7 +658,19 @@ class WorkflowContractTest(unittest.TestCase):
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertIn("OSAC_BMI_NETWORK_INTERFACE=eth9", setup)
         self.assertIn("OSAC_BMI_INSTANCE_TYPE=bmaas-agentless-ci", setup)
-        self.assertLess(setup.index("Publishing the AgentlessNet inventory"), setup.index("OSAC_BMI_NETWORK_INTERFACE=eth9"))
+        self.assertLess(
+            setup.index("Publishing the AgentlessNet inventory"), setup.index("OSAC_BMI_NETWORK_INTERFACE=eth9")
+        )
+        capabilities = (INFRA / "capabilities").read_text()
+        self.assertIn('UNSUPPORTED_TEST_SUITES="bmaas"', capabilities)
+        contract_md = (ROOT / "infra" / "contract.md").read_text()
+        self.assertIn("UNSUPPORTED_TEST_SUITES", contract_md)
+        makefile = (INFRA / "Makefile").read_text()
+        self.assertIn("BMH_COUNT ?= 2", makefile)
+        self.assertIn("MGMT_LIBVIRT_NETWORK", makefile)
+        contract = (INFRA / "contracts" / "bmaas").read_text()
+        self.assertIn("OSAC_BMH_SSH_HOSTS", contract)
+        self.assertIn("OSAC_BMI_CATALOG_ITEM", contract)
         makefile = (INFRA / "Makefile").read_text()
         capabilities = (INFRA / "capabilities").read_text()
         self.assertIn('SUPPORTED_DEPLOY_SUITES="caas bmaas"', capabilities)
@@ -667,10 +710,7 @@ class CheckoutRefTest(unittest.TestCase):
             subprocess.check_call(["git", "-C", str(work), "tag", "-f", "v1"])
             subprocess.check_call(["git", "-C", str(work), "push", "--force", "origin", "refs/tags/v1"])
             conflict = subprocess.run(
-                ["git", "-C", str(clone), "fetch", "--tags", "origin"],
-                capture_output=True,
-                text=True,
-                check=False,
+                ["git", "-C", str(clone), "fetch", "--tags", "origin"], capture_output=True, text=True, check=False
             )
             self.assertNotEqual(conflict.returncode, 0, conflict.stderr)
 
@@ -678,11 +718,7 @@ class CheckoutRefTest(unittest.TestCase):
                 env = dict(os.environ)
                 env.update(OSAC_REPO=str(remote), OSAC_BRANCH=branch, OSAC_DIR=str(clone))
                 completed = subprocess.run(
-                    ["bash", str(script), "--checkout-only"],
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    check=False,
+                    ["bash", str(script), "--checkout-only"], env=env, capture_output=True, text=True, check=False
                 )
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 return completed.stdout.strip().splitlines()[-1]
