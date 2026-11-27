@@ -33,5 +33,12 @@ class SetupVirtualBmhTests(unittest.TestCase):
         self.assertIn('  --cpu "${BMH_CPU}"', setup)
         self.assertIn('  --memory-mib "${BMH_MEMORY_MIB}"', setup)
 
+    def test_data_disk_is_optional_and_passed_through(self) -> None:
+        setup = SETUP_SCRIPT.read_text()
+
+        self.assertIn('BMH_DATA_DISK_SIZE="${BMH_DATA_DISK_SIZE:-}"', setup)
+        self.assertIn('if [[ -n "${BMH_DATA_DISK_SIZE}" ]]', setup)
+        self.assertIn('VM_ARGS+=(--data-disk-size "${BMH_DATA_DISK_SIZE}")', setup)
+
 if __name__ == "__main__":
     unittest.main()

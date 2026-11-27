@@ -79,8 +79,8 @@ FAKE_VIRSH = textwrap.dedent(
     case "${cmd}" in
       net-info) exit 0 ;;
       dumpxml)
-        # dumpxml: the owned disk, plus a shared CD-ROM that must survive
-        # deletion.
+        # dumpxml: the owned disk, an optional data disk, plus a shared
+        # CD-ROM that must survive deletion.
         echo "<domain type='kvm'>"
         echo "  <name>${1}</name>"
         echo "  <os>"
@@ -90,6 +90,11 @@ FAKE_VIRSH = textwrap.dedent(
         echo "    <disk type='file' device='disk'>"
         echo "      <source file='${FAKE_DISK_DIR:-/tmp}/${1}.qcow2'/>"
         echo "    </disk>"
+        if [[ -f "${FAKE_DISK_DIR:-/tmp}/${1}-data.qcow2" ]]; then
+          echo "    <disk type='file' device='disk'>"
+          echo "      <source file='${FAKE_DISK_DIR:-/tmp}/${1}-data.qcow2'/>"
+          echo "    </disk>"
+        fi
         echo "    <disk type='file' device='cdrom'>"
         echo "      <source file='${FAKE_DISK_DIR:-/tmp}/shared-install.iso'/>"
         echo "    </disk>"

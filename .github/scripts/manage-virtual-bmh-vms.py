@@ -104,11 +104,23 @@ def render_vm_xml(
     vars_path: str,
     efi_code: str,
     network: str,
+    data_disk_path: str | None = None,
 ) -> str:
     # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails
     # with "Unable to find 'efi' firmware". The pflash paths already
     # select UEFI.
     serial_log = Path(disk_path).with_suffix(SERIAL_LOG_SUFFIX)
+    # Optional second blank disk (vdb) for guest-local storage (LVMS).
+    # Deliberately carries no serial: the Metal3 root-device hint must
+    # keep matching only the root disk.
+    data_disk = ""
+    if data_disk_path:
+        data_disk = f"""    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{data_disk_path}'/>
+      <target dev='vdb' bus='virtio'/>
+    </disk>
+"""
     return f"""<domain type='kvm'>
   <name>{name}</name>
   <memory unit='MiB'>{memory_mib}</memory>
@@ -132,7 +144,7 @@ def render_vm_xml(
       <target dev='vda' bus='virtio'/>
       <serial>{DISK_SERIAL}</serial>
     </disk>
-    <interface type='network'>
+{data_disk}    <interface type='network'>
       <mac address='{mac}'/>
       <source network='{network}'/>
       <model type='virtio'/>
@@ -171,6 +183,7 @@ def create_vm(
     network: str,
     redfish_host: str,
     redfish_port: int,
+    data_disk_size: str | None = None,
 ) -> Host:
     disk_path = disk_dir / f"{name}{DISK_SUFFIX}"
     vars_path = disk_dir / f"{name}{VARS_SUFFIX}"
@@ -180,6 +193,14 @@ def create_vm(
         check=True,
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
+    data_disk_path = None
+    if data_disk_size:
+        data_disk_path = disk_dir / f"{name}-data{DISK_SUFFIX}"
+        subprocess.run(
+            ["qemu-img", "create", "-f", "qcow2", str(data_disk_path), data_disk_size],
+            check=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
     shutil.copyfile(EFI_VARS, vars_path)
     # Each new VM starts a private recording; libvirt appends across reboots.
     serial_log = disk_path.with_suffix(SERIAL_LOG_SUFFIX)
@@ -195,6 +216,7 @@ def create_vm(
         vars_path=str(vars_path),
         efi_code=EFI_CODE,
         network=network,
+        data_disk_path=str(data_disk_path) if data_disk_path else None,
     )
     run_virsh(["define", "/dev/stdin"], stdin=xml)
     run_virsh(["start", name])
@@ -247,7 +269,7 @@ def delete_vm(name: str) -> bool:
         return False
     # --nvram removes the NVRAM file; the extra unlink covers whatever
     # libvirt left behind.
-    owned_storage = {f"{name}{DISK_SUFFIX}", f"{name}{VARS_SUFFIX}"}
+    owned_storage = {f"{name}{DISK_SUFFIX}", f"{name}{VARS_SUFFIX}", f"{name}-data{DISK_SUFFIX}"}
     for path in disk_paths:
         if Path(path).name in owned_storage:
             Path(path).unlink(missing_ok=True)
@@ -295,6 +317,7 @@ def cmd_create(args: argparse.Namespace) -> None:
                 network=args.network,
                 redfish_host=args.redfish_host,
                 redfish_port=args.redfish_port,
+                data_disk_size=args.data_disk_size or None,
             )
         )
         # Save after each VM: a crash leaves an accurate inventory.
@@ -366,6 +389,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--disk-size",
         default=DEFAULT_DISK_SIZE,
         help=f"qcow2 virtual disk size (default: {DEFAULT_DISK_SIZE})",
+    )
+    create.add_argument(
+        "--data-disk-size",
+        default="",
+        help="optional second blank qcow2 disk (vdb) for guest-local storage such as "
+        "LVMS, e.g. 50G; empty disables the data disk (default: disabled)",
     )
     create.set_defaults(func=cmd_create)
 
