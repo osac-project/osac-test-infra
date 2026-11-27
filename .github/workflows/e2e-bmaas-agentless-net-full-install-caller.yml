@@ -1,0 +1,93 @@
+---
+name: E2E BMaaS Agentless-Net Full Install
+run-name: "E2E BMaaS Agentless-Net Full Install${{ inputs.pr-number != '' && format(' / PR #{0} @ {1}', inputs.pr-number, inputs.pr-sha) || '' }}"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+on:
+  schedule:
+    # 01:15 UTC avoids the 00:00 VMaaS and 00:30 BMaaS Netris orchestrator slots.
+    - cron: "15 1 * * *"
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "PR number being tested"
+        required: false
+        default: ""
+      pr-repository:
+        description: "Repository containing the PR head, including a fork"
+        required: false
+        default: ""
+      pr-ref:
+        description: "PR head branch/ref"
+        required: false
+        default: ""
+      pr-sha:
+        description: "Expected immutable PR head SHA"
+        required: false
+        default: ""
+      instance-type:
+        description: "EC2 instance type -- curated allow-list, not free text, so a dispatch can't accidentally launch an unexpectedly expensive type."
+        required: false
+        type: choice
+        options:
+          - "c5n.metal"
+        default: "c5n.metal"
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        default: "us-east-1"
+      tooling-check-cmds:
+        description: "Semicolon-separated commands to verify on the box before JIT registration."
+        required: false
+        default: "dnf install -y ansible-core python3-pip make; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make"
+      osac-repo:
+        description: "Override osac mono-repo git URI -- empty means upstream"
+        required: false
+        default: ""
+      osac-branch:
+        description: "Branch, tag, or commit of the osac mono-repo to clone -- empty means main"
+        required: false
+        default: ""
+
+concurrency:
+  # A dispatched pull request shares its group with the /test suite.
+  # Nightly runs use the run id and are not cancelled.
+  group: e2e-bmaas-agentless-net-full-install-${{ inputs.pr-repository || github.repository }}-${{ inputs.pr-number || github.run_id }}
+  cancel-in-progress: ${{ inputs.pr-number != '' }}
+
+jobs:
+  verify:
+    if: inputs.pr-number != ''
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: osac-project/osac-ci/.github/workflows/suite-inputs.yml@728d1b064cdbfa429c68ce5bc5a35b47b6c127d7  # v1.3.10
+    with:
+      repo: ${{ inputs.pr-repository || github.repository }}
+      sha: ${{ inputs.pr-sha }}
+      pr-number: ${{ inputs.pr-number }}
+
+  e2e-bmaas-agentless-net:
+    needs: verify
+    if: always() && (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+    uses: ./.github/workflows/e2e-bmaas-agentless-net-full-install.yml
+    with:
+      deploy-suite: bmaas
+      instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make' }}
+      osac-repo: ${{ inputs.osac-repo || '' }}
+      osac-branch: ${{ inputs.osac-branch || '' }}
+      test-infra-repository: ${{ inputs.pr-repository || github.repository }}
+      test-infra-ref: ${{ inputs.pr-ref || github.ref }}
+      test-infra-sha: ${{ inputs.pr-sha || github.sha }}
+      pr-repository: ${{ inputs.pr-repository || '' }}
+      pr-ref: ${{ inputs.pr-ref || '' }}
+      pr-sha: ${{ inputs.pr-sha || '' }}
+      fork-pr-author-association: ${{ needs.verify.result == 'success' && needs.verify.outputs.fork-association || '' }}
+      fork-pr-author: ${{ needs.verify.result == 'success' && needs.verify.outputs.fork-author || '' }}
+      pr-number: ${{ inputs.pr-number || '' }}
+      notify-on-failure: ${{ github.event_name == 'schedule' }}

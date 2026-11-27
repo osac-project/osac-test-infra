@@ -1,0 +1,12 @@
+# BMaaS on the Agentless containerlab fabric.
+# Merged over values/bmaas-ci/instance.yaml by EXTRA_HELM_ARGS.
+# The CaaS overlay is values-overlay.yaml and is intentionally not used here.
+global:
+  networking:
+    provisioningEnabled: true
+    fabricManager: agentless_net
+
+aap:
+  instanceGroups:
+    networkFulfillment:
+      enabled: true

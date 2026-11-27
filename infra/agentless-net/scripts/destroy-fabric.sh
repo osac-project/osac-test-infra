@@ -8,6 +8,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${SCRIPT_DIR}/.."
+# prepare-host-bridges.sh saved the previous values. Restore them even when
+# a later teardown step fails. With no saved state the runtime values stay
+# as they are, and a second run finds nothing left to restore.
+trap '"${SCRIPT_DIR}/prepare-host-bridges.sh" restore' EXIT
 
 MGMT_CLONE_NAME="${MGMT_CLONE_NAME:-agentless-lab-mgmt}"
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
@@ -40,9 +44,10 @@ ip route del 192.168.100.0/24 2>/dev/null || true
 # ---------- clean up inventory ConfigMap ----------
 
 if [ -f "${INFRA_DIR}/.mgmt-network" ]; then
-    # shellcheck source=/dev/null
-    source "${INFRA_DIR}/.mgmt-network"
-    export KUBECONFIG
+    # shellcheck source=use-kubeconfig.sh
+    source "${SCRIPT_DIR}/use-kubeconfig.sh"
+    use_kubeconfig "${INFRA_DIR}/.mgmt-network"
+    require_recorded_cluster
     oc delete configmap agentless-net-inventory -n "$OSAC_NAMESPACE" --ignore-not-found 2>/dev/null || true
     info "Cleaned up inventory ConfigMap"
 fi

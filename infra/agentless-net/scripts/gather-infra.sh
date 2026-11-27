@@ -41,9 +41,9 @@ done
 # ---------- management cluster ----------
 
 if [ -f "${INFRA_DIR}/.mgmt-network" ]; then
-    # shellcheck source=/dev/null
-    source "${INFRA_DIR}/.mgmt-network"
-    export KUBECONFIG
+    # shellcheck source=use-kubeconfig.sh
+    source "${SCRIPT_DIR}/use-kubeconfig.sh"
+    use_kubeconfig "${INFRA_DIR}/.mgmt-network"
     oc get pods -n "${OSAC_NAMESPACE:-osac-e2e-ci}" > "$LOG_DIR/osac-pods.txt" 2>&1 || true
     oc get agents -n hardware-inventory -o wide > "$LOG_DIR/agents.txt" 2>&1 || true
     oc get clusterorders -n "${OSAC_NAMESPACE:-osac-e2e-ci}" > "$LOG_DIR/clusterorders.txt" 2>&1 || true
@@ -51,3 +51,4 @@ if [ -f "${INFRA_DIR}/.mgmt-network" ]; then
 fi
 
 info "Diagnostics saved to $LOG_DIR"
+touch "${LOG_DIR}/.gather-infra-complete"
