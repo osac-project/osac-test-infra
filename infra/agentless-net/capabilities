@@ -1,2 +1,6 @@
 SUPPORTED_DEPLOY_SUITES="caas bmaas"
 DEFAULT_DEPLOY_SUITE="caas"
+# The Netris `bmaas` selection runs the three-BMI mono-repo suite, which needs
+# three hosts. This lab has one BMH per tenant (two access ports), so it must
+# refuse that selection rather than validate it and fail inside pytest.
+UNSUPPORTED_TEST_SUITES="bmaas"

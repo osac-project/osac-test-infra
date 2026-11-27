@@ -204,10 +204,13 @@ deploy-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) deploy-suite DEPLOY_SUITE=$(DEPLOY_SUITE) SUITE_STAGE="$$stage" EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PULL_SECRET) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 run-tests: _validate-backend
-	@if [ "$(INFRA)" = agentless-net ] && [ "$(TEST_SUITE)" = bmaas ]; then \
-		echo "ERROR: agentless-net proves one BMI and does not run the Netris bmaas suite." >&2; \
-		exit 2; \
-	fi
+	@. $(INFRA_DIR)/capabilities && \
+		for unsupported in $${UNSUPPORTED_TEST_SUITES:-}; do \
+			if [ "$$unsupported" = "$(TEST_SUITE)" ]; then \
+				echo "ERROR: backend '$(INFRA)' cannot run test selection '$(TEST_SUITE)' (declared in $(INFRA_DIR)/capabilities as UNSUPPORTED_TEST_SUITES)"; \
+				exit 2; \
+			fi; \
+		done
 	@$(MAKE) _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
 		$(MAKE) test-$(TEST_SUITE)

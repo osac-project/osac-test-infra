@@ -516,40 +516,25 @@ class WorkflowContractTest(unittest.TestCase):
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
         bridges = (INFRA / "scripts" / "prepare-host-bridges.sh").read_text()
-        self.assertIn("net.bridge.bridge-nf-call-iptables=0", bridges)
-        self.assertIn("net.bridge.bridge-nf-call-ip6tables=0", bridges)
+        self.assertIn("net.bridge.bridge-nf-call-iptables = 0", bridges)
+        self.assertIn("net.bridge.bridge-nf-call-ip6tables = 0", bridges)
         self.assertIn("br-host1", bridges)
         self.assertIn("leaf1-swp2", bridges)
-        self.assertIn("sysctl -n net.bridge.bridge-nf-call-iptables", bridges)
-        self.assertIn("sysctl -n net.bridge.bridge-nf-call-ip6tables", bridges)
-        self.assertIn("/var/lib/osac-host-bridges/sysctl.prior", bridges)
-        self.assertIn('sudo test -e "$STATE_FILE"', bridges)
-        self.assertIn('sudo test -L "$STATE_FILE"', bridges)
-        self.assertNotIn('[[ -e "$STATE_FILE" ]]', bridges)
-        self.assertNotIn('[[ -f "$STATE_FILE" ]]', bridges)
+        # The previous values are saved before the change and restored from a
+        # root-owned 600 file, so a shared lab goes back to how it was.
+        self.assertIn("STATE_DIR=/var/lib/osac-host-bridges", bridges)
+        self.assertIn("sysctl.prior", bridges)
+        self.assertIn("sudo sysctl -n", bridges)
+        self.assertIn("state_is_trusted", bridges)
+        self.assertIn('if [[ "${1:-}" == "restore" ]]', bridges)
+        self.assertLess(bridges.index("sysctl -n"), bridges.index("net.bridge.bridge-nf-call-iptables = 0"))
+        restore = bridges.split("restore_sysctls()", 1)[1].split('if [[ "${1:-}"', 1)[0]
         self.assertLess(
-            bridges.index("not a root-owned private"), bridges.index("net.bridge.bridge-nf-call-iptables=0")
+            restore.index('sudo sysctl -w "${name}=${value}"'), restore.index('sudo rm -f "$SYSCTL_FILE" "$STATE_FILE"')
         )
-        self.assertLess(
-            bridges.index("sysctl -n net.bridge.bridge-nf-call-iptables"),
-            bridges.index("net.bridge.bridge-nf-call-iptables=0"),
-        )
-        self.assertIn("restore_host_bridge_sysctls", bridges)
-        restore = bridges.split("restore_host_bridge_sysctls()", 1)[1].split("prepare_failed()", 1)[0]
-        removal = restore.index('sudo rm -f "$SYSCTL_FILE" "$STATE_FILE"')
-        self.assertLess(restore.index("net.bridge.bridge-nf-call-iptables=${ipt}"), removal)
-        self.assertLess(restore.index("net.bridge.bridge-nf-call-ip6tables=${ip6}"), removal)
-        self.assertLess(restore.rindex("return 1"), removal)
-        corrupt = restore.split("has no saved bridge sysctl values", 1)[1]
-        self.assertLess(corrupt.index("return 1"), corrupt.index("sysctl -w"))
-        self.assertIn("restore_host_bridge_sysctls || exit", bridges)
-        self.assertLess(bridges.index("changed_sysctls=1"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
-        failed = bridges.split("prepare_failed()", 1)[1]
-        removal = failed.index('sudo rm -f "$STATE_FILE"')
-        self.assertLess(failed.index("ipt_restored"), removal)
-        self.assertLess(failed.index("ip6_restored"), removal)
-        self.assertIn('"$ipt_restored" -eq 1 && "$ip6_restored" -eq 1 && "$checkpoint_existed" -ne 1', failed)
-        self.assertIn("sudo -n true", bridges)
+        self.assertLess(restore.index("state_is_trusted || return 1"), restore.index("sudo sysctl -w"))
+        # The sysctl hardening is bounded: the file stays small.
+        self.assertLessEqual(len(bridges.splitlines()), 140)
         fabric_teardown = (INFRA / "scripts" / "destroy-fabric.sh").read_text()
         self.assertIn('prepare-host-bridges.sh" restore', fabric_teardown)
 
@@ -625,9 +610,12 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(root_suite.index("all|setup"), root_suite.index("prepare-suite"))
         self.assertNotIn('INFRA)" = agentless-net', root_suite)
         run_tests = root.split("run-tests: _validate-backend", 1)[1].split("\ndestroy-ocp:", 1)[0]
-        self.assertLess(
-            run_tests.index("does not run the Netris bmaas suite"), run_tests.index("_validate-suite-contract")
-        )
+        # The "cannot run this selection" rule is declared by the backend, not
+        # hardcoded in the root Makefile: run-tests reads capabilities and
+        # rejects any UNSUPPORTED_TEST_SUITES entry for every backend.
+        self.assertIn("UNSUPPORTED_TEST_SUITES", run_tests)
+        self.assertNotIn('INFRA)" = agentless-net', run_tests)
+        self.assertLess(run_tests.index("UNSUPPORTED_TEST_SUITES"), run_tests.index("_validate-suite-contract"))
         self.assertNotIn("{.data.profile}", deploy)
         self.assertNotIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
@@ -655,6 +643,10 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertLess(
             setup.index("Publishing the AgentlessNet inventory"), setup.index("OSAC_BMI_NETWORK_INTERFACE=eth9")
         )
+        capabilities = (INFRA / "capabilities").read_text()
+        self.assertIn('UNSUPPORTED_TEST_SUITES="bmaas"', capabilities)
+        contract_md = (ROOT / "infra" / "contract.md").read_text()
+        self.assertIn("UNSUPPORTED_TEST_SUITES", contract_md)
         makefile = (INFRA / "Makefile").read_text()
         self.assertIn("BMH_COUNT ?= 2", makefile)
         self.assertIn("MGMT_LIBVIRT_NETWORK", makefile)

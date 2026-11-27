@@ -6,11 +6,18 @@ Each backend lives in `infra/<name>/` and must provide:
 
 - `Makefile` — implements the contract targets below
 - `capabilities` — shell-sourceable file declaring `SUPPORTED_DEPLOY_SUITES` and,
-  optionally, `DEFAULT_DEPLOY_SUITE`
+  optionally `DEFAULT_DEPLOY_SUITE` and `UNSUPPORTED_TEST_SUITES`
 
 When set, `DEFAULT_DEPLOY_SUITE` must be one of `SUPPORTED_DEPLOY_SUITES`. The root Makefile
 uses it when `DEPLOY_SUITE` is omitted; backends without a default require callers to
 select a deployment scenario explicitly.
+
+`UNSUPPORTED_TEST_SUITES` is an optional, space-separated list of test selections the
+backend cannot run even though the deployment scenario exists. The root `run-tests`
+target rejects a selection listed there for any backend, before it validates the suite
+contract or invokes `test-<selection>`. Use it when a shared selection (for example the
+three-host `bmaas` suite) does not fit the backend's inventory; the knowledge belongs in
+the backend that owns the constraint, not in the root Makefile.
 
 ## Contract Targets
 
