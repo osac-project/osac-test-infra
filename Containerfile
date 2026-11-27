@@ -1,6 +1,8 @@
 FROM registry.access.redhat.com/ubi9/ubi:latest
 
 ARG GRPCURL_VERSION=1.9.1
+ARG VIRTCTL_VERSION=v1.8.4
+ARG VIRTCTL_SHA256=7125d69c3b3e9c8185c106d9cdf77a817491e4657ac47f4509fb40d7aea59cca
 ARG OSAC_VERSION=""
 ARG OSAC_CLI_BIN=""
 
@@ -14,6 +16,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 RUN curl --retry 5 --retry-delay 2 -Lsf "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" \
     | tar xz --no-same-owner -C /usr/local/bin grpcurl
+
+RUN curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
+      "https://github.com/kubevirt/kubevirt/releases/download/${VIRTCTL_VERSION}/virtctl-${VIRTCTL_VERSION}-linux-amd64" \
+      -o /tmp/virtctl && \
+    echo "${VIRTCTL_SHA256}  /tmp/virtctl" | sha256sum -c - && \
+    install -m 0755 /tmp/virtctl /usr/local/bin/virtctl && \
+    rm /tmp/virtctl
 
 COPY ${OSAC_CLI_BIN:-.dockerignore} /tmp/osac-cli-candidate
 
