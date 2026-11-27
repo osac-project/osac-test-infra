@@ -1,0 +1,202 @@
+---
+# Verify the selected lab storage endpoint. The mount and the NAT-address
+# assertion live in the deployed E2E suite; this playbook checks the endpoint
+# itself and (for the NFS backend) runs the FR5-01 case through the normal
+# harness so the source-address evidence comes from the server log.
+- name: Verify the lab storage endpoint
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Read the VAST endpoint defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/lab_vast_storage/defaults/main.yml"
+
+    - name: Verify the VAST appliance
+      block:
+        - name: Read the VAST domain state
+          ansible.builtin.command:
+            argv: [virsh, domstate, "{{ lab_vast_domain }}"]
+          register: _lab_vast_domain_state
+          changed_when: false
+          failed_when: false
+
+        - name: Require the VAST domain to be running
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_domain_state.rc == 0
+              - _lab_vast_domain_state.stdout | trim == 'running'
+            fail_msg: >-
+              VAST domain {{ lab_vast_domain }} is not running:
+              {{ _lab_vast_domain_state.stderr | default('') }}
+
+        - name: Read the VAST domain disks
+          ansible.builtin.command:
+            argv: [virsh, domblklist, "{{ lab_vast_domain }}", --details]
+          register: _lab_vast_domain_disks
+          changed_when: false
+
+        - name: Require the lab overlay as the VAST boot disk
+          ansible.builtin.assert:
+            that:
+              - lab_vast_overlay in _lab_vast_domain_disks.stdout
+            fail_msg: "VAST domain does not use {{ lab_vast_overlay }}"
+
+        - name: Read the VAST domain interfaces
+          ansible.builtin.command:
+            argv: [virsh, domiflist, "{{ lab_vast_domain }}"]
+          register: _lab_vast_domain_nics
+          changed_when: false
+
+        - name: Require both VAST NICs on their bridges
+          ansible.builtin.assert:
+            that:
+              - lab_vast_mgmt_bridge in _lab_vast_domain_nics.stdout
+              - lab_vast_bridge in _lab_vast_domain_nics.stdout
+            fail_msg: >-
+              VAST domain must have one NIC on {{ lab_vast_mgmt_bridge }} and one
+              on {{ lab_vast_bridge }}
+
+        - name: Read the VAST domain XML
+          ansible.builtin.command:
+            argv: [virsh, dumpxml, "{{ lab_vast_domain }}"]
+          register: _lab_vast_domain_xml
+          changed_when: false
+
+        - name: Require a virtio boot disk
+          ansible.builtin.assert:
+            that:
+              - "\"bus='virtio'\" in _lab_vast_domain_xml.stdout"
+            fail_msg: "VAST boot disk must be virtio; IDE breaks cluster create"
+
+        - name: Read the VAST cluster state
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - >-
+                curl -sk -u admin:{{ lab_vast_admin_password }}
+                https://{{ lab_vast_mgmt_ip }}/api/clusters/
+                | python3 -c 'import json,sys; print("ONLINE" if any(c.get("state")=="ONLINE" for c in json.load(sys.stdin)) else "PENDING")'
+          register: _lab_vast_verify_cluster
+          changed_when: false
+
+        - name: Require the VAST cluster to be ONLINE
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_verify_cluster.stdout | trim == 'ONLINE'
+            fail_msg: "VAST cluster is not ONLINE"
+
+        - name: Read the VMS management state
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - >-
+                curl -sk -u admin:{{ lab_vast_admin_password }}
+                https://{{ lab_vast_mgmt_ip }}/api/latest/vms/
+                | python3 -c 'import json,sys; v=json.load(sys.stdin)[0]; print(v.get("degraded_reason") or "READY")'
+          register: _lab_vast_verify_db
+          changed_when: false
+
+        - name: Require the VMS management database to be ready
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_verify_db.stdout | trim not in ['UPDATING_CLUSTERED_DB', 'NO_NFS_EXPORT']
+            fail_msg: "VMS is not ready: {{ _lab_vast_verify_db.stdout | trim }}"
+
+        - name: Require the VAST client observation
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - systemctl is-active osac-vast-clients.service
+          register: _lab_vast_verify_clientlog
+          changed_when: false
+
+        - name: Require the client observation unit to be active
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_verify_clientlog.stdout | trim == 'active'
+            fail_msg: "osac-vast-clients is not active"
+
+        # The tenants mount with NFSv4.1: the export must be a lab-tenant view
+        # with NFS4, and every view above it (the root view) must have NFS4 too.
+        - name: Read the VAST tenant export
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - >-
+                curl -sk -u admin:{{ lab_vast_admin_password }}
+                https://{{ lab_vast_mgmt_ip }}/api/latest/views/
+                | python3 -c 'import json,sys;
+                v=json.load(sys.stdin);
+                e=[x for x in v if x["path"]=="{{ lab_vast_view_path }}" and x["tenant_name"]=="lab" and "NFS4" in x["protocols"]];
+                r=[x for x in v if x["path"]=="/" and "NFS4" not in x["protocols"]];
+                print("OK" if e and not r else "export=%d root_without_nfs4=%d" % (len(e), len(r)))'
+          register: _lab_vast_verify_export
+          changed_when: false
+
+        - name: Require an NFSv4 lab-tenant export
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_verify_export.stdout | trim == 'OK'
+            fail_msg: >-
+              VAST export {{ lab_vast_view_path }} is not an NFSv4 view of the lab
+              tenant under NFSv4-enabled parents: {{ _lab_vast_verify_export.stdout | trim }}
+
+        # The suite proves the write reached the export by reading the probe file
+        # on this host, so the export must be mounted here, read-only.
+        - name: Require the export to be readable on the appliance
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - >-
+                mountpoint -q {{ lab_vast_view_path }} && test -x {{ lab_vast_view_path }}
+                && echo MOUNTED
+          register: _lab_vast_verify_view_mount
+          until: "'MOUNTED' in _lab_vast_verify_view_mount.stdout"
+          retries: 6
+          delay: 5
+          changed_when: false
+
+        - name: Require the server-side export mount
+          ansible.builtin.assert:
+            that:
+              - "'MOUNTED' in _lab_vast_verify_view_mount.stdout"
+            fail_msg: >-
+              {{ lab_vast_view_path }} is not a readable mount on
+              centos@{{ lab_vast_mgmt_ip }}; the suite cannot read the probe file
+              back from the export.

@@ -1,0 +1,34 @@
+---
+# VAST puts every VIP in its own policy-routing table with the dummy interface
+# as the default route. In the loopback appliance the data NIC is eth1, so a VIP
+# reply leaves the dummy and is dropped. Point each VIP table at eth1 for the
+# data subnet and for the lab NAT pool (the tenants' translated source range).
+- name: Align the VAST VIP policy routing with the data NIC
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - sudo bash -s
+    stdin: |
+      for _ in $(seq 60); do
+        ip rule | grep -q '{{ lab_vast_vip_start }}' && break
+        sleep 5
+      done
+      for t in $(ip rule | awk '/from 192\.168\.124\./ {print $NF}' | sort -u); do
+        ip route replace {{ lab_vast_data_ip | regex_replace('\.[0-9]+$', '.0') }}/{{ lab_vast_data_prefix }} dev {{ lab_vast_data_iface }} table "$t"
+        ip route replace {{ lab_vast_nat_pool_cidr }} via {{ lab_vast_data_gateway }} dev {{ lab_vast_data_iface }} table "$t"
+      done
+      ip route get {{ lab_vast_nat_pool_cidr.split('/')[0] | regex_replace('\.0$', '.26') }} from {{ lab_vast_vip_start }} | grep -q 'dev {{ lab_vast_data_iface }}'
+  register: _lab_vast_vip_routes
+  until: _lab_vast_vip_routes.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: _lab_vast_vip_routes.rc == 0

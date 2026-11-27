@@ -1,0 +1,12 @@
+---
+# Deploy the lab storage endpoint (VAST). The suite reads it through the same
+# OSAC_STORAGE_* variables it has always used.
+- name: Deploy the lab storage endpoint
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Deploy the VAST appliance
+      ansible.builtin.include_role:
+        name: lab_vast_storage
+      tags: [lab_vast, lab_vast_prepare, lab_vast_ui]

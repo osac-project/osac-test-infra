@@ -27,6 +27,16 @@ export OSAC_PULL_SECRET_PATH
 KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
 
+# Lab VAST storage endpoint (OSAC-8073). Reported to the suite through the
+# OSAC_STORAGE_* variables so the suite stays backend-agnostic.
+LAB_VAST_DOMAIN ?= vast-5-4
+LAB_VAST_SERVER_IP ?= 192.168.124.20
+LAB_VAST_MGMT_IP ?= 192.168.16.60
+LAB_VAST_EXPORT ?= /lab-storage
+LAB_VAST_SSH_HOST ?= centos@$(LAB_VAST_MGMT_IP)
+LAB_VAST_SSH_IDENTITY ?= /root/.ssh/lab-vast
+LAB_VAST_LOG_PATH ?= /var/log/osac-vast-clients.log
+
 # Public Make inputs are translated here into Ansible variables. User
 # EXTRA_VARS comes first; backend-owned deployment context and path mappings
 # follow so each value has one canonical public input.
@@ -87,6 +97,38 @@ setup-infra: deploy-setup
 deploy-infra: _check-osac-images
 	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA) $(VMAAS_UNDERLAY_EXTRA)
 
+# Additive lab storage endpoint (OSAC-8073). Safe to run against a live lab.
+deploy-storage:
+	ansible-playbook playbooks/deploy-storage.yml $(ANSIBLE_EXTRA)
+	@$(MAKE) --no-print-directory _storage-env
+
+verify-storage:
+	ansible-playbook playbooks/verify-storage.yml $(ANSIBLE_EXTRA)
+
+destroy-storage:
+	ansible-playbook playbooks/destroy-storage.yml $(ANSIBLE_EXTRA)
+	@if [ -f $(ENV_INFRA) ]; then sed -i '/^OSAC_STORAGE_/d' $(ENV_INFRA); fi
+
+# (Re)write the endpoint in .env.infra; deploy-osac calls it when the appliance runs.
+_storage-env:
+	@touch $(ENV_INFRA)
+	@sed -i '/^OSAC_STORAGE_/d' $(ENV_INFRA)
+	@printf '%s\n' \
+		'OSAC_STORAGE_NFS_SERVER=$(LAB_VAST_SERVER_IP)' \
+		'OSAC_STORAGE_NFS_EXPORT=$(LAB_VAST_EXPORT)' \
+		'OSAC_STORAGE_SSH_HOST=$(LAB_VAST_SSH_HOST)' \
+		'OSAC_STORAGE_SSH_IDENTITY=$(LAB_VAST_SSH_IDENTITY)' \
+		'OSAC_STORAGE_LOG_PATH=$(LAB_VAST_LOG_PATH)' \
+		>> $(ENV_INFRA)
+
+# After a green verify-storage: capture the appliance so later deploys clone it.
+capture-golden:
+	ansible-playbook playbooks/capture-golden.yml $(ANSIBLE_EXTRA)
+
+# Publish the VAST UI on the lab host (like the OCP ingress on :9444).
+vast-ui-forward:
+	ansible-playbook playbooks/deploy-storage.yml $(ANSIBLE_EXTRA) --tags lab_vast_ui
+
 deploy-ocp:
 	@rm -f .evpn-values.yaml
 	ansible-playbook playbooks/deploy-ocp.yml $(OCP_ANSIBLE_EXTRA)
@@ -100,6 +142,7 @@ deploy-osac:
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		'OSAC_E2E_FABRIC_SNAPSHOT_CMD=$(abspath scripts/fabric-snapshot.sh)' \
 		> $(ENV_INFRA)
+	@if virsh domstate $(LAB_VAST_DOMAIN) 2>/dev/null | grep -q running; then $(MAKE) --no-print-directory _storage-env; fi
 
 # VMaaS setup/gather is read-only: tenant resources remain owned by the suite fixtures.
 setup-vmaas: DEPLOY_SUITE = vmaas
@@ -373,7 +416,7 @@ health-check:
 # ─── .PHONY ────────────────────────────────────────────────────────
 
 .PHONY: deploy \
-        deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac _check-osac-images \
+        deploy-setup setup-infra deploy-infra deploy-storage verify-storage destroy-storage _storage-env capture-golden deploy-ocp deploy-osac _check-osac-images \
         setup-caas deploy-caas setup-vmaas gather-vmaas destroy-vmaas \
         test-caas-networking test-caas_networking test-maas-networking test-maas_networking \
         prepare-suite deploy-suite \

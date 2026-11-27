@@ -1,0 +1,51 @@
+---
+# Reaching the VAST UI from a browser is part of the lab, like the OCP ingress
+# forward on :9444 and the Netris controller on :9443. A local socat unit
+# publishes the appliance's HTTPS endpoint on the lab host.
+- name: Install the VAST UI forward unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/vast-ui-forward.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Forward the lab host :{{ lab_vast_ui_port }} to the VAST UI ({{ lab_vast_mgmt_ip }}:443)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      ExecStart=/usr/bin/socat TCP6-LISTEN:{{ lab_vast_ui_port }},fork,reuseaddr,ipv6only=0 TCP:{{ lab_vast_mgmt_ip }}:443
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Enable the VAST UI forward
+  ansible.builtin.systemd:
+    name: vast-ui-forward.service
+    state: restarted
+    enabled: true
+    daemon_reload: true
+
+- name: Read the firewalld state
+  ansible.builtin.command: systemctl is-active firewalld
+  register: _lab_vast_firewalld
+  changed_when: false
+  failed_when: false
+
+- name: Open the VAST UI forward port
+  when: _lab_vast_firewalld.stdout | trim == 'active'
+  ansible.posix.firewalld:
+    port: "{{ lab_vast_ui_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+
+- name: Require the VAST UI forward to answer
+  ansible.builtin.command:
+    argv: [curl, -sk, -o, /dev/null, -w, "%{http_code}", "https://127.0.0.1:{{ lab_vast_ui_port }}/"]
+  register: _lab_vast_ui
+  until: _lab_vast_ui.stdout | trim in ['200', '301', '302', '303', '401']
+  retries: 20
+  delay: 5
+  changed_when: false

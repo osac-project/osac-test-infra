@@ -1,0 +1,40 @@
+---
+# A VirtualNetwork without a NATGateway still routes the data subnet out
+# through the SoftGate, and the host forwards that traffic onto br-vast with the
+# tenant's private source address. FR5-02 asserts the opposite (no NATGateway,
+# no storage path), and a storage server should never see a tenant address:
+# only the tenants' SNAT slice may cross into the data bridge. The firewall
+# rules are direct rather than zone-based because br-public and br-vast share
+# the trusted zone with the cluster's CNI bridges.
+- name: Read the firewalld state
+  ansible.builtin.command: systemctl is-active firewalld
+  register: _lab_vast_fw_active
+  changed_when: false
+  failed_when: false
+
+- name: Restrict the data bridge to the tenant SNAT slice
+  when: _lab_vast_fw_active.stdout | trim == 'active'
+  ansible.builtin.shell: |
+    set -e
+    accept="-i {{ lab_vast_public_bridge }} -o {{ lab_vast_bridge }} -s {{ lab_vast_nat_slice_cidr }} -j ACCEPT"
+    drop="-i {{ lab_vast_public_bridge }} -o {{ lab_vast_bridge }} -j DROP"
+    for mode in runtime permanent; do
+      [ "$mode" = permanent ] && extra=--permanent || extra=
+      current=$(firewall-cmd $extra --direct --get-all-rules)
+      echo "$current" | grep -qF -- "$accept" \
+        || firewall-cmd $extra --direct --add-rule ipv4 filter FORWARD 0 $accept >/dev/null
+      echo "$current" | grep -qF -- "$drop" \
+        || firewall-cmd $extra --direct --add-rule ipv4 filter FORWARD 1 $drop >/dev/null
+    done
+    firewall-cmd --direct --get-all-rules | grep -F -- "$drop" >/dev/null
+  changed_when: false
+
+- name: Require the data-bridge isolation rules
+  when: _lab_vast_fw_active.stdout | trim == 'active'
+  ansible.builtin.command:
+    argv: [firewall-cmd, --direct, --get-all-rules]
+  register: _lab_vast_fw_rules
+  changed_when: false
+  failed_when: >-
+    _lab_vast_fw_rules.stdout | trim | length == 0
+    or ('-o ' ~ lab_vast_bridge ~ ' -j DROP' not in _lab_vast_fw_rules.stdout)

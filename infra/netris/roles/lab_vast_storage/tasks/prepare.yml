@@ -1,0 +1,184 @@
+---
+# The appliance image ships a VMware initramfs with no virtio_blk. A fresh
+# overlay that has never booted cannot be fixed by an offline dracut alone
+# (the rebuilt images are there, but the kernel still cannot find the root
+# device). The proven sequence is:
+#   1. write the static network config and dracut add_drivers offline,
+#   2. boot the overlay once on IDE (ata_piix is built in),
+#   3. rebuild the initramfs inside the running guest,
+#   4. shut it down and define it on virtio.
+# A host-side marker keeps this one-time preparation idempotent.
+
+- name: Stat the VAST overlay preparation marker
+  ansible.builtin.stat:
+    path: "{{ lab_vast_prepared_marker }}"
+  register: _lab_vast_prepared
+
+- name: Prepare the VAST overlay files offline
+  when: not _lab_vast_prepared.stat.exists
+  block:
+    - name: Load the nbd module with partitions
+      ansible.builtin.command:
+        argv: [modprobe, nbd, max_part=16]
+      changed_when: false
+
+    - name: Detach any stale nbd device
+      ansible.builtin.command:
+        argv: [qemu-nbd, -d, "{{ lab_vast_nbd_device }}"]
+      changed_when: false
+      failed_when: false
+
+    - name: Attach the VAST overlay
+      ansible.builtin.command:
+        argv:
+          - qemu-nbd
+          - -c
+          - "{{ lab_vast_nbd_device }}"
+          - --format=qcow2
+          - "{{ lab_vast_overlay }}"
+
+    - name: Wait for the VAST root partition
+      ansible.builtin.command:
+        argv: [test, -b, "{{ lab_vast_root_partition }}"]
+      register: _lab_vast_root_part
+      until: _lab_vast_root_part.rc == 0
+      retries: 20
+      delay: 1
+      changed_when: false
+
+    - name: Mount the VAST root filesystem
+      ansible.builtin.command:
+        argv: [mount, "{{ lab_vast_root_partition }}", "{{ lab_vast_mount }}"]
+
+    - name: Bind the virtual filesystems for the chroot
+      ansible.builtin.command:
+        argv: [mount, --bind, "/{{ item }}", "{{ lab_vast_mount }}/{{ item }}"]
+      loop: [proc, sys, dev, run]
+      changed_when: false
+
+    - name: Install the virtio dracut configuration
+      ansible.builtin.template:
+        src: 90-virtio.conf.j2
+        dest: "{{ lab_vast_mount }}/etc/dracut.conf.d/90-virtio.conf"
+        mode: "0644"
+
+    - name: Write the VAST management NIC configuration
+      ansible.builtin.template:
+        src: ifcfg-eth0.j2
+        dest: "{{ lab_vast_mount }}/etc/sysconfig/network-scripts/ifcfg-eth0"
+        mode: "0644"
+
+    - name: Write the VAST data NIC configuration
+      ansible.builtin.template:
+        src: ifcfg-eth1.j2
+        dest: "{{ lab_vast_mount }}/etc/sysconfig/network-scripts/ifcfg-eth1"
+        mode: "0644"
+
+    - name: Write the VAST data route
+      ansible.builtin.template:
+        src: route-eth1.j2
+        dest: "{{ lab_vast_mount }}/etc/sysconfig/network-scripts/route-eth1"
+        mode: "0644"
+
+    - name: Write the VAST ARP and reverse-path sysctls
+      ansible.builtin.template:
+        src: 99-vast-arp.conf.j2
+        dest: "{{ lab_vast_mount }}/etc/sysctl.d/99-vast-arp.conf"
+        mode: "0644"
+
+    - name: Restore SELinux contexts
+      ansible.builtin.command:
+        argv:
+          - chroot
+          - "{{ lab_vast_mount }}"
+          - restorecon
+          - -R
+          - /etc/sysconfig/network-scripts
+          - /etc/sysctl.d
+          - /etc/dracut.conf.d
+      changed_when: false
+  always:
+    - name: Unmount the VAST chroot binds
+      ansible.builtin.command:
+        argv: [umount, "{{ lab_vast_mount }}/{{ item }}"]
+      loop: [run, dev, sys, proc]
+      changed_when: false
+      failed_when: false
+
+    - name: Unmount the VAST root filesystem
+      ansible.builtin.command:
+        argv: [umount, "{{ lab_vast_mount }}"]
+      changed_when: false
+      failed_when: false
+
+    - name: Detach the VAST overlay
+      ansible.builtin.command:
+        argv: [qemu-nbd, -d, "{{ lab_vast_nbd_device }}"]
+      changed_when: false
+      failed_when: false
+
+- name: Rebuild the VAST initramfs on a one-time IDE boot
+  when: not _lab_vast_prepared.stat.exists
+  block:
+    - name: Render the IDE preparation domain
+      ansible.builtin.template:
+        src: domain.xml.j2
+        dest: "/tmp/{{ lab_vast_domain }}-prep.xml"
+        mode: "0600"
+      vars:
+        lab_vast_disk_dev: hda
+        lab_vast_disk_bus: ide
+
+    - name: Define the IDE preparation domain
+      ansible.builtin.command:
+        argv: [virsh, define, "/tmp/{{ lab_vast_domain }}-prep.xml"]
+
+    - name: Start the IDE preparation domain
+      ansible.builtin.command:
+        argv: [virsh, start, "{{ lab_vast_domain }}"]
+
+    - name: Wait for the preparation guest SSH
+      ansible.builtin.wait_for:
+        host: "{{ lab_vast_mgmt_ip }}"
+        port: 22
+        timeout: 900
+
+    - name: Rebuild the initramfs inside the running guest
+      ansible.builtin.command:
+        argv:
+          - sshpass
+          - -p
+          - "{{ lab_vast_guest_password }}"
+          - ssh
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - ConnectTimeout=10
+          - "centos@{{ lab_vast_mgmt_ip }}"
+          - sudo dracut --regenerate-all --force
+
+    - name: Shut down the preparation guest
+      ansible.builtin.command:
+        argv: [virsh, shutdown, "{{ lab_vast_domain }}"]
+
+    - name: Wait for the preparation guest to stop
+      ansible.builtin.command:
+        argv: [virsh, domstate, "{{ lab_vast_domain }}"]
+      register: _lab_vast_prep_state
+      until: _lab_vast_prep_state.stdout | trim == 'shut off'
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Remove the preparation domain definition
+      ansible.builtin.command:
+        argv: [virsh, undefine, "{{ lab_vast_domain }}"]
+
+- name: Mark the VAST overlay as prepared
+  when: not _lab_vast_prepared.stat.exists
+  ansible.builtin.file:
+    path: "{{ lab_vast_prepared_marker }}"
+    state: touch
+    mode: "0644"

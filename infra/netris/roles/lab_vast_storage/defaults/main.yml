@@ -1,0 +1,95 @@
+---
+# VAST 5.4 loopback appliance for the Netris lab (OSAC-8073).
+#
+# The appliance runs on the lab host with two NICs: management on the lab
+# management bridge (API/UI/SSH) and data on its own bridge outside the fabric
+# gateway. Tenant workloads reach the VIP pool through the VirtualNetwork
+# NATGateway; the host routes the data range.
+#
+# Sizing note: the platform's data path busy-polls, so the guest is CPU-bound,
+# not I/O-bound. 16 vCPU (VAST's recommended lab profile) makes the 1 TiB
+# loopback format and the management-DB copy take hours on this host; 32 vCPU
+# roughly halves both. Keep 128 GiB so the SNO keeps headroom.
+
+lab_vast_domain: "vast-5-4"
+lab_vast_vcpu: 32
+lab_vast_memory_mib: 131072
+lab_vast_disk_gb: 1024
+lab_vast_image_dir: "/var/lib/libvirt/images/vast"
+lab_vast_base_image: "/var/lib/libvirt/images/vast/vast_5_4.qcow2"
+lab_vast_base_image_sha256: "be2cbdab375760873aa50d2e6a8aca16cf61bc2f4453605b15b4a35ed0186dd7"
+lab_vast_overlay: "{{ lab_vast_image_dir }}/vast_5_4-lab.qcow2"
+lab_vast_prepared_marker: "{{ lab_vast_overlay }}.prepared"
+# Golden image (post-ONLINE snapshot). When it exists and use_golden is true,
+# a new deploy is a copy-on-write clone of it: install, format and the
+# management-DB copy are skipped. Capture it once with `make capture-golden`.
+# Set use_golden=false (or delete the file) to force a fresh install and a new
+# cluster identity.
+lab_vast_golden_image: "{{ lab_vast_image_dir }}/vast_5_4-golden.qcow2"
+lab_vast_use_golden: true
+# Compressed backing makes every first read after a clone decompress, and
+# `qemu-img convert -c` is single-threaded. Only enable when space requires it.
+lab_vast_golden_compress: false
+# A guest shutdown that does not finish is not a consistent capture; fail
+# instead of forcing the domain off.
+lab_vast_shutdown_timeout_s: 900
+lab_vast_nbd_device: "/dev/nbd0"
+lab_vast_root_partition: "/dev/nbd0p3"
+lab_vast_mount: "/mnt/vastroot"
+lab_vast_dracut_drivers: "virtio_blk virtio_net"
+lab_vast_build: "release-5-4-1-sp3-2209349"
+lab_vast_cluster_name: "lb-2209349"
+lab_vast_autostart: false
+
+# Network
+lab_vast_mgmt_bridge: "br-mgmt"
+lab_vast_bridge: "br-vast"
+lab_vast_bridge_ip: "192.168.124.1/24"
+# The bridge the tenants' traffic arrives on (SoftGate SNAT, and any tenant
+# VRF that routes to the data subnet without a NATGateway).
+lab_vast_public_bridge: "br-public"
+# The tenants' SNAT slice: the VAST clients, and the only source allowed to
+# cross the host into the data bridge.
+lab_vast_nat_slice_cidr: "198.51.100.24/29"
+lab_vast_nat_slice_start: "198.51.100.24"
+lab_vast_nat_slice_end: "198.51.100.31"
+lab_vast_data_prefix: 24
+# The appliance's own data subnet, as VAST client IPs: it reads the export back
+# for the suite's server-side check, read-only, over the VIP.
+lab_vast_data_subnet_start: "192.168.124.0"
+lab_vast_data_subnet_end: "192.168.124.255"
+lab_vast_mgmt_mac: "52:54:00:5a:54:54"
+lab_vast_data_mac: "52:54:00:5a:54:55"
+lab_vast_mgmt_ip: "192.168.16.60"
+lab_vast_mgmt_prefix: 20
+lab_vast_mgmt_gateway: "192.168.16.1"
+lab_vast_data_ip: "192.168.124.11"
+lab_vast_data_gateway: "192.168.124.1"
+lab_vast_nat_pool_cidr: "198.51.100.0/24"
+# Resolvers the guest needs for the one-time docker install. The appliance
+# image carries VAST's internal resolvers, which do not exist in this lab.
+lab_vast_dns_servers: ["10.11.5.160", "10.2.32.85"]
+lab_vast_ssh_user: "centos"
+lab_vast_ssh_key: "/root/.ssh/lab-vast"
+# Guest console password from the appliance image; used only for the one-time
+# docker install, ssh-copy-id and the installer. Override in a vaulted var.
+lab_vast_guest_password: "centos"
+lab_vast_admin_user: "admin"
+lab_vast_admin_password: "123456"
+lab_vast_data_iface: "eth1"
+lab_vast_client_log: "/var/log/osac-vast-clients.log"
+# Browser access to the VAST UI, forwarded on the lab host like the OCP ingress
+# (:9444) and the Netris controller (:9443).
+lab_vast_ui_port: 9445
+lab_vast_vip_start: "192.168.124.20"
+lab_vast_vip_end: "192.168.124.23"
+# The tenants' export: a view owned by the lab tenant (the tenant of the VIP
+# pool, so the one SNAT clients resolve to). The appliance's default `/` view
+# belongs to the default tenant and is not usable by those clients.
+lab_vast_view_path: "/lab-storage"
+
+# Guard: the SNO must not be starved. The role refuses to boot below this floor
+# instead of OOM-killing the cluster mid-run.
+lab_vast_min_free_mem_mb: 65536
+# BMaaS host that must stay off while VAST runs (the lab's spare worker).
+lab_vast_must_stay_off_domain: "hgx-pod00-su0-h03"

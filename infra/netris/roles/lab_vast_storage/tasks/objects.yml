@@ -1,0 +1,134 @@
+---
+# Lab stage-1 objects: one tenant, one shared PROTOCOLS pool on the data
+# network, one NFS view policy, one exported view. The per-tenant objects that
+# carry live NAT addresses are handled by configure-vast-tenants after the OSAC
+# tenants exist. Idempotent: every object is looked up by name first.
+
+- name: Create the VAST lab objects
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - sudo bash -s
+    stdin: |
+      set -e
+      V="https://{{ lab_vast_mgmt_ip }}"
+      A="-sk -u admin:{{ lab_vast_admin_password }}"
+      api() { curl $A "$@"; }
+
+      TENANT_ID=$(api "$V/api/latest/tenants/" | python3 -c '
+      import json,sys
+      d=json.load(sys.stdin)
+      t=[x for x in d if x["name"]=="lab"]
+      print(t[0]["id"] if t else 0)')
+      if [ "$TENANT_ID" = 0 ]; then
+        api -X POST "$V/api/latest/tenants/" -H 'Content-Type: application/json' \
+          -d '{"name":"lab","client_ip_ranges":[["198.51.100.24","198.51.100.31"],["{{ lab_vast_data_subnet_start }}","{{ lab_vast_data_subnet_end }}"]]}' \
+          -o /dev/null -w 'tenant create %{http_code}\n'
+        TENANT_ID=$(api "$V/api/latest/tenants/" | python3 -c '
+      import json,sys
+      d=json.load(sys.stdin)
+      print([x["id"] for x in d if x["name"]=="lab"][0])')
+      fi
+
+      POOL_ID=$(api "$V/api/latest/vippools/" | python3 -c '
+      import json,sys
+      d=json.load(sys.stdin)
+      p=[x for x in d if x["name"]=="lab-pool"]
+      print(p[0]["id"] if p else 0)')
+      if [ "$POOL_ID" = 0 ]; then
+        api -X POST "$V/api/latest/vippools/" -H 'Content-Type: application/json' \
+          -d "{\"name\":\"lab-pool\",\"role\":\"PROTOCOLS\",\"ip_ranges\":[[\"{{ lab_vast_vip_start }}\",\"{{ lab_vast_vip_end }}\"]],\"subnet_cidr\":{{ lab_vast_data_prefix }},\"gw_ip\":\"{{ lab_vast_data_gateway }}\",\"vlan\":0,\"tenant_id\":$TENANT_ID,\"cnode_ids\":[1,2]}" \
+          -o /dev/null -w 'pool create %{http_code}\n'
+      fi
+
+      POLICY_ID=$(api "$V/api/latest/viewpolicies/" | python3 -c '
+      import json,sys
+      d=json.load(sys.stdin)
+      p=[x for x in d if x["name"]=="lab-policy"]
+      print(p[0]["id"] if p else 0)')
+      if [ "$POLICY_ID" = 0 ]; then
+        api -X POST "$V/api/latest/viewpolicies/" -H 'Content-Type: application/json' \
+          -d "{\"name\":\"lab-policy\",\"tenant_id\":$TENANT_ID,\"access_flavor\":\"NFS4\",\"nfs_read_write\":[\"{{ lab_vast_nat_pool_cidr }}\"],\"nfs_read_only\":[],\"nfs_root_squash\":[\"0.0.0.0/0\"]}" \
+          -o /dev/null -w 'viewpolicy create %{http_code}\n'
+        POLICY_ID=$(api "$V/api/latest/viewpolicies/" | python3 -c '
+      import json,sys
+      d=json.load(sys.stdin)
+      print([x["id"] for x in d if x["name"]=="lab-policy"][0])')
+      fi
+
+      # Writes must succeed: a rejected PATCH (for example a policy from another
+      # tenant) used to print its status code and go unnoticed.
+      write() {
+        code=$(api -o /tmp/lab-vast-api.out -w '%{http_code}' "$@")
+        case "$code" in 2??) ;; *) echo "VAST API $code: $(cat /tmp/lab-vast-api.out)" >&2; exit 1 ;; esac
+      }
+
+      write -X PATCH "$V/api/latest/viewpolicies/$POLICY_ID/" -H 'Content-Type: application/json' \
+        -d "{\"nfs_read_write\":[\"{{ lab_vast_nat_pool_cidr }}\"],\"nfs_read_only\":[\"{{ lab_vast_data_subnet_start }}/{{ lab_vast_data_prefix }}\"],\"nfs_root_squash\":[],\"nfs_no_squash\":[\"{{ lab_vast_nat_pool_cidr }}\"]}"
+      echo "policy access ok"
+
+      # The appliance itself reads the export to serve the suite's server-side
+      # check (the probe file must exist on the export, not only in the guest).
+      # It reaches the VIP from the data subnet, so that subnet is a lab-tenant
+      # client too, read-only; the SNAT range above keeps the write access.
+      write -X PATCH "$V/api/latest/tenants/$TENANT_ID/" -H 'Content-Type: application/json' \
+        -d "{\"client_ip_ranges\":[[\"198.51.100.24\",\"198.51.100.31\"],[\"{{ lab_vast_data_subnet_start }}\",\"{{ lab_vast_data_subnet_end }}\"]]}"
+      echo "tenant access ok"
+
+      # "NFS" in a view's protocols is NFSv3 only; NFSv4.1/4.2 is "NFS4". An
+      # NFSv4 export also needs NFSv4 on every view above it, including the
+      # default tenant's `/`, or a 4.1 mount fails with "Operation not
+      # permitted". Clients reach that `/` only as the NFSv4 pseudo-root: it
+      # belongs to the default tenant, so its data stays out of their reach.
+      ROOT_VID=$(api "$V/api/latest/views/" | python3 -c '
+      import json,sys
+      m=[x for x in json.load(sys.stdin) if x["path"]=="/" and "NFS4" not in x["protocols"]]
+      print(m[0]["id"] if m else 0)')
+      if [ "$ROOT_VID" != 0 ]; then
+        write -X PATCH "$V/api/latest/views/$ROOT_VID/" -H 'Content-Type: application/json' \
+          -d '{"protocols":["NFS","NFS4"]}'
+        echo "root view NFS4 enabled"
+      fi
+
+      # The export belongs to the lab tenant: the VIP pool is the lab tenant's,
+      # so VAST serves the SNAT clients only views of that tenant. A view needs
+      # an existing path; create the directory first (ALREADY_EXISTS is fine).
+      api -X POST "$V/api/latest/folders/create_folder/" -H 'Content-Type: application/json' \
+        -d "{\"path\":\"{{ lab_vast_view_path }}\",\"tenant_id\":$TENANT_ID,\"create_dir_mode\":755}" \
+        -o /tmp/lab-vast-api.out -w 'folder create %{http_code}\n'
+      grep -q -e '"OK"' -e ALREADY_EXISTS /tmp/lab-vast-api.out \
+        || { echo "folder create failed: $(cat /tmp/lab-vast-api.out)" >&2; exit 1; }
+
+      VID=$(api "$V/api/latest/views/" | python3 -c '
+      import json,sys
+      m=[x for x in json.load(sys.stdin) if x["path"]=="{{ lab_vast_view_path }}" and x["tenant_id"]=='"$TENANT_ID"']
+      print(m[0]["id"] if m else 0)')
+      if [ "$VID" = 0 ]; then
+        write -X POST "$V/api/latest/views/" -H 'Content-Type: application/json' \
+          -d "{\"name\":\"lab-storage\",\"path\":\"{{ lab_vast_view_path }}\",\"policy_id\":$POLICY_ID,\"tenant_id\":$TENANT_ID,\"protocols\":[\"NFS\",\"NFS4\"]}"
+        echo "view create 201"
+      else
+        write -X PATCH "$V/api/latest/views/$VID/" -H 'Content-Type: application/json' \
+          -d "{\"policy_id\":$POLICY_ID,\"protocols\":[\"NFS\",\"NFS4\"]}"
+        echo "view ok"
+      fi
+
+      api "$V/api/latest/vippools/" | python3 -c '
+      import json,sys
+      d=json.load(sys.stdin)
+      p=[x for x in d if x["name"]=="lab-pool"]
+      assert p, "lab-pool missing"
+      p=p[0]
+      print("pool", p["ip_ranges"], "tenant", p["tenant_id"], "cnode_ids", p.get("cnode_ids"))'
+      nc -z -w3 "{{ lab_vast_vip_start }}" 2049 && echo "nfs port reachable"
+  register: _lab_vast_objects
+  changed_when: "'create 201' in _lab_vast_objects.stdout or 'create 200' in _lab_vast_objects.stdout"

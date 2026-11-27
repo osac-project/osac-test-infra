@@ -1,0 +1,14 @@
+TYPE=Ethernet
+BOOTPROTO=none
+DEFROUTE=yes
+IPV6INIT=no
+NAME=eth0
+DEVICE=eth0
+ONBOOT=yes
+IPADDR={{ lab_vast_mgmt_ip }}
+PREFIX={{ lab_vast_mgmt_prefix }}
+GATEWAY={{ lab_vast_mgmt_gateway }}
+HWADDR={{ lab_vast_mgmt_mac }}
+PEERDNS=no
+DNS1={{ lab_vast_dns_servers[0] }}
+DNS2={{ lab_vast_dns_servers[1] }}

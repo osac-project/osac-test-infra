@@ -1,0 +1,164 @@
+---
+# Capture the current VAST appliance as the golden image. Run it after a green
+# `make verify-storage`; it re-checks green itself, because a broken capture is
+# permanent. The next `make destroy-storage && make deploy-storage` is a
+# copy-on-write clone that skips the install, the 1 TiB format and the
+# management-DB copy.
+- name: Capture the VAST golden image
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Read the endpoint defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/lab_vast_storage/defaults/main.yml"
+
+    - name: Require the golden image to differ from the deploy overlay
+      ansible.builtin.assert:
+        that:
+          - lab_vast_golden_image != lab_vast_overlay
+
+    - name: Stat a leftover golden image from an interrupted capture
+      ansible.builtin.stat:
+        path: "{{ lab_vast_golden_image }}.tmp"
+      register: _golden_tmp
+
+    - name: Refuse to capture over an interrupted capture
+      ansible.builtin.assert:
+        that:
+          - not _golden_tmp.stat.exists
+        fail_msg: "Delete {{ lab_vast_golden_image }}.tmp (an interrupted capture) and rerun."
+
+    - name: Read the VAST domain state
+      ansible.builtin.command:
+        argv: [virsh, domstate, "{{ lab_vast_domain }}"]
+      register: _golden_domstate
+      changed_when: false
+      failed_when: false
+
+    - name: Require the VAST domain to be running
+      ansible.builtin.assert:
+        that:
+          - _golden_domstate.rc == 0
+          - _golden_domstate.stdout | trim == 'running'
+        fail_msg: "Capture checks a running, green appliance; {{ lab_vast_domain }} is not running."
+
+    - name: Read the VAST cluster, VMS and client observation state
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - "{{ lab_vast_ssh_key }}"
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - ConnectTimeout=10
+          - "centos@{{ lab_vast_mgmt_ip }}"
+          - bash -s
+        stdin: |
+          set -e
+          V="https://{{ lab_vast_mgmt_ip }}"
+          A="-sk -u admin:{{ lab_vast_admin_password }}"
+          curl $A "$V/api/clusters/" | python3 -c 'import json,sys; print("cluster=" + ("ONLINE" if any(c.get("state")=="ONLINE" for c in json.load(sys.stdin)) else "PENDING"))'
+          curl $A "$V/api/latest/vms/" | python3 -c 'import json,sys; v=json.load(sys.stdin)[0]; print("vms=" + (v.get("degraded_reason") or "READY"))'
+          echo "clientlog=$(systemctl is-active osac-vast-clients.service || true)"
+          curl $A "$V/api/latest/tenants/" | python3 -c 'import json,sys; print("tenants=" + ",".join(sorted(t["name"] for t in json.load(sys.stdin))))'
+          curl $A "$V/api/latest/views/" | python3 -c 'import json,sys; print("views=" + ",".join(sorted(v["path"] for v in json.load(sys.stdin))))'
+      register: _golden_state
+      changed_when: false
+
+    - name: Require a green appliance
+      ansible.builtin.assert:
+        that:
+          - "'cluster=ONLINE' in _golden_state.stdout_lines"
+          - "'vms=UPDATING_CLUSTERED_DB' not in _golden_state.stdout_lines"
+          - "'vms=NO_NFS_EXPORT' not in _golden_state.stdout_lines"
+          - "'clientlog=active' in _golden_state.stdout_lines"
+        fail_msg: "Not green, refusing to capture: {{ _golden_state.stdout_lines }}"
+
+    - name: Read the VAST domain UUID
+      ansible.builtin.command:
+        argv: [virsh, domuuid, "{{ lab_vast_domain }}"]
+      register: _golden_uuid
+      changed_when: false
+
+    - name: Read the deploy overlay
+      ansible.builtin.command:
+        argv: [qemu-img, info, -U, --output=json, "{{ lab_vast_overlay }}"]
+      register: _golden_overlay_info
+      changed_when: false
+
+    - name: Shut down the VAST domain for a consistent capture
+      ansible.builtin.command:
+        argv: [virsh, shutdown, "{{ lab_vast_domain }}"]
+      changed_when: true
+
+    - name: Wait for the VAST domain to stop
+      ansible.builtin.command:
+        argv: [virsh, domstate, "{{ lab_vast_domain }}"]
+      register: _golden_stopped
+      until: _golden_stopped.stdout | trim == 'shut off'
+      retries: "{{ (lab_vast_shutdown_timeout_s | int) // 10 }}"
+      delay: 10
+      changed_when: false
+
+    - name: Flatten the deploy overlay into a standalone image
+      ansible.builtin.command:
+        argv: >-
+          {{ ['qemu-img', 'convert', '-O', 'qcow2']
+             + (['-c'] if (lab_vast_golden_compress | bool) else [])
+             + [lab_vast_overlay, lab_vast_golden_image ~ '.tmp'] }}
+      changed_when: true
+
+    - name: Check the flattened image
+      ansible.builtin.command:
+        argv: [qemu-img, check, "{{ lab_vast_golden_image }}.tmp"]
+      changed_when: false
+
+    - name: Make the flattened image readable by libvirt
+      ansible.builtin.file:
+        path: "{{ lab_vast_golden_image }}.tmp"
+        mode: "0644"
+
+    # The image and its metadata are replaced together: a golden without a
+    # matching .meta is refused by the role, never used with a stale one.
+    - name: Remove the previous golden metadata
+      ansible.builtin.file:
+        path: "{{ lab_vast_golden_image }}.meta"
+        state: absent
+
+    - name: Move the golden image into place
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ lab_vast_golden_image }}.tmp", "{{ lab_vast_golden_image }}"]
+      changed_when: true
+
+    - name: Record the golden image metadata
+      ansible.builtin.copy:
+        dest: "{{ lab_vast_golden_image }}.meta"
+        mode: "0644"
+        content: |
+          build={{ lab_vast_build }}
+          cluster={{ lab_vast_cluster_name }}
+          uuid={{ _golden_uuid.stdout | trim }}
+          vcpu={{ lab_vast_vcpu }}
+          memory_mib={{ lab_vast_memory_mib }}
+          compressed={{ lab_vast_golden_compress | bool }}
+          captured={{ lookup('ansible.builtin.pipe', 'date -Iseconds') }}
+          source={{ lab_vast_overlay }}
+          source_backing={{ (_golden_overlay_info.stdout | from_json).get('backing-filename', 'none') }}
+          {% for line in _golden_state.stdout_lines if line.startswith('tenants=') or line.startswith('views=') %}
+          {{ line }}
+          {% endfor %}
+
+    - name: Report the capture
+      ansible.builtin.debug:
+        msg:
+          - "Golden image: {{ lab_vast_golden_image }} ({{ lab_vast_golden_image }}.meta)"
+          - "Captured objects: {{ _golden_state.stdout_lines | select('match', '^(tenants|views)=') | list }}"
+          - "The VAST domain is stopped. Next: make destroy-storage && make deploy-storage"
+          - >-
+            {{ 'To resume this same base-backed overlay instead, deploy with EXTRA_VARS=lab_vast_use_golden=false.'
+               if ((_golden_overlay_info.stdout | from_json).get('backing-filename', '') | basename) == (lab_vast_base_image | basename)
+               else 'This overlay is golden-backed and stays valid: make deploy-storage resumes it.' }}

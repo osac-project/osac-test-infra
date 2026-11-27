@@ -1,0 +1,159 @@
+---
+# VAST needs the recommended 128 GiB profile, and the SNO must not be starved.
+# Refuse to boot below the floor instead of OOM-killing the lab mid-run.
+
+- name: Read the VAST domain state
+  ansible.builtin.command:
+    argv: [virsh, domstate, "{{ lab_vast_domain }}"]
+  register: _lab_vast_domain_state
+  changed_when: false
+  failed_when: false
+
+- name: Read the running VAST domain memory
+  when:
+    - _lab_vast_domain_state.rc == 0
+    - _lab_vast_domain_state.stdout | trim == 'running'
+  ansible.builtin.command:
+    argv: [virsh, dominfo, "{{ lab_vast_domain }}"]
+  register: _lab_vast_dominfo
+  changed_when: false
+
+# Headroom is what the host has once the appliance takes its requested memory.
+# When the domain already runs, its current memory is added back first, so a
+# redeploy does not fail against its own footprint.
+- name: Compute the memory headroom for the VAST appliance
+  ansible.builtin.set_fact:
+    _lab_vast_effective_free_mb: >-
+      {{ (ansible_memory_mb.nocache.free | int)
+         + (0 if _lab_vast_domain_state.stdout | trim != 'running'
+            else ((_lab_vast_dominfo.stdout | regex_findall('Max memory:\s+(\d+)') | first | int) // 1024))
+         - (lab_vast_memory_mib | int) }}
+
+- name: Require enough free memory for the VAST appliance
+  ansible.builtin.assert:
+    that:
+      - _lab_vast_effective_free_mb | int >= lab_vast_min_free_mem_mb | int
+    fail_msg: >-
+      The VAST appliance would leave {{ _lab_vast_effective_free_mb }} MiB free,
+      below the {{ lab_vast_min_free_mem_mb }} MiB floor that keeps the SNO
+      healthy. Stop the spare BMaaS host or lower the appliance memory first.
+
+- name: Read the spare host state
+  ansible.builtin.command:
+    argv: [virsh, domstate, "{{ lab_vast_must_stay_off_domain }}"]
+  register: _lab_vast_spare_state
+  changed_when: false
+  failed_when: false
+
+- name: Require the spare host to stay off while VAST runs
+  ansible.builtin.assert:
+    that:
+      - not (_lab_vast_spare_state.rc == 0 and _lab_vast_spare_state.stdout | trim == 'running')
+    fail_msg: >-
+      {{ lab_vast_must_stay_off_domain }} is running; shut it off before
+      deploying the VAST appliance to keep the host inside its memory budget.
+
+- name: List the NetworkManager connection names
+  ansible.builtin.command:
+    argv: [nmcli, -t, -f, NAME, con, show]
+  register: _lab_vast_con_names
+  changed_when: false
+
+- name: Ensure the VAST data bridge exists
+  when: lab_vast_bridge not in _lab_vast_con_names.stdout_lines
+  ansible.builtin.command:
+    argv:
+      - nmcli
+      - con
+      - add
+      - type
+      - bridge
+      - ifname
+      - "{{ lab_vast_bridge }}"
+      - con-name
+      - "{{ lab_vast_bridge }}"
+      - ipv4.method
+      - manual
+      - ipv4.addresses
+      - "{{ lab_vast_bridge_ip }}"
+      - bridge.stp
+      - "no"
+      - ipv6.method
+      - disabled
+
+- name: Disable STP on the VAST data bridge
+  ansible.builtin.command:
+    argv: [nmcli, con, mod, "{{ lab_vast_bridge }}", bridge.stp, "no"]
+  changed_when: false
+
+- name: Bring the VAST data bridge up
+  ansible.builtin.command:
+    argv: [nmcli, con, up, "{{ lab_vast_bridge }}"]
+  changed_when: false
+
+- name: Read the firewalld state
+  ansible.builtin.command: systemctl is-active firewalld
+  register: _lab_vast_firewalld
+  changed_when: false
+  failed_when: false
+
+# The data bridge is lab-internal. firewalld's public zone rejects forwarded
+# traffic, and the SNAT side (br-public) is trusted, so the tenant path would be
+# dropped unless this bridge is trusted too.
+- name: Trust the VAST data bridge in firewalld
+  when: _lab_vast_firewalld.stdout | trim == 'active'
+  ansible.posix.firewalld:
+    zone: trusted
+    interface: "{{ lab_vast_bridge }}"
+    permanent: true
+    immediate: true
+    state: enabled
+
+# libvirt can leave the tap without its bridge membership after a cold boot or
+# a bridge re-apply, which makes the data NIC (and every VIP) unreachable.
+- name: Ensure the VAST taps are attached to their bridges
+  ansible.builtin.shell: |
+    set -e
+    virsh domiflist {{ lab_vast_domain }} | awk '$2 == "bridge" {print $1" "$3}' |
+    while read -r tap bridge; do
+      ip link show "$tap" | grep -q "master $bridge" || ip link set "$tap" master "$bridge"
+    done
+    ip link set {{ lab_vast_bridge }} up
+  changed_when: false
+
+- name: Render the VAST domain definition
+  ansible.builtin.template:
+    src: domain.xml.j2
+    dest: "/tmp/{{ lab_vast_domain }}.xml"
+    mode: "0600"
+  register: _lab_vast_domain_xml
+
+- name: Define the VAST domain
+  when: _lab_vast_domain_state.rc != 0
+  ansible.builtin.command:
+    argv: [virsh, define, "/tmp/{{ lab_vast_domain }}.xml"]
+
+- name: Set the VAST domain autostart
+  ansible.builtin.command:
+    argv:
+      - virsh
+      - autostart
+      - "{{ '--enable' if lab_vast_autostart | bool else '--disable' }}"
+      - "{{ lab_vast_domain }}"
+  changed_when: false
+
+- name: Start the VAST domain
+  when: _lab_vast_domain_state.rc != 0 or _lab_vast_domain_state.stdout | trim != 'running'
+  ansible.builtin.command:
+    argv: [virsh, start, "{{ lab_vast_domain }}"]
+
+- name: Wait for both VAST NICs on their bridges
+  ansible.builtin.command:
+    argv: [virsh, domiflist, "{{ lab_vast_domain }}"]
+  register: _lab_vast_domain_nics
+  until:
+    - lab_vast_mgmt_bridge in _lab_vast_domain_nics.stdout
+    - lab_vast_bridge in _lab_vast_domain_nics.stdout
+  retries: 30
+  delay: 2
+  changed_when: false

@@ -1,0 +1,60 @@
+---
+# The suite proves the write reached the export, not only the guest, by reading
+# the probe file on the storage server. On a plain NFS server that path is
+# local; here it is the export itself, so the appliance mounts its own view
+# read-only at the export path. An fstab entry rather than a .mount unit: a
+# hyphen in the path has to be escaped in a unit name, while fstab lets systemd
+# generate it.
+- name: Mount the export read-only inside the appliance
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - sudo bash -s
+    stdin: |
+      set -e
+      # A first attempt used a .mount unit; its name is not the one systemd
+      # derives for a path with a hyphen, so drop it before switching to fstab.
+      rm -f /etc/systemd/system/{{ lab_vast_view_path | regex_replace('^/', '') }}.mount \
+            /etc/systemd/system/multi-user.target.wants/{{ lab_vast_view_path | regex_replace('^/', '') }}.mount
+      mkdir -p {{ lab_vast_view_path }}
+      grep -qF "{{ lab_vast_view_path }} nfs " /etc/fstab \
+        || echo "{{ lab_vast_vip_start }}:{{ lab_vast_view_path }} {{ lab_vast_view_path }} nfs ro,vers=4.1,noresvport,_netdev 0 0" >> /etc/fstab
+      systemctl daemon-reload
+      mountpoint -q {{ lab_vast_view_path }} || mount {{ lab_vast_view_path }}
+      mountpoint -q {{ lab_vast_view_path }} && mount | grep " {{ lab_vast_view_path }} "
+  register: _lab_vast_view_mount
+  until: _lab_vast_view_mount.rc == 0
+  retries: 12
+  delay: 5
+  changed_when: false
+
+# The suite reads the probe file with `cat` as the ssh user and with sudo; both
+# must see the export.
+- name: Require the export to be readable from the appliance
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - test -x "{{ lab_vast_view_path }}" && echo READABLE
+  register: _lab_vast_view_readable
+  until: "'READABLE' in _lab_vast_view_readable.stdout"
+  retries: 12
+  delay: 5
+  changed_when: false

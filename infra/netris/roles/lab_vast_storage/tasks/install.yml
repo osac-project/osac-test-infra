@@ -1,0 +1,153 @@
+---
+# The appliance image ships without docker and with VAST's internal resolvers.
+# The upstream launcher installs docker-ce in the guest and then runs
+# /home/centos/install.sh (which bootstraps VMS and attempts a loopback cluster
+# create). The role does the same, in the guest, once.
+
+- name: Wait for the VAST guest SSH
+  ansible.builtin.wait_for:
+    host: "{{ lab_vast_mgmt_ip }}"
+    port: 22
+    timeout: 900
+
+- name: Generate the lab VAST SSH key when absent
+  ansible.builtin.command:
+    argv: [ssh-keygen, -t, ed25519, -N, "", -f, "{{ lab_vast_ssh_key }}"]
+    creates: "{{ lab_vast_ssh_key }}"
+
+# A golden clone has vman.sh and the containers, but dockerd may still be
+# starting when SSH answers. Reading `docker ps -a` too early looks like an
+# incomplete install and re-runs install.sh (40 min) against a live cluster,
+# so the probe waits for dockerd in the guest before it decides.
+- name: Probe the VAST install sentinels
+  ansible.builtin.command:
+    argv:
+      - sshpass
+      - -p
+      - "{{ lab_vast_guest_password }}"
+      - ssh
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - sudo bash -s
+    stdin: |
+      [ -x /vast/deploy/vman.sh ] || { echo INCOMPLETE; exit 0; }
+      for _ in $(seq 60); do
+        if systemctl is-active --quiet docker; then
+          # The VMS container is removed when the guest shuts down; the
+          # auto-restarting platform containers prove the install is intact.
+          if docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -Eq '^(vast_vms|vast_platform_)'; then
+            echo COMPLETE
+          else
+            echo INCOMPLETE
+          fi
+          exit 0
+        fi
+        sleep 5
+      done
+      echo INCOMPLETE
+  register: _lab_vast_install_probe
+  changed_when: false
+
+- name: Refuse to reinstall over a golden clone
+  ansible.builtin.assert:
+    that:
+      - "'COMPLETE' in _lab_vast_install_probe.stdout_lines"
+    fail_msg: >-
+      This overlay is a golden clone but the guest does not look installed
+      (docker inactive after 5 min, or no vast_vms container). Running
+      install.sh here would rebuild over the captured cluster; inspect the guest
+      or deploy with lab_vast_use_golden=false after `make destroy-storage`.
+  when: _lab_vast_from_golden | bool
+
+- name: Install docker and start the VAST install
+  when: "'COMPLETE' not in _lab_vast_install_probe.stdout_lines"
+  block:
+    - name: Install docker and launch the VAST installer
+      ansible.builtin.command:
+        argv:
+          - sshpass
+          - -p
+          - "{{ lab_vast_guest_password }}"
+          - ssh
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - ConnectTimeout=10
+          - "centos@{{ lab_vast_mgmt_ip }}"
+          - sudo bash -s
+        stdin: |
+          set -e
+          grep -q '^ip_resolve=4' /etc/dnf/dnf.conf || echo 'ip_resolve=4' >> /etc/dnf/dnf.conf
+          printf 'search ecosys.eng.rdu2.dc.redhat.com\n%s\n' \
+            "$(printf 'nameserver %s\n' {{ lab_vast_dns_servers | join(' ') }})" > /etc/resolv.conf
+          # The local registry is HTTP. Docker treats 127.0.0.0/8 as insecure,
+          # but the hosts entry may resolve to the management IP instead.
+          python3 - <<'PY'
+          import json, os
+          os.makedirs("/etc/docker", exist_ok=True)
+          p = "/etc/docker/daemon.json"
+          d = json.load(open(p)) if os.path.exists(p) else {}
+          regs = set(d.get("insecure-registries", [])) | {
+              "127.0.0.1:5000", "127.0.0.2:5000",
+              "{{ lab_vast_mgmt_ip }}:5000", "vastdata.registry.local:5000"}
+          d["insecure-registries"] = sorted(regs)
+          open(p, "w").write(json.dumps(d, indent=2))
+          PY
+          if ! command -v docker >/dev/null 2>&1; then
+            dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            dnf install -y docker-ce docker-ce-cli containerd.io
+          fi
+          systemctl enable --now docker
+          systemctl restart docker
+          usermod -aG docker centos
+          if ! docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q vast_platform; then
+            : > /home/centos/vast-install.log
+            nohup runuser -u centos -- bash -lc 'cd /home/centos && ./install.sh' \
+              > /home/centos/vast-install.log 2>&1 < /dev/null &
+            echo $! > /home/centos/vast-install.pid
+          fi
+
+    - name: Wait for the VAST installer to exit
+      ansible.builtin.command:
+        argv:
+          - sshpass
+          - -p
+          - "{{ lab_vast_guest_password }}"
+          - ssh
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - ConnectTimeout=10
+          - "centos@{{ lab_vast_mgmt_ip }}"
+          - grep -q 'finished cluster creation' /home/centos/vast-install.log
+      register: _lab_vast_install_done
+      until: _lab_vast_install_done.rc == 0
+      retries: 240
+      delay: 30
+      changed_when: false
+      failed_when: _lab_vast_install_done.rc not in [0, 1]
+
+- name: Install the lab SSH key on the VAST guest
+  ansible.builtin.command:
+    argv:
+      - sshpass
+      - -p
+      - "{{ lab_vast_guest_password }}"
+      - ssh-copy-id
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -i
+      - "{{ lab_vast_ssh_key }}.pub"
+      - "centos@{{ lab_vast_mgmt_ip }}"
+  changed_when: false

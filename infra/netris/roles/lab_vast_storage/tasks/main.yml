@@ -1,0 +1,35 @@
+---
+- name: Prepare the VAST base image and overlay
+  ansible.builtin.import_tasks: image.yml
+
+- name: Prepare the VAST overlay for virtio
+  ansible.builtin.import_tasks: prepare.yml
+  tags: [lab_vast_prepare]
+
+- name: Define and start the VAST domain
+  ansible.builtin.import_tasks: domain.yml
+
+- name: Install and start the VAST cluster
+  ansible.builtin.import_tasks: install.yml
+
+- name: Reconcile the VAST cluster state
+  ansible.builtin.import_tasks: cluster.yml
+
+- name: Create the VAST lab objects
+  ansible.builtin.import_tasks: objects.yml
+
+- name: Mount the export inside the appliance for the server-side read
+  ansible.builtin.import_tasks: server_view.yml
+
+- name: Align the VAST VIP policy routing
+  ansible.builtin.import_tasks: vip_routes.yml
+
+- name: Keep un-NATed tenant traffic off the data bridge
+  ansible.builtin.import_tasks: tenant_isolation.yml
+
+- name: Start the VAST client observation
+  ansible.builtin.import_tasks: clientlog.yml
+
+- name: Publish the VAST UI on the lab host
+  ansible.builtin.import_tasks: ui_forward.yml
+  tags: [lab_vast_ui]

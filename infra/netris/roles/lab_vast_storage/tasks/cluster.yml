@@ -1,0 +1,287 @@
+---
+# The image and install.sh are not self-sufficient in this lab: the registry
+# hostname resolves to the literal "None", the nginx listen block is empty, the
+# supervisor services can be stopped, and the VMS record has no IP. Fix the
+# management plane first, then reconcile the cluster state and wait for the
+# management-DB copy (the platform's NFS export is CPU-bound and slow).
+
+# A cold boot brings back only the containers with a restart policy (the
+# platform envs and the local registry). The VMS containers are removed on
+# shutdown, so they must be recreated by vman, not `docker start`.
+- name: Recreate and start the VAST containers
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - bash -s
+    stdin: |
+      for _ in $(seq 60); do systemctl is-active --quiet docker && break; sleep 5; done
+      if ! docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx vast_vms; then
+        cd /vast/deploy
+        EXTRA_VOLUME_MOUNTS='-v /file_server:/file_server' \
+        DISABLE_IPV6_FOR_LOOPBACK=yes \
+          sg docker -c './vman.sh {{ lab_vast_build }} /vast/deploy/ssh_key.pem start --force'
+      fi
+      for c in registry vast_vms mcvms; do
+        docker start "$c" >/dev/null 2>&1 || true
+      done
+      for _ in $(seq 60); do
+        docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx vast_vms && break
+        sleep 5
+      done
+      docker ps -a --format '{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.State{{ '}}' }}'
+  register: _lab_vast_containers
+  until: "'vast_vms running' in _lab_vast_containers.stdout_lines"
+  retries: 60
+  delay: 5
+  changed_when: false
+
+# A wrong container name or a dead dockerd must fail here, not after the
+# two-hour ONLINE wait below.
+- name: Require the VMS container to be running
+  ansible.builtin.assert:
+    that:
+      - "'vast_vms running' in _lab_vast_containers.stdout_lines"
+    fail_msg: "vast_vms is not running. Containers: {{ _lab_vast_containers.stdout_lines }}"
+
+- name: Ensure the VAST management API is reachable
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - sudo bash -s
+    stdin: |
+      set -e
+      # frozen_upgrade.py writes the registry hosts entry from the address of a
+      # NIC labeled 'm' (INTERNAL_IFACE_SUFFIX). Loopback mode has none, so it
+      # wrote "None" and every CNode/DNode image pull failed.
+      ip -4 addr show dev lo | grep -q '127.0.0.2' || ip addr add 127.0.0.2/8 dev lo label lo:m
+      grep -q '^127.0.0.1[[:space:]]*vastdata.registry.local' /etc/hosts \
+        || sed -i 's/^None[[:space:]]*vastdata.registry.local/127.0.0.1 vastdata.registry.local/' /etc/hosts
+      if [ ! -x /vast/deploy/vman.sh ]; then
+        src=$(find /vast -name vman.sh -not -path '/vast/deploy/*' 2>/dev/null | head -1)
+        [ -n "$src" ] || { echo "vman.sh not found; VAST install is incomplete" >&2; exit 1; }
+        cp "$src" /vast/deploy/vman.sh
+      fi
+      docker exec -u root vast_vms python3 -c '
+      p="/etc/nginx/nginx.conf"
+      s=open(p).read()
+      old="# Addresses start\n# Addresses end"
+      new=("# Addresses start\n"
+           "        listen {{ lab_vast_mgmt_ip }}:80 default_server;\n"
+           "        listen {{ lab_vast_mgmt_ip }}:443 ssl http2 default_server;\n"
+           "# Addresses end")
+      if old in s:
+          open(p,"w").write(s.replace(old,new,1))
+      '
+      docker exec -u root vast_vms supervisorctl start all >/dev/null 2>&1 || true
+      docker exec -u root vast_vms nginx -t
+      docker exec -u root vast_vms nginx -s reload || docker exec -u root vast_vms nginx
+      curl -sk -u admin:{{ lab_vast_admin_password }} -o /dev/null -w '%{http_code}' \
+        https://{{ lab_vast_mgmt_ip }}/api/clusters/ | grep -q 200
+  register: _lab_vast_api
+  until: _lab_vast_api.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: _lab_vast_api.rc == 0
+
+- name: Point the VMS record at its management address
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        curl -sk -u admin:{{ lab_vast_admin_password }}
+        -X PATCH -H 'Content-Type: application/json'
+        -d '{"ip1": "{{ lab_vast_mgmt_ip }}"}'
+        https://{{ lab_vast_mgmt_ip }}/api/latest/vms/1/ -o /dev/null -w '%{http_code}'
+  register: _lab_vast_ip1
+  until: _lab_vast_ip1.stdout | trim == '200'
+  retries: 10
+  delay: 5
+  changed_when: false
+
+# A booting clone reports its captured cluster FAILED while the CNodes go
+# UNKNOWN -> FAILED -> ACTIVATING -> ACTIVE (about 3 minutes here). Give it
+# that time before the guard below reads the state; one that never comes back
+# still fails the guard.
+- name: Wait for the captured cluster of a golden clone to activate
+  when: _lab_vast_from_golden | bool
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        curl -sk -u admin:{{ lab_vast_admin_password }}
+        https://{{ lab_vast_mgmt_ip }}/api/clusters/
+        | python3 -c 'import json,sys; print("ONLINE" if any(c.get("state")=="ONLINE" for c in json.load(sys.stdin)) else "PENDING")'
+  register: _lab_vast_clone_cluster
+  until: _lab_vast_clone_cluster.stdout | trim == 'ONLINE'
+  retries: 40
+  delay: 15
+  changed_when: false
+  failed_when: false
+
+- name: Read the VAST clusters
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        curl -sk -u admin:{{ lab_vast_admin_password }}
+        https://{{ lab_vast_mgmt_ip }}/api/clusters/
+  register: _lab_vast_clusters_raw
+  until: _lab_vast_clusters_raw.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Parse the VAST clusters
+  ansible.builtin.set_fact:
+    _lab_vast_clusters: "{{ _lab_vast_clusters_raw.stdout | from_json }}"
+
+# On a golden clone the cluster and its formatted loopback drives are the
+# captured state. Deleting or re-creating it would rebuild over that data, so a
+# clone fails instead and the operator decides.
+- name: Refuse to delete or create a cluster on a golden clone
+  ansible.builtin.assert:
+    that:
+      - _lab_vast_clusters | selectattr('state', 'in', ['FAILED']) | list | length == 0
+      - _lab_vast_clusters | length > 0
+    fail_msg: >-
+      The golden clone reports clusters {{ _lab_vast_clusters | map(attribute='state') | list }}.
+      A clone must find its captured cluster; it does not delete or create one.
+      Inspect the guest, or deploy with lab_vast_use_golden=false after
+      `make destroy-storage`.
+  when: _lab_vast_from_golden | bool
+
+- name: Delete a leftover cluster that failed
+  when:
+    - not (_lab_vast_from_golden | bool)
+    - _lab_vast_clusters | selectattr('state', 'in', ['FAILED']) | list | length > 0
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        curl -sk -u admin:{{ lab_vast_admin_password }} -X DELETE
+        https://{{ lab_vast_mgmt_ip }}/api/clusters/{{ item.id }}/
+  loop: "{{ _lab_vast_clusters | selectattr('state', 'in', ['FAILED']) | list }}"
+
+- name: Create the loopback cluster when none exists
+  when:
+    - not (_lab_vast_from_golden | bool)
+    - _lab_vast_clusters | rejectattr('state', 'in', ['FAILED']) | list | length == 0
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        cd /vast/deploy &&
+        EXTRA_VOLUME_MOUNTS='-v /file_server:/file_server'
+        DISABLE_IPV6_FOR_LOOPBACK=yes
+        nohup sudo -E sg docker -c './vman.sh {{ lab_vast_build }}
+        /vast/deploy/ssh_key.pem vcli -u admin -p {{ lab_vast_admin_password }}
+        -c cluster create --build {{ lab_vast_build }}
+        --vsettings CAS_OVER_RPC=true,IN_CLUSTER_COMMUNICATION_TCP=true
+        --name {{ lab_vast_cluster_name }} --loopback'
+        > /home/centos/vast-cluster-create.log 2>&1 &
+
+- name: Wait for the VAST cluster to come ONLINE
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        curl -sk -u admin:{{ lab_vast_admin_password }}
+        https://{{ lab_vast_mgmt_ip }}/api/clusters/
+        | python3 -c 'import json,sys; print("ONLINE" if any(c.get("state")=="ONLINE" for c in json.load(sys.stdin)) else "PENDING")'
+  register: _lab_vast_cluster_state
+  until: _lab_vast_cluster_state.stdout | trim == 'ONLINE'
+  retries: 240
+  delay: 30
+  changed_when: false
+
+# The management DB is copied onto the platform's internal NFS export. On this
+# host that copy is CPU-bound and takes tens of minutes; VMS rejects writes
+# until it finishes and replication is streaming. Do not restart services here.
+- name: Wait for the VMS management database to be ready
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        curl -sk -u admin:{{ lab_vast_admin_password }}
+        https://{{ lab_vast_mgmt_ip }}/api/latest/vms/
+        | python3 -c 'import json,sys; v=json.load(sys.stdin)[0]; print("READY" if v.get("degraded_reason") not in ("UPDATING_CLUSTERED_DB","NO_NFS_EXPORT") else v.get("degraded_reason") or "READY")'
+  register: _lab_vast_db_state
+  until: _lab_vast_db_state.stdout | trim == 'READY'
+  retries: 240
+  delay: 30
+  changed_when: false

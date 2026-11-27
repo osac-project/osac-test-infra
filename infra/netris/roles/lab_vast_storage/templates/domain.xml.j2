@@ -1,0 +1,38 @@
+<domain type='kvm'>
+  <name>{{ lab_vast_domain }}</name>
+{% if _lab_vast_domain_uuid | default('') | length > 0 %}
+  <uuid>{{ _lab_vast_domain_uuid }}</uuid>
+{% endif %}
+  <memory unit='MiB'>{{ lab_vast_memory_mib }}</memory>
+  <vcpu>{{ lab_vast_vcpu }}</vcpu>
+  <os>
+    <type arch='x86_64' machine='pc'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode='host-passthrough' check='none'/>
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='none' io='native'/>
+      <source file='{{ lab_vast_overlay }}'/>
+      <target dev='{{ lab_vast_disk_dev | default("vda") }}' bus='{{ lab_vast_disk_bus | default("virtio") }}'/>
+    </disk>
+    <interface type='bridge'>
+      <mac address='{{ lab_vast_mgmt_mac }}'/>
+      <source bridge='{{ lab_vast_mgmt_bridge }}'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x03' function='0x0'/>
+    </interface>
+    <interface type='bridge'>
+      <mac address='{{ lab_vast_data_mac }}'/>
+      <source bridge='{{ lab_vast_bridge }}'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x05' function='0x0'/>
+    </interface>
+    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>
+    <console type='pty'/>
+  </devices>
+</domain>

@@ -340,3 +340,14 @@ netris_private_allocation_cidr: "10.0.0.0/8"
 # the provisioning SNAT range, the VTEP CIDR, the Netris loopbacks and the node
 # uplinks.
 netris_extra_excluded_cidrs: []
+
+# Lab-only VAST storage endpoint (OSAC-8073). It lives on a host bridge outside
+# the fabric gateway and is reached through the tenant NATGateway. The range is
+# excluded so no tenant network can capture storage traffic. Opt-in: the
+# scheduled and PR CI runs do not deploy it.
+netris_storage_endpoint_enabled: false
+netris_storage_endpoint_cidr: "192.168.124.0/24"
+# Vendor CSI controller the operator dials for OSAC-managed VAST storage. The
+# osac-csi-backends chart deploys it to this service on the first
+# StorageBackend, so the operator must know the name from install time.
+netris_storage_vast_controller_endpoint: "vast-csi-controller.osac-csi-backends.svc:50051"

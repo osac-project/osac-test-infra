@@ -1,0 +1,183 @@
+---
+# The VAST qcow2 is too large for git. It is a one-time lab precondition,
+# cached on the host; the role fails with the path and checksum in the message
+# instead of trying to download it.
+#
+# A golden clone (lab_vast_use_golden and the golden file present) is backed by
+# the golden image only: the base image is not read, so it is not required.
+
+- name: Ensure the VAST image directory
+  ansible.builtin.file:
+    path: "{{ lab_vast_image_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Stat the VAST golden image
+  ansible.builtin.stat:
+    path: "{{ lab_vast_golden_image }}"
+  register: _lab_vast_golden
+  when: lab_vast_use_golden | bool
+
+- name: Decide whether this deploy clones the golden image
+  ansible.builtin.set_fact:
+    _lab_vast_from_golden: "{{ (lab_vast_use_golden | bool) and (_lab_vast_golden.stat.exists | default(false)) }}"
+
+- name: Choose the overlay backing image
+  ansible.builtin.set_fact:
+    _lab_vast_backing: "{{ lab_vast_golden_image if (_lab_vast_from_golden | bool) else lab_vast_base_image }}"
+
+- name: Warn when the golden image is requested but missing
+  ansible.builtin.debug:
+    msg: >-
+      lab_vast_use_golden is true but {{ lab_vast_golden_image }} does not
+      exist: this deploy is a full install (~2.5 h).
+  when:
+    - lab_vast_use_golden | bool
+    - not (_lab_vast_from_golden | bool)
+
+- name: Verify the VAST base image
+  when: not (_lab_vast_from_golden | bool)
+  block:
+    - name: Require the VAST base image
+      ansible.builtin.stat:
+        path: "{{ lab_vast_base_image }}"
+      register: _lab_vast_base
+
+    - name: Fail when the VAST base image is missing
+      ansible.builtin.assert:
+        that:
+          - _lab_vast_base.stat.exists
+        fail_msg: >-
+          {{ lab_vast_base_image }} is missing. Copy the VAST 5.4 appliance image
+          there once (sha256 {{ lab_vast_base_image_sha256 }}) before deploying the
+          storage endpoint.
+
+    - name: Verify the VAST base image checksum
+      ansible.builtin.command:
+        argv: [sha256sum, "{{ lab_vast_base_image }}"]
+      register: _lab_vast_checksum
+      changed_when: false
+
+    - name: Require the expected VAST image checksum
+      ansible.builtin.assert:
+        that:
+          - _lab_vast_checksum.stdout.split()[0] == lab_vast_base_image_sha256
+        fail_msg: >-
+          {{ lab_vast_base_image }} has the wrong checksum
+          ({{ _lab_vast_checksum.stdout.split()[0] }}), expected
+          {{ lab_vast_base_image_sha256 }}
+
+# A captured golden has no pinned checksum; its integrity is qemu-img check and
+# the build recorded at capture time.
+- name: Verify the VAST golden image
+  when: _lab_vast_from_golden | bool
+  block:
+    - name: Read the VAST golden metadata
+      ansible.builtin.slurp:
+        src: "{{ lab_vast_golden_image }}.meta"
+      register: _lab_vast_golden_meta
+      failed_when: false
+
+    - name: Parse the VAST golden metadata
+      ansible.builtin.set_fact:
+        _lab_vast_golden_meta_text: "{{ _lab_vast_golden_meta.content | default('') | b64decode }}"
+
+    - name: Require the golden image metadata
+      ansible.builtin.assert:
+        that:
+          - _lab_vast_golden_meta_text | length > 0
+        fail_msg: >-
+          {{ lab_vast_golden_image }}.meta is missing, so the golden's build and
+          domain UUID are unknown. Recapture with `make capture-golden`, or delete
+          the golden for a full install.
+
+    - name: Require the golden image to match the configured build
+      ansible.builtin.assert:
+        that:
+          - ('build=' ~ lab_vast_build) in _lab_vast_golden_meta_text.splitlines()
+        fail_msg: >-
+          {{ lab_vast_golden_image }} was captured for a different build than
+          {{ lab_vast_build }}. Recapture it, or run `make destroy-storage` and
+          deploy with lab_vast_use_golden=false.
+
+    - name: Read the captured domain UUID
+      ansible.builtin.set_fact:
+        _lab_vast_domain_uuid: >-
+          {{ _lab_vast_golden_meta_text
+             | regex_search('(?m)^uuid=([0-9a-fA-F-]{36})$', '\1')
+             | default([''], true) | first }}
+
+    - name: Require the captured domain UUID
+      ansible.builtin.assert:
+        that:
+          - _lab_vast_domain_uuid | length == 36
+        fail_msg: "{{ lab_vast_golden_image }}.meta has no uuid= line; recapture the golden."
+
+- name: Check the VAST backing image
+  ansible.builtin.command:
+    argv: [qemu-img, check, "{{ _lab_vast_backing }}"]
+  changed_when: false
+
+- name: Make the VAST backing image readable by libvirt
+  ansible.builtin.file:
+    path: "{{ _lab_vast_backing }}"
+    state: file
+    mode: "0644"
+
+- name: Stat the VAST overlay
+  ansible.builtin.stat:
+    path: "{{ lab_vast_overlay }}"
+  register: _lab_vast_overlay
+
+- name: Record whether this deploy creates a new overlay
+  ansible.builtin.set_fact:
+    _lab_vast_fresh_overlay: "{{ not _lab_vast_overlay.stat.exists }}"
+
+- name: Create the VAST overlay
+  when: _lab_vast_fresh_overlay | bool
+  ansible.builtin.command:
+    argv:
+      - qemu-img
+      - create
+      - -f
+      - qcow2
+      - -F
+      - qcow2
+      - -b
+      - "{{ _lab_vast_backing }}"
+      - "{{ lab_vast_overlay }}"
+      - "{{ lab_vast_disk_gb }}G"
+
+# A golden clone is already virtio-ready; a base overlay needs prepare.yml.
+- name: Record the preparation state of the new overlay
+  ansible.builtin.file:
+    path: "{{ lab_vast_prepared_marker }}"
+    state: "{{ 'touch' if (_lab_vast_from_golden | bool) else 'absent' }}"
+    mode: "0644"
+  when: _lab_vast_fresh_overlay | bool
+
+- name: Read the VAST overlay
+  ansible.builtin.command:
+    argv: [qemu-img, info, -U, --output=json, "{{ lab_vast_overlay }}"]
+  register: _lab_vast_overlay_info
+  changed_when: false
+
+- name: Require the VAST overlay geometry
+  ansible.builtin.assert:
+    that:
+      - (_lab_vast_overlay_info.stdout | from_json).get('virtual-size', 0) >= (lab_vast_disk_gb | int) * 1024 * 1024 * 1024
+    fail_msg: "VAST overlay {{ lab_vast_overlay }} has the wrong virtual size"
+
+# The backing choice is only applied when an overlay is created. Without this
+# check, lab_vast_use_golden=false (or a new golden) would be silently ignored
+# by every later run against an existing overlay.
+- name: Require the VAST overlay to use the selected backing image
+  ansible.builtin.assert:
+    that:
+      - ((_lab_vast_overlay_info.stdout | from_json).get('backing-filename', '') | basename) == (_lab_vast_backing | basename)
+    fail_msg: >-
+      {{ lab_vast_overlay }} is backed by
+      {{ (_lab_vast_overlay_info.stdout | from_json).get('backing-filename', 'nothing') }},
+      but this run selected {{ _lab_vast_backing }}. Run `make destroy-storage`
+      first, or keep the current overlay with
+      EXTRA_VARS='lab_vast_use_golden={{ not (_lab_vast_from_golden | bool) }}'.

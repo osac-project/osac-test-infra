@@ -37,7 +37,11 @@
                 'virtualNetworkIPv4CIDR': netris_tenant_network_cidr,
                 'subnetIPv4CIDR': netris_tenant_subnet_cidr}}
             }},
-          'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
+          'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}}
+                      | combine({'vendorControllers': {
+                          'lvms': 'none',
+                          'vast': netris_storage_vast_controller_endpoint}}
+                                if netris_storage_endpoint_enabled | default(false) | bool else {}),
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
               'EXTERNAL_ACCESS_BASE_DOMAIN': ocp_base_domain,
               'EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS': ocp_base_domain,
@@ -147,6 +151,7 @@
       - deploy_suite | default('') not in netris_k8s_manager_suites or _final_values.global.networking.k8sManager == 'cudn_evpn'
       - _final_values.global.networking.excludedIpv4Cidrs | length > 0
       - netris_private_allocation_cidr in _final_values.global.networking.excludedIpv4Cidrs
+      - not (netris_storage_endpoint_enabled | default(false) | bool) or netris_storage_endpoint_cidr in _final_values.global.networking.excludedIpv4Cidrs
       - (netris_tenant_network_cidr | split('.'))[0] != '10'
       - (netris_tenant_subnet_cidr | split('.'))[0] != '10'
       - _final_values.aap.instanceGroups.networkFulfillment.enabled | bool

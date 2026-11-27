@@ -1,0 +1,110 @@
+---
+# Tear down the lab storage endpoint: everything deploy-storage adds to the
+# host, without touching the base or golden image or the fabric. Safe to run
+# when nothing is deployed. destroy-full imports it first.
+- name: Destroy the lab storage endpoint
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Read the endpoint defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/lab_vast_storage/defaults/main.yml"
+
+    - name: Stop the VAST domain
+      ansible.builtin.command:
+        argv: [virsh, destroy, "{{ lab_vast_domain }}"]
+      changed_when: true
+      failed_when: false
+
+    - name: Undefine the VAST domain
+      ansible.builtin.command:
+        argv: [virsh, undefine, "{{ lab_vast_domain }}"]
+      changed_when: true
+      failed_when: false
+
+    - name: Remove the VAST overlay
+      ansible.builtin.file:
+        path: "{{ lab_vast_overlay }}"
+        state: absent
+
+    - name: Remove the VAST preparation marker
+      ansible.builtin.file:
+        path: "{{ lab_vast_prepared_marker }}"
+        state: absent
+
+    - name: Stop the VAST UI forward
+      ansible.builtin.systemd:
+        name: vast-ui-forward.service
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove the VAST UI forward unit
+      ansible.builtin.file:
+        path: /etc/systemd/system/vast-ui-forward.service
+        state: absent
+      register: _lab_vast_ui_unit
+
+    - name: Reload systemd after removing the UI forward unit
+      when: _lab_vast_ui_unit.changed
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Read the firewalld state
+      ansible.builtin.command: systemctl is-active firewalld
+      register: _lab_vast_firewalld
+      changed_when: false
+      failed_when: false
+
+    - name: Close the VAST UI forward port
+      when: _lab_vast_firewalld.stdout | trim == 'active'
+      ansible.posix.firewalld:
+        port: "{{ lab_vast_ui_port }}/tcp"
+        permanent: true
+        immediate: true
+        state: disabled
+
+    - name: Remove the VAST data bridge from the trusted zone
+      when: _lab_vast_firewalld.stdout | trim == 'active'
+      ansible.posix.firewalld:
+        zone: trusted
+        interface: "{{ lab_vast_bridge }}"
+        permanent: true
+        immediate: true
+        state: disabled
+
+    # Same rules the role adds to keep un-NATed tenant traffic off the bridge.
+    - name: Remove the data-bridge isolation rules
+      when: _lab_vast_firewalld.stdout | trim == 'active'
+      ansible.builtin.shell: |
+        for mode in runtime permanent; do
+          [ "$mode" = permanent ] && extra=--permanent || extra=
+          firewall-cmd $extra --direct --get-all-rules \
+            | awk '$1=="ipv4" && $4 ~ /^[0-9]+$/ {print $1, $2, $3, $4, substr($0, index($0,$5))}' \
+            | grep -F -- "-i {{ lab_vast_public_bridge }} -o {{ lab_vast_bridge }} " \
+            | while read -r family table chain priority rule; do
+                firewall-cmd $extra --direct --remove-rule "$family" "$table" "$chain" "$priority" $rule || true
+              done
+        done
+      changed_when: false
+
+    - name: List the NetworkManager connection names
+      ansible.builtin.command:
+        argv: [nmcli, -t, -f, NAME, con, show]
+      register: _lab_vast_con_names
+      changed_when: false
+
+    - name: Delete the VAST data bridge connection
+      when: lab_vast_bridge in _lab_vast_con_names.stdout_lines
+      ansible.builtin.command:
+        argv: [nmcli, con, delete, "{{ lab_vast_bridge }}"]
+
+    - name: Delete a leftover VAST data bridge link
+      ansible.builtin.shell: |
+        if ip link show {{ lab_vast_bridge }} >/dev/null 2>&1; then
+          ip link del {{ lab_vast_bridge }}
+          echo removed
+        fi
+      register: _lab_vast_bridge_link
+      changed_when: "'removed' in _lab_vast_bridge_link.stdout"

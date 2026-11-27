@@ -1,4 +1,9 @@
 ---
+# The storage endpoint first: its bridge, UI forward unit and firewall entries
+# are outside what the phases below clean.
+- name: Destroy the lab storage endpoint
+  ansible.builtin.import_playbook: destroy-storage.yml
+
 - name: Full destroy — nuke all VMs, wipe data disk, clean services and DNS
   hosts: all
   gather_facts: false
