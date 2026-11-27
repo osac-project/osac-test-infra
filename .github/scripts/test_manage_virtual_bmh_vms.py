@@ -111,6 +111,26 @@ class RenderVmXmlTests(unittest.TestCase):
             "/usr/share/OVMF/OVMF_CODE.secboot.fd",
         ):
             self.assertIn(expected, xml)
+        # No data disk requested: no vdb device in the domain.
+        self.assertNotIn("<target dev='vdb'", xml)
+
+    def test_data_disk_adds_a_vdb_without_the_root_serial(self) -> None:
+        xml = manage_virtual_bmh_vms.render_vm_xml(
+            name="grp-1",
+            mac="52:54:00:bb:cc:01",
+            cpu=4,
+            memory_mib=8192,
+            disk_path="/disks/grp-1.qcow2",
+            vars_path="/disks/grp-1-VARS.fd",
+            efi_code="/usr/share/OVMF/OVMF_CODE.secboot.fd",
+            network="test-infra-net-clone",
+            data_disk_path="/disks/grp-1-data.qcow2",
+        )
+        self.assertIn("<source file='/disks/grp-1-data.qcow2'/>", xml)
+        self.assertIn("<target dev='vdb' bus='virtio'/>", xml)
+        # The root-device hint serial must stay unique to the root disk:
+        # exactly one serial in the domain.
+        self.assertEqual(xml.count("<serial>"), 1)
 
 
 class DiskSerialTests(unittest.TestCase):
@@ -290,6 +310,27 @@ class CreateDeleteEndToEndTests(unittest.TestCase):
         hosts = json.loads(self.inventory_file.read_text())["hosts"]
         self.assertEqual([host["name"] for host in hosts], [known_name])
         self.assertNotIn(foreign_name, self.calls_file.read_text())
+
+    def test_data_disk_is_created_and_cleaned_up(self) -> None:
+        result = self._create("--data-disk-size", "50G")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        inventory = json.loads(self.inventory_file.read_text())
+        host = inventory["hosts"][0]
+        name = host["name"]
+
+        # The data disk exists and the domain definition attaches it as vdb.
+        data_disk = self.disk_dir / f"{name}-data.qcow2"
+        self.assertTrue(data_disk.exists())
+        domain_xml = (self.capture_dir / "vm-0.xml").read_text()
+        self.assertIn("<source file='" + str(data_disk) + "'/>", domain_xml)
+        self.assertIn("<target dev='vdb' bus='virtio'/>", domain_xml)
+
+        # Deletion removes the data disk along with the root disk.
+        result = self._delete(name)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.disk_dir / f"{name}.qcow2").exists())
+        self.assertFalse(data_disk.exists())
 
     def test_create_after_delete_adds_a_fresh_vm(self) -> None:
         self._create("--count", "2")
