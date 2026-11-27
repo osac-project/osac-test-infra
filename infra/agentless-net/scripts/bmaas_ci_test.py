@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import json
@@ -63,6 +64,16 @@ class InventoryTest(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             bmaas_inventory.inventory_document(mgmt_prefix="192.168.160", hosts=[])
+
+    def test_cli_host_flag_parses_name_switch_and_port(self) -> None:
+        # A regression here silently produced one bogus host key named
+        # "host=leaf-2:swp3" instead of three host->port mappings.
+        self.assertEqual(bmaas_inventory._parse_host("host-a=leaf-1:swp2"), ("host-a", "leaf-1", "swp2"))
+        self.assertEqual(bmaas_inventory._parse_host("vm-86=leaf-2:swp3"), ("vm-86", "leaf-2", "swp3"))
+        with self.assertRaises(argparse.ArgumentTypeError):
+            bmaas_inventory._parse_host("host-a")
+        with self.assertRaises(argparse.ArgumentTypeError):
+            bmaas_inventory._parse_host("host-a=leaf-1")
 
     def test_prefix_trailing_dot_is_not_doubled(self) -> None:
         document = bmaas_inventory.inventory_document(mgmt_prefix="10.0.0.", hosts=[("host-a", "leaf-1", "swp2")])
@@ -426,6 +437,13 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("OSAC_BMH_SSH_HOSTS", setup)
         self.assertLess(setup.index("Management NIC"), setup.index("Publishing the AgentlessNet inventory"))
         self.assertLess(setup.index("OSAC_BMH_SSH_HOSTS"), setup.index("setup-bmaas complete"))
+        # Tenant-only default route: provisioning and management NICs drop
+        # their DHCP default route so egress uses the fabric NIC.
+        self.assertIn("dhcp4-overrides: {use-routes: false}", setup)
+        self.assertIn("OSAC_BMI_USER_DATA_FILE", setup)
+        self.assertLess(setup.index("use-routes: false"), setup.index("OSAC_BMI_USER_DATA_FILE"))
+        destroy = (INFRA / "scripts" / "destroy-bmaas.sh").read_text()
+        self.assertIn("OSAC_BMI_USER_DATA_FILE", destroy)
         names = [step.get("name") for step in steps]
         self.assertLess(names.index("Deploy OCP from snapshot"), names.index("Build and load component images"))
         self.assertLess(names.index("Build and load component images"), names.index("Deploy OSAC"))

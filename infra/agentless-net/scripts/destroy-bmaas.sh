@@ -96,7 +96,7 @@ env_file="${INFRA_DIR}/.env.infra"
 if [[ "$cleanup_failed" -eq 0 && -f "$env_file" ]]; then
     env_tmp="$(mktemp)"
     grep_status=0
-    grep -v -E '^(OSAC_BMI_NETWORK_INTERFACE|OSAC_BMI_INSTANCE_TYPE|OSAC_BMH_SSH_HOSTS)=' "$env_file" >"$env_tmp" || grep_status=$?
+    grep -v -E '^(OSAC_BMI_NETWORK_INTERFACE|OSAC_BMI_INSTANCE_TYPE|OSAC_BMH_SSH_HOSTS|OSAC_BMI_USER_DATA_FILE)=' "$env_file" >"$env_tmp" || grep_status=$?
     if [[ "$grep_status" -gt 1 ]]; then
         echo "ERROR: failed to update ${env_file}" >&2
         rm -f "$env_tmp"

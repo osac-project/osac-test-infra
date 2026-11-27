@@ -206,12 +206,60 @@ KEY_B64="$(base64 -w0 "$SSH_KEY")"
 printf '%s\n' "{\"data\":{\"AGENTLESS_NET_SSH_PRIVATE_KEY\":\"${KEY_B64}\"}}" \
     | oc -n "$OSAC_NAMESPACE" patch secret network-fulfillment-ig --type merge --patch-file=/dev/stdin
 
+# Tenant-only default route for BMI guests.
+#
+# A BMH VM has three NICs: provisioning (Ironic/sushy), fabric (eth9, the
+# tenant network) and management (the host-side SSH address). All run DHCP, so
+# the guest would get three default routes and pick the lowest-metric one (the
+# provisioning NIC) for egress. Traffic then bypasses the tenant fabric, and
+# the Netris-shaped suite's NAT/SNAT and EIP checks look at the provisioning
+# network instead of the tenant ExternalIP. The demo this mirrors has guests
+# that route only over the tenant NIC.
+#
+# Publish cloud-init network v2 with dhcp4-overrides.use-routes=false on the
+# provisioning and management NICs, selected by MAC (stable per VM), and leave
+# the fabric NIC as the only default route. The suite passes this as the BMI
+# user data (OSAC_BMI_USER_DATA / bmi_user_data). Agentless-BMaaS only: Netris
+# and CaaS build their guests elsewhere and are unaffected.
+NETWORK_DATA_FILE="${INFRA_DIR}/bmi-user-data.yaml"
+{
+    cat <<'EOF'
+#cloud-config
+network:
+  version: 2
+  ethernets:
+EOF
+    for index in "${!BMH_NAMES[@]}"; do
+        [[ "$index" -lt "$BMH_COUNT" ]] || break
+        host="${BMH_NAMES[$index]}"
+        # provisioning NIC and management NIC MACs (fabric NIC keeps the default)
+        prov_mac="$(sudo virsh domiflist "$host" | awk -v n="test-infra-net-${CLONE_NAME}" 'NR>2 && $3 == n { print $5; exit }')"
+        mgmt_mac="$(sudo virsh domiflist "$host" | awk -v n="$MGMT_LIBVIRT_NETWORK" 'NR>2 && $3 == n { print $5; exit }')"
+        for mac in "$prov_mac" "$mgmt_mac"; do
+            [[ -n "$mac" ]] || continue
+            cat <<EOF
+    mac-${mac//:/}:
+      match: {macaddress: "${mac}"}
+      dhcp4: true
+      dhcp4-overrides: {use-routes: false}
+EOF
+        done
+        fabric_mac="$(printf '52:54:00:bb:dd:%02x' $((index + 1)))"
+        cat <<EOF
+    mac-${fabric_mac//:/}:
+      match: {macaddress: "${fabric_mac}"}
+      dhcp4: true
+EOF
+    done
+} >"$NETWORK_DATA_FILE"
+info "Wrote tenant-only default route to ${NETWORK_DATA_FILE}"
+
 info "Publishing BMaaS test inputs"
 env_file="${INFRA_DIR}/.env.infra"
 touch "$env_file"
 env_tmp="$(mktemp)"
 grep_status=0
-grep -v -E '^(OSAC_BMI_NETWORK_INTERFACE|OSAC_BMI_INSTANCE_TYPE|OSAC_BMH_SSH_HOSTS)=' "$env_file" >"$env_tmp" || grep_status=$?
+grep -v -E '^(OSAC_BMI_NETWORK_INTERFACE|OSAC_BMI_INSTANCE_TYPE|OSAC_BMH_SSH_HOSTS|OSAC_BMI_USER_DATA_FILE)=' "$env_file" >"$env_tmp" || grep_status=$?
 if [[ "$grep_status" -gt 1 ]]; then
     echo "ERROR: failed to update ${env_file}" >&2
     rm -f "$env_tmp"
@@ -221,6 +269,7 @@ fi
     echo "OSAC_BMI_NETWORK_INTERFACE=eth9"
     echo "OSAC_BMI_INSTANCE_TYPE=bmaas-agentless-ci"
     printf 'OSAC_BMH_SSH_HOSTS=%q\n' "$bmh_ssh_hosts"
+    printf 'OSAC_BMI_USER_DATA_FILE=%q\n' "$NETWORK_DATA_FILE"
 } >>"$env_tmp"
 mv "$env_tmp" "$env_file"
 

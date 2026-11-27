@@ -20,7 +20,7 @@ from typing import Any
 FABRIC_INTERFACE = "eth9"
 PROVISIONING_VLAN_ID = 2
 # The lab exposes one access port on each leaf. A host maps to exactly one.
-SUPPORTED_PORTS = {("leaf-1", "swp2"), ("leaf-2", "swp2")}
+SUPPORTED_PORTS = {("leaf-1", "swp2"), ("leaf-2", "swp2"), ("leaf-2", "swp3")}
 
 
 def inventory_document(*, mgmt_prefix: str, hosts: list[tuple[str, str, str]]) -> dict[str, Any]:
@@ -87,8 +87,8 @@ def render_inventory(*, mgmt_prefix: str, hosts: list[tuple[str, str, str]]) -> 
 
 def _parse_host(value: str) -> tuple[str, str, str]:
     """Parse `name=switch:port`, the CLI form of one host mapping."""
-    name, sep, port = value.partition("=")
-    switch, sep2, iface = port.partition(":")
+    name, sep, rest = value.partition("=")
+    switch, sep2, iface = rest.partition(":")
     if not sep or not sep2 or not name or not switch or not iface:
         raise argparse.ArgumentTypeError(f"expected name=switch:port, got {value!r}")
     return name, switch, iface
