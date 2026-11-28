@@ -654,9 +654,14 @@ jobs:
           USERPASS=$(printf '%s' "${AUTH_B64}" | base64 -d)
           STAGE_USER="${USERPASS%%:*}"
           STAGE_PASS="${USERPASS#*:}"
+          echo "::add-mask::${AUTH_B64}"
+          MASK_PASS="${STAGE_PASS//'%'/'%25'}"
+          MASK_PASS="${MASK_PASS//$'\r'/'%0D'}"
+          MASK_PASS="${MASK_PASS//$'\n'/'%0A'}"
+          echo "::add-mask::${MASK_PASS}"
           printf '%s' "${STAGE_PASS}" | helm registry login "${REGISTRY_HOST}" \
             --username "${STAGE_USER}" --password-stdin
-          unset USERPASS STAGE_USER STAGE_PASS AUTH_B64
+          unset USERPASS STAGE_USER STAGE_PASS AUTH_B64 MASK_PASS
           echo "::endgroup::"
 
       # With chart-oci-tag unset (the real-release validation path): always
@@ -696,10 +701,15 @@ jobs:
             MAX_WAIT_SECONDS=300
             POLL_INTERVAL_SECONDS=15
             elapsed=0
-            until skopeo inspect --raw --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
-              "docker://${CHART_OCI_REPO}:${VERSION}" >/dev/null 2>&1; do
+            until PROBE_ERROR=$(skopeo inspect --raw --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
+              "docker://${CHART_OCI_REPO}:${VERSION}" 2>&1 >/dev/null); do
               if [[ "${elapsed}" -ge "${MAX_WAIT_SECONDS}" ]]; then
                 echo "::error::${CHART_OCI_REPO}:${VERSION} not available after ${MAX_WAIT_SECONDS}s"
+                echo "Last chart manifest probe error:"
+                STOP_TOKEN=$(cat /proc/sys/kernel/random/uuid)
+                echo "::stop-commands::${STOP_TOKEN}"
+                printf '%s\n' "${PROBE_ERROR}"
+                echo "::${STOP_TOKEN}::"
                 exit 1
               fi
               echo "${CHART_OCI_REPO}:${VERSION} not available yet (${elapsed}s elapsed), retrying in ${POLL_INTERVAL_SECONDS}s..."
