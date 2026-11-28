@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
+import bmh_history
 from raw_inventory import Host, InventoryError, RawInventory, is_group_host_name
 
 VIRSH = ("virsh", "-c", "qemu:///system")
@@ -74,7 +75,7 @@ def run_virsh(
     )
 
 
-def generate_vm_token(hosts: list[Host], prefix: str) -> str:
+def generate_vm_token(hosts: list[Host], prefix: str, reserved: list[str] | None = None) -> str:
     """Random two-hex-digit token for a new VM, unique within the group.
 
     The token is both the VM name suffix and the last MAC address byte:
@@ -86,6 +87,7 @@ def generate_vm_token(hosts: list[Host], prefix: str) -> str:
         for host in hosts
         if host.name.startswith(f"{prefix}-")
     }
+    used.update(name[len(prefix) + 1:] for name in reserved or [])
     if len(used) >= MAX_VMS_PER_GROUP:
         fail(f"the group already holds {MAX_VMS_PER_GROUP} VMs (boot MAC address space exhausted)")
     while True:
@@ -278,9 +280,17 @@ def cmd_create(args: argparse.Namespace) -> None:
     os.chmod(args.disk_dir, 0o755)
 
     print(f"==> Creating {args.count} VM(s) on network {args.network}...")
+    tokens = []
+    if args.record_history:
+        for _ in range(args.count):
+            token = generate_vm_token(inventory.hosts, name_prefix, inventory.planned_names)
+            inventory.planned_names.append(f"{name_prefix}-{token}")
+            tokens.append(token)
+        inventory.save(args.inventory_file)
+        bmh_history.start(args.inventory_file, name_prefix)
     created: list[str] = []
-    for _ in range(args.count):
-        token = generate_vm_token(inventory.hosts, name_prefix)
+    for index in range(args.count):
+        token = tokens[index] if args.record_history else generate_vm_token(inventory.hosts, name_prefix, inventory.planned_names)
         name = f"{name_prefix}-{token}"
         mac = f"{MAC_PREFIX}:{token}"
         print(f"  Creating VM: {name} (MAC: {mac}, {args.cpu} CPU, {args.memory_mib} MiB)...")
@@ -367,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_DISK_SIZE,
         help=f"qcow2 virtual disk size (default: {DEFAULT_DISK_SIZE})",
     )
+    create.add_argument("--record-history", action="store_true", help="record run-owned lifecycle and reboot events")
     create.set_defaults(func=cmd_create)
 
     delete = subparsers.add_parser("delete", help="remove VMs from libvirt and the raw inventory")
