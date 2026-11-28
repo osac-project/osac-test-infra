@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import pwd
 import secrets
 import shutil
 import subprocess
@@ -108,7 +109,6 @@ def render_vm_xml(
     # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails
     # with "Unable to find 'efi' firmware". The pflash paths already
     # select UEFI.
-    serial_log = Path(disk_path).with_suffix(SERIAL_LOG_SUFFIX)
     return f"""<domain type='kvm'>
   <name>{name}</name>
   <memory unit='MiB'>{memory_mib}</memory>
@@ -138,7 +138,6 @@ def render_vm_xml(
       <model type='virtio'/>
     </interface>
     <serial type='pty'>
-      <log file={quoteattr(str(serial_log))} append='on'/>
       <target type='isa-serial' port='0'/>
     </serial>
     <console type='pty'>
@@ -182,9 +181,16 @@ def create_vm(
     )
     shutil.copyfile(EFI_VARS, vars_path)
     # Each new VM starts a private recording; libvirt appends across reboots.
-    serial_log = disk_path.with_suffix(SERIAL_LOG_SUFFIX)
-    with os.fdopen(os.open(serial_log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as recording:
-        os.fchmod(recording.fileno(), 0o600)
+    # libvirt runs qemu as qemu:qemu; it must write the disk and the NVRAM
+    # copy. The tool runs as root, so hand the files over. The serial console
+    # log uses libvirt's default /var/log/libvirt/qemu/<name>.serial.log:
+    # a <log> path outside that directory is rejected at start.
+    try:
+        qemu = pwd.getpwnam("qemu")
+        for owned_path in (disk_path, vars_path):
+            os.chown(owned_path, qemu.pw_uid, qemu.pw_gid)
+    except KeyError:
+        pass
 
     xml = render_vm_xml(
         name=name,

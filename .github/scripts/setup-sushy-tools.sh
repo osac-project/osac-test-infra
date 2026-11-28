@@ -63,7 +63,11 @@ if ${VIRSH} pool-info "${STORAGE_POOL_NAME}" &>/dev/null; then
 else
   ${VIRSH} pool-define-as "${STORAGE_POOL_NAME}" dir --target "${STORAGE_DIR}"
 fi
-if ! ${VIRSH} pool-info "${STORAGE_POOL_NAME}" | grep -q '^State:[[:space:]]*running'; then
+# Under pipefail, `pool-info | grep -q` trips SIGPIPE when grep exits
+# early on a match, making the check report "not running" for a running
+# pool; pool-start then fails on an active pool. Read the state without
+# a pipeline instead.
+if [[ "$(${VIRSH} pool-info "${STORAGE_POOL_NAME}" 2>/dev/null | awk '/^State:/{print $2}')" != "running" ]]; then
   ${VIRSH} pool-start "${STORAGE_POOL_NAME}"
 fi
 

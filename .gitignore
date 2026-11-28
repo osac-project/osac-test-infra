@@ -26,6 +26,9 @@ reports/
 infra/*/.env.infra
 infra/netris/.evpn-values.yaml
 
+# vcluster run outputs (kubeconfigs, rendered values)
+.vcluster-runs/
+
 # Workflow artifacts
 # AI workflow artifacts
 .artifacts/
