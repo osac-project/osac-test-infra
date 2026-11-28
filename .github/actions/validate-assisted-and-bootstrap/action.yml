@@ -1,0 +1,60 @@
+---
+name: Validate and bootstrap
+description: Set clone name and validate optional component inputs
+
+inputs:
+  test-suite:
+    required: false
+    default: "e2e"
+  run-id:
+    required: true
+  component-repo:
+    required: false
+    default: ""
+  component-ref:
+    required: false
+    default: ""
+  component-image-key:
+    required: false
+    default: ""
+
+outputs:
+  clone-name:
+    value: ${{ steps.clone-name.outputs.clone-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set clone name
+      id: clone-name
+      shell: bash
+      env:
+        SUITE: ${{ inputs.test-suite }}
+        RUN_ID: ${{ inputs.run-id }}
+      run: |
+        echo "::group::Set clone name"
+        SUITE=$(echo "${SUITE}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+        CLONE_NAME="${SUITE:0:1}${RUN_ID: -7}-${SUITE}"
+        echo "CLONE_NAME=${CLONE_NAME}" >> "$GITHUB_ENV"
+        echo "clone-name=${CLONE_NAME}" >> "$GITHUB_OUTPUT"
+        echo "Clone name: ${CLONE_NAME}"
+        echo "::endgroup::"
+
+    - name: Validate component inputs
+      if: inputs.component-repo != ''
+      shell: bash
+      env:
+        COMPONENT_REPO: ${{ inputs.component-repo }}
+        COMPONENT_REF: ${{ inputs.component-ref }}
+        COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
+      run: |
+        echo "::group::Validate component inputs"
+        if [[ -z "${COMPONENT_REF}" ]] || [[ -z "${COMPONENT_IMAGE_KEY}" ]]; then
+          echo "::error::component-repo requires component-ref and component-image-key"
+          exit 1
+        fi
+        if [[ ! "${COMPONENT_REPO}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::component-repo '${COMPONENT_REPO}' is not a valid org/repo format"
+          exit 1
+        fi
+        echo "::endgroup::"

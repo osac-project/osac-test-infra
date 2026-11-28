@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Polkit entry point for the few host operations needed by Assisted flavor CI.
+set -euo pipefail
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+[[ "${EUID}" -eq 0 && "${PKEXEC_UID:-}" =~ ^[0-9]+$ ]] ||
+  fail "This helper must be invoked through pkexec."
+CALLER_USER=$(getent passwd "${PKEXEC_UID}" | cut -d: -f1)
+CALLER_HOME=$(getent passwd "${PKEXEC_UID}" | cut -d: -f6)
+[[ -n "${CALLER_USER}" && -n "${CALLER_HOME}" && -f /etc/osac-assisted-caller ]] ||
+  fail "Cannot identify an authorized caller."
+[[ "$(cat /etc/osac-assisted-caller)" == "${CALLER_USER}" ]] ||
+  fail "Caller ${CALLER_USER} is not authorized for this helper."
+
+export OSAC_CALLER_USER="${CALLER_USER}"
+export OSAC_CALLER_UID="${PKEXEC_UID}"
+export OSAC_CALLER_HOME="${CALLER_HOME}"
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+with_cluster_key() {
+  local key=/root/.config/cluster-tool/cluster-tool.key
+  [[ -s "${key}" ]] || fail "cluster-tool SSH key is missing."
+  command -v ssh-agent >/dev/null && command -v ssh-add >/dev/null ||
+    fail "ssh-agent and ssh-add are required for cluster-tool VM access."
+  exec /usr/bin/ssh-agent /usr/bin/bash -c '
+    /usr/bin/ssh-add -q /root/.config/cluster-tool/cluster-tool.key || exit 1
+    exec "$@"
+  ' osac-cluster-key "$@"
+}
+
+case "${1:-}" in
+  flavor)
+    shift
+    if [[ "${1:-}" == create ]]; then
+      with_cluster_key /usr/local/sbin/osac-assisted-cluster-flavor "$@"
+    fi
+    exec /usr/local/sbin/osac-assisted-cluster-flavor "$@"
+    ;;
+  cluster-tool)
+    shift
+    if [[ "${1:-}" == boot ]]; then
+      with_cluster_key /usr/local/sbin/osac-assisted-cluster-tool "$@"
+    fi
+    exec /usr/local/sbin/osac-assisted-cluster-tool "$@"
+    ;;
+  compact-boot)
+    shift
+    with_cluster_key /usr/local/sbin/cluster-tool-assisted-compact-boot "$@"
+    ;;
+  kubeconfig)
+    shift
+    exec /usr/local/sbin/osac-cluster-kubeconfig "$@"
+    ;;
+  dns)
+    shift
+    exec /usr/local/sbin/osac-compact-dns "$@"
+    ;;
+  auth-stage)
+    [[ $# -eq 1 ]] || fail "Usage: osac-privileged auth-stage"
+    source_file="${CALLER_HOME}/.config/containers/auth.json"
+    [[ -f "${source_file}" && ! -L "${source_file}" &&
+       "$(stat -c '%u' -- "${source_file}")" == "${PKEXEC_UID}" ]] ||
+      fail "Registry auth must be a caller-owned regular file."
+    install -d -o root -g root -m 0700 /root/.config/containers
+    install -o root -g root -m 0600 "${source_file}" /root/.config/containers/auth.json
+    ;;
+  auth-clean)
+    [[ $# -eq 1 ]] || fail "Usage: osac-privileged auth-clean"
+    rm -f /root/.config/containers/auth.json
+    ;;
+  bridge-down|bridge-delete)
+    [[ $# -eq 2 && "$2" =~ ^br-[a-zA-Z0-9_.-]{1,12}$ ]] ||
+      fail "Expected one br-* interface name."
+    if [[ "$1" == "bridge-down" ]]; then
+      exec /usr/sbin/ip link set "$2" down
+    fi
+    exec /usr/sbin/ip link delete "$2"
+    ;;
+  *)
+    fail "Unsupported action."
+    ;;
+esac
