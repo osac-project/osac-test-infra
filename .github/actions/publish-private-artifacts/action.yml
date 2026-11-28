@@ -120,8 +120,27 @@ runs:
         repositories: ${{ steps.repo.outputs.name }}
         permissions: '{"actions":"write"}'
 
-    - name: Dispatch the collect workflow
+    - name: Verify private destination
+      id: visibility
       if: steps.stage.outputs.staged == 'true'
+      shell: bash
+      env:
+        PRIVATE_REPO: ${{ inputs.private-repo }}
+        GH_DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
+      run: |
+        set -euo pipefail
+        trap 'rm -f "${RUNNER_TEMP}/private-repository.json"' EXIT
+        [[ -n "${GH_DISPATCH_TOKEN}" ]]
+        [[ $(curl --silent --fail --max-time 20 --proto '=https' --write-out '%{http_code}' \
+          -H "Authorization: Bearer ${GH_DISPATCH_TOKEN}" \
+          "https://api.github.com/repos/${PRIVATE_REPO}" \
+          -o "${RUNNER_TEMP}/private-repository.json") == 200 ]]
+        jq -e --arg repo "${PRIVATE_REPO}" \
+          '.private == true and .full_name == $repo' \
+          "${RUNNER_TEMP}/private-repository.json" >/dev/null
+
+    - name: Dispatch the collect workflow
+      if: steps.stage.outputs.staged == 'true' && steps.visibility.outcome == 'success'
       shell: bash
       env:
         GH_DISPATCH_TOKEN: ${{ steps.token.outputs.token }}

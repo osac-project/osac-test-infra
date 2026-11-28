@@ -1,0 +1,40 @@
+#!/usr/bin/bash
+set -euo pipefail
+umask 077
+[[ $# == 0 && ${SUDO_UID:-} =~ ^[0-9]+$ && ${SUDO_GID:-} =~ ^[0-9]+$ && ${SUDO_UID} != 0 ]]
+scratch=$(mktemp -d /var/tmp/osac-sos-work.XXXXXXXX)
+handoff=""
+trap 'rm -rf -- "$scratch"; [[ -z "$handoff" ]] || rm -rf -- "$handoff"' EXIT
+trap 'exit 1' INT TERM HUP
+ulimit -f 65536
+touch "$scratch/sos.conf"
+printf '{}\n' >"$scratch/mapping"
+env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME="$scratch" LC_ALL=C \
+  timeout --kill-after=5 300 sos report \
+  --build --clean --batch --no-report --no-env-vars \
+  --log-size=25 --journal-size=25 \
+  --only-plugins=networking,firewall_tables,kernel,libvirt,podman,block,lvm2,nvme,systemd,system,rpm \
+  --no-update --config-file="$scratch/sos.conf" \
+  --map-file="$scratch/mapping" --tmp-dir="$scratch" >"$scratch/command.log" 2>&1
+awk '/^Successfully obfuscated 1 report\(s\)[[:space:]]*$/ {clean++; next}
+     /^Your sos report build tree has been generated in:/ {if (clean != 1) exit 1; final++}
+     END {if (clean != 1 || final != 1) exit 1}' "$scratch/command.log"
+tree=$(sed -n '/^Your sos report build tree has been generated in:/{n;s/^[[:space:]]*//;p;}' "$scratch/command.log")
+[[ $tree == "$scratch/"* && ${tree#"$scratch/"} != */* && -d $tree && ! -L $tree ]]
+[[ -d $tree/sos_logs && ! -L $tree/sos_logs ]]
+for log in "$scratch/command.log" "$tree/sos_logs/sos.log" "$tree/sos_logs/ui.log"; do
+  [[ -f $log && ! -L $log ]]
+done
+awk 'tolower($0) ~ /\[cleaner|unable to obfuscate report:|private map file:/ &&
+        tolower($0) ~ /error|exception|failed|could not|unable to/ {found=1}
+        END {if (found) exit 1}' "$scratch/command.log" "$tree/sos_logs/sos.log" "$tree/sos_logs/ui.log"
+rm -rf -- "$tree/sos_logs"
+find "$tree" -type l -delete
+[[ -z $(find "$tree" ! -type d ! -type f -print -quit) ]]
+[[ $(du -sm "$scratch" | cut -f1) -le 256 ]]
+handoff=$(mktemp -d /var/tmp/osac-sosreport.XXXXXXXX)
+mv -- "$tree" "$handoff/report"
+chown -R --no-dereference "$SUDO_UID:$SUDO_GID" "$handoff/report"
+chown --no-dereference "$SUDO_UID:$SUDO_GID" "$handoff"
+printf '%s\n' "$handoff"
+handoff=""

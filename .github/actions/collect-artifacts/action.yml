@@ -7,6 +7,10 @@ description: >-
   destroyed in between. Use gather-artifacts to do both in one go.
 
 inputs:
+  private-repo:
+    description: "Private destination binding for sensitive host diagnostics; empty withholds them"
+    required: false
+    default: ""
   namespace:
     description: "OSAC E2E namespace"
     required: false
@@ -30,6 +34,14 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Collect bounded hypervisor report
+      shell: bash
+      env:
+        PRIVATE_REPO: ${{ inputs.private-repo }}
+      run: |
+        bash "${GITHUB_WORKSPACE}/.github/scripts/hypervisor-sosreport.sh" collect >/dev/null 2>&1 ||
+          echo "::notice::Hypervisor report withheld"
+
     - name: Gather and redact
       shell: bash
       env:
