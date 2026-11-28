@@ -1,0 +1,10 @@
+---
+name: Stage local Assisted secrets
+description: Stage a runner-provisioned pull secret and AAP license for an Assisted cluster test
+
+runs:
+  using: composite
+  steps:
+    - name: Stage local secrets
+      shell: bash
+      run: bash scripts/stage-local-assisted-secrets.sh

@@ -1,0 +1,55 @@
+name: Build and test Assisted cluster flavor
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster-topology:
+        description: OpenShift topology to provision and test
+        required: true
+        type: choice
+        options:
+          - sno
+          - mno
+        default: sno
+      test-suite:
+        description: E2E suite under tests/e2e (default vmaas/sanity)
+        required: false
+        type: string
+        default: "vmaas/sanity"
+      test-filter:
+        description: Optional pytest -k filter
+        required: false
+        type: string
+        default: ""
+      test-ref:
+        description: Branch or commit of osac-project/osac that supplies E2E tests
+        required: false
+        type: string
+        default: main
+      openshift-version:
+        description: OpenShift version for the source cluster
+        required: true
+        type: string
+        default: "4.22"
+      installer-ref:
+        description: Branch or ref of the OSAC monorepo installer
+        required: true
+        type: string
+        default: main
+
+concurrency:
+  group: osac-ci-assisted-cluster-flavor
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/e2e-assisted-flavor-run.yml
+    with:
+      runner-label: osac-ci-large
+      cluster-topology: ${{ inputs.cluster-topology }}
+      openshift-version: ${{ inputs.openshift-version }}
+      flavor-name: osac-${{ inputs.cluster-topology }}-${{ github.run_id }}-${{ github.run_attempt }}
+      test-suite: ${{ inputs.test-suite }}
+      test-filter: ${{ inputs.test-filter }}
+      test-ref: ${{ inputs.test-ref }}
+      installer-ref: ${{ inputs.installer-ref }}

@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Run compact-boot locally with only validated runner-provided arguments.
+set -euo pipefail
+
+if [[ $# -ne 3 && $# -ne 4 ]]; then
+  echo "Usage: cluster-tool-assisted-compact-boot FLAVOR CLONE_ID PULL_SECRET [recert|rewrite]" >&2
+  exit 2
+fi
+
+flavor="$1"
+clone_id="$2"
+pull_secret="$3"
+resume_args=()
+if [[ $# -eq 4 ]]; then
+  [[ "$4" == recert || "$4" == rewrite ]] ||
+    { echo "Only recert or rewrite resume is supported" >&2; exit 2; }
+  resume_args=(--resume "$4")
+fi
+
+[[ "${flavor}" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] ||
+  { echo "Invalid compact flavor: ${flavor}" >&2; exit 2; }
+[[ "${clone_id}" =~ ^[a-z0-9]([a-z0-9-]{0,29}[a-z0-9])?$ ]] ||
+  { echo "Invalid compact clone ID: ${clone_id}" >&2; exit 2; }
+[[ "${EUID}" -eq 0 && -n "${OSAC_CALLER_USER:-}" &&
+   "${PKEXEC_UID:-}" == "${OSAC_CALLER_UID:-}" ]] ||
+  { echo "This command must be invoked through osac-privileged" >&2; exit 1; }
+
+runner_home=$(getent passwd "${OSAC_CALLER_USER}" | cut -d: -f6)
+[[ -n "${runner_home}" && "${runner_home}" != "/" ]] ||
+  { echo "Could not find the runner user's home directory" >&2; exit 1; }
+relative_path="${pull_secret#"${runner_home}"/action-runners/}"
+runner_name="${relative_path%%/*}"
+if [[ "${relative_path}" != "${runner_name}/_work/_temp/pull-secret.json" ||
+      ! "${runner_name}" =~ ^runner-[1-9][0-9]*$ ]]; then
+  echo "Pull secret must be in a github-runner action runner temp directory" >&2
+  exit 2
+fi
+
+runner_temp="${runner_home}/action-runners/${runner_name}/_work/_temp"
+for dir in "${runner_home}/action-runners" "${runner_home}/action-runners/${runner_name}" \
+           "${runner_home}/action-runners/${runner_name}/_work" "${runner_temp}"; do
+  [[ -d "${dir}" && ! -L "${dir}" ]] ||
+    { echo "Invalid runner temp directory: ${dir}" >&2; exit 1; }
+done
+[[ -f "${pull_secret}" && ! -L "${pull_secret}" ]] ||
+  { echo "Pull secret must be a regular, non-symlink file" >&2; exit 1; }
+[[ "$(stat -c '%u' -- "${pull_secret}")" == "${OSAC_CALLER_UID}" ]] ||
+  { echo "Pull secret must be owned by the invoking runner user" >&2; exit 1; }
+
+[[ "${flavor}" =~ ^osac-mno-([1-9][0-9]{0,19})-([1-9][0-9]{0,3})$ ]] ||
+  { echo "Expected an Assisted MNO flavor name" >&2; exit 2; }
+run_dir="/var/tmp/osac-assisted-cluster-flavor/${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
+cluster_tool_dir="${run_dir}/cluster-tool"
+cluster_tool_path="${cluster_tool_dir}/cluster-tool"
+for dir in /var/tmp/osac-assisted-cluster-flavor "${run_dir}" "${cluster_tool_dir}"; do
+  [[ -d "${dir}" && ! -L "${dir}" && "$(stat -c '%u' -- "${dir}")" == 0 ]] ||
+    { echo "Invalid Assisted cluster-tool directory" >&2; exit 1; }
+done
+[[ -f "${cluster_tool_path}" && ! -L "${cluster_tool_path}" &&
+   "$(stat -c '%u' -- "${cluster_tool_path}")" == 0 &&
+   -f "${run_dir}/flavor-name" && ! -L "${run_dir}/flavor-name" &&
+   "$(cat "${run_dir}/flavor-name")" == "${flavor}" ]] ||
+  { echo "No matching captured Assisted flavor exists" >&2; exit 1; }
+
+source_prefix_file="${run_dir}/source-prefix"
+[[ -f "${source_prefix_file}" && ! -L "${source_prefix_file}" &&
+   "$(stat -c '%u' -- "${source_prefix_file}")" == 0 ]] ||
+  { echo "Missing trusted Assisted source prefix" >&2; exit 1; }
+source_prefix=$(cat "${source_prefix_file}")
+[[ "${source_prefix}" =~ ^test-infra-cluster-[a-f0-9]{8}$ ]] ||
+  { echo "Invalid Assisted source prefix" >&2; exit 1; }
+
+watchdog_pid=""
+stop_watchdog() {
+  if [[ -n "${watchdog_pid}" ]]; then
+    kill "${watchdog_pid}" 2>/dev/null || true
+    wait "${watchdog_pid}" 2>/dev/null || true
+  fi
+}
+trap stop_watchdog EXIT
+
+/usr/bin/python3 "${cluster_tool_path}" compact-boot \
+  --flavor "${flavor}" --name "${clone_id}" --host local \
+  --pull-secret "${pull_secret}" "${resume_args[@]}" &
+boot_pid=$!
+/usr/local/sbin/assisted-compact-watchdog.py "${clone_id}" "${source_prefix}" "${boot_pid}" &
+watchdog_pid=$!
+if wait "${boot_pid}"; then
+  rc=0
+else
+  rc=$?
+fi
+exit "${rc}"

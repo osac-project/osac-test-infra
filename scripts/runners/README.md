@@ -204,6 +204,69 @@ jobs:
       - run: echo "Running on self-hosted runner"
 ```
 
+### Assisted flavor workflow on restricted runners
+
+The on-demand Assisted flavor workflow runs on the `osac-ci-large` label.
+Its default E2E selection is the real `tests/e2e/vmaas/sanity` suite from the
+OSAC monorepo; the job records the test commit SHA. It uses the standalone
+Assisted reusable workflow so the existing CI workflows remain unchanged.
+It uses a fixed root-owned helper through polkit for source-cluster creation,
+flavor capture, cluster-tool operations, and kubeconfig staging. The on-demand
+workflow keeps captured flavors local and does not publish images.
+Provision the runner account with `~/.config/osac-assisted/pull-secret.json`
+and `~/.config/osac-assisted/aap-license.zip`, owned by that account with mode
+`0600`; the containing directory must be owned by the account. The job copies
+them into its temporary workspace and stages pull-secret registry auth through
+the helper. This path does not use Vault or snapshot registry credentials.
+The helper loads root's cluster-tool key into a short-lived SSH agent for
+source capture and clone boot.
+For MNO boots, its root-owned watchdog approves only CSRs whose signer,
+requester, and certificate subject match the captured source nodes. It also
+replaces stale OVN/MCO pods and clears transient MCD API errors when the
+clone's node identity and rendered configuration already match. The captured
+source prefix is stored in the helper's root-owned run directory.
+On MNO clones, the job lowers the memory requests of the installer-provided
+CoreDNS, HAProxy, and Keepalived static pods from 200 MiB to 64 MiB per
+container. It waits for each master's pods to become Ready before proceeding.
+The MNO E2E suite runs with one pytest worker so 8-GiB test VMs do not compete
+for the remaining node capacity. Before tests, it creates the test tenant,
+waits for its local StorageClass, and pins that class to the Ready master with
+at least 8,628 MiB of unreserved memory. This keeps an 8-GiB VM's local disk
+on a node that can also schedule its 8,500-MiB launcher. SNO keeps the
+standard four workers.
+Provision each eligible runner host once as root with:
+
+```bash
+./scripts/install-osac-privileged-helper.sh github-runner
+```
+
+For a test under a different account, pass that account instead (for example,
+`./scripts/install-osac-privileged-helper.sh kni`).
+The installer authorizes only the named user to invoke the fixed helper via
+polkit. Assisted jobs invoke it with `pkexec --disable-internal-agent`; they
+do not call sudo. Host package setup, libvirt configuration, and DNS service
+setup remain administrator provisioning tasks. The workflow checks for the
+helper before creating resources.
+
+The host also needs the pinned cluster-tool at `/usr/local/bin/cluster-tool`
+with root's cluster-tool configuration, plus `kind`, `skipper`, Podman,
+Terraform, and the OpenShift CLI. SNO clone boot needs a configured HAProxy
+service. The Assisted job builds its container image in the run; it does not
+run Assisted Test Infra's system-changing `make setup` target.
+The host's chronyd must be synchronized and allow NTP requests from the
+Assisted source network (`192.168.127.0/24`). The workflow points the source
+cluster at that network's host gateway (`192.168.127.1`) for time sync.
+The runner account must also be able to run rootless Podman. The workflow
+checks `podman info` as that account before it creates any cluster resources.
+Resolve any rootless Podman startup error on the host before starting an
+end-to-end run.
+The Assisted workflow checks free space on the cluster-tool overlay
+filesystem before creating the source cluster and again after booting the
+test clone: at least 160 GiB for SNO or 240 GiB for MNO. These limits leave
+room for the installer and E2E test VMs. A run exits before installation when
+the host has less space; local captured flavors remain available for later
+testing.
+
 ## Remove Runners
 
 ### With GitHub unregistration

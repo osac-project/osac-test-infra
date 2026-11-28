@@ -1,0 +1,955 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+RUNNER_USER="${OSAC_CALLER_USER:-}"
+CLUSTER_TOOL_BIN=/usr/local/bin/cluster-tool
+WORK_ROOT=/var/tmp/osac-assisted-cluster-flavor
+ACTION="${1:-}"
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+[[ "${EUID}" -eq 0 && -n "${RUNNER_USER}" && "${PKEXEC_UID:-}" == "${OSAC_CALLER_UID:-}" &&
+   "$(id -u "${RUNNER_USER}" 2>/dev/null)" == "${PKEXEC_UID:-}" ]] ||
+  fail "This helper must be invoked through osac-privileged."
+
+case "${ACTION}" in
+  check)
+    [[ $# -eq 2 && ( "$2" == "sno" || "$2" == "mno" ) ]] ||
+      fail "Usage: osac-assisted-cluster-flavor check sno|mno"
+    [[ -x "${CLUSTER_TOOL_BIN}" ]] || fail "cluster-tool is not installed at ${CLUSTER_TOOL_BIN}."
+    [[ -f /root/.config/cluster-tool/config && -f /root/.config/cluster-tool/servers.json &&
+       -f /root/.config/cluster-tool/state.json &&
+       -s /root/.config/cluster-tool/cluster-tool.key &&
+       -s /root/.config/cluster-tool/cluster-tool.key.pub ]] ||
+      fail "cluster-tool is not configured for root on this runner."
+    for command in git make kind skipper podman virsh terraform oc jq unzip qemu-img guestfish virt-ls virt-cat chronyc ssh-agent ssh-add; do
+      command -v "${command}" >/dev/null 2>&1 || fail "Missing host prerequisite: ${command}."
+    done
+    systemctl is-active --quiet chronyd &&
+      chronyc tracking | grep -Eq '^Leap status[[:space:]]*:[[:space:]]*Normal$' &&
+      chronyc accheck 192.168.127.10 | grep -q 'Access allowed' ||
+      fail "Host chronyd must be synchronized and serve the Assisted source network."
+    for helper in osac-assisted-cluster-tool cluster-tool-assisted-compact-boot assisted-compact-watchdog.py osac-compact-dns osac-cluster-kubeconfig; do
+      [[ -x "/usr/local/sbin/${helper}" ]] ||
+        fail "Missing /usr/local/sbin/${helper}; run install-osac-privileged-helper.sh."
+    done
+    if [[ "$2" == "sno" ]]; then
+      [[ -f /etc/haproxy/haproxy.cfg ]] && systemctl is-active --quiet haproxy ||
+        fail "SNO clone boot requires a configured, running HAProxy service."
+    fi
+    echo "Assisted cluster flavor helper and host prerequisites are ready."
+    exit 0
+    ;;
+  create)
+    [[ $# -eq 7 ]] || fail "Usage: osac-assisted-cluster-flavor create sno|mno VERSION FLAVOR RUN_ID ATTEMPT PULL_SECRET"
+    CLUSTER_TOPOLOGY="${2}"
+    OPENSHIFT_VERSION="${3}"
+    FLAVOR_NAME="${4}"
+    GITHUB_RUN_ID="${5}"
+    GITHUB_RUN_ATTEMPT="${6}"
+    PULL_SECRET_FILE="${7}"
+    ;;
+  cleanup)
+    [[ $# -eq 3 ]] || fail "Usage: osac-assisted-cluster-flavor cleanup RUN_ID ATTEMPT"
+    GITHUB_RUN_ID="${2}"
+    GITHUB_RUN_ATTEMPT="${3}"
+    ;;
+  *)
+    fail "Unsupported action. Use check, create, or cleanup."
+    ;;
+esac
+
+[[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]] || fail "Invalid workflow run ID."
+[[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]{0,3}$ ]] || fail "Invalid workflow run attempt."
+RUN_WORKDIR="${WORK_ROOT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+validate_run_workdir() {
+  [[ "${RUN_WORKDIR}" == "${WORK_ROOT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" &&
+     ! -L "${WORK_ROOT}" && ! -L "${RUN_WORKDIR}" ]] ||
+    fail "Invalid helper work directory."
+}
+
+if [[ "${ACTION}" == "cleanup" ]]; then
+  validate_run_workdir
+  if [[ -e "${RUN_WORKDIR}" ]]; then
+    [[ -d "${RUN_WORKDIR}" && "$(stat -c '%u' "${RUN_WORKDIR}")" == 0 ]] ||
+      fail "Refusing to remove an unexpected helper directory."
+    rm -rf -- "${RUN_WORKDIR}"
+  fi
+  exit 0
+fi
+
+[[ "${ACTION}" == "create" ]] || fail "Unsupported action."
+[[ "${OPENSHIFT_VERSION}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] ||
+  fail "Invalid OpenShift version '${OPENSHIFT_VERSION}'. Expected MAJOR.MINOR or MAJOR.MINOR.PATCH."
+[[ "${FLAVOR_NAME}" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || fail "Invalid flavor name."
+
+RUNNER_HOME=$(getent passwd "${RUNNER_USER}" | cut -d: -f6)
+RUNNER_UID=$(id -u "${RUNNER_USER}")
+RUNNER_TEMP_DIR="${PULL_SECRET_FILE%/pull-secret.json}"
+[[ "${RUNNER_TEMP_DIR}" =~ ^${RUNNER_HOME}/action-runners/runner-[1-9][0-9]*/_work/_temp$ ]] ||
+  fail "Pull secret must be in a registered GitHub runner temp directory."
+[[ -d "${RUNNER_TEMP_DIR}" && ! -L "${RUNNER_TEMP_DIR}" &&
+   "$(stat -c '%u' -- "${RUNNER_TEMP_DIR}")" == "${RUNNER_UID}" ]] ||
+  fail "Runner temp directory is not a runner-owned directory."
+[[ ! -L "${PULL_SECRET_FILE}" && -f "${PULL_SECRET_FILE}" && -s "${PULL_SECRET_FILE}" ]] ||
+  fail "The pull secret must be a non-empty regular file."
+[[ "$(stat -c '%u' -- "${PULL_SECRET_FILE}")" == "${RUNNER_UID}" ]] ||
+  fail "The pull secret must be owned by ${RUNNER_USER}."
+[[ ! -L "${WORK_ROOT}" ]] || fail "Refusing to use a symlinked helper work root."
+install -d -o root -g root -m 0700 "${WORK_ROOT}"
+[[ "$(stat -c '%u:%a' "${WORK_ROOT}")" == "0:700" ]] || fail "Invalid helper work-root ownership or mode."
+[[ ! -e "${RUN_WORKDIR}" ]] || fail "Work directory for this run already exists."
+install -d -o root -g root -m 0700 "${RUN_WORKDIR}"
+install -o root -g root -m 0600 "${PULL_SECRET_FILE}" "${RUN_WORKDIR}/pull-secret.json"
+PULL_SECRET_FILE="${RUN_WORKDIR}/pull-secret.json"
+
+ATI_REF=83fab407fb19efe9191e85ecbea5babcc53b8028
+CLUSTER_TOOL_REF=8d3be5059469ec8c6e6d5b224a53eea3864ecdb0
+CLUSTER_ID=$(printf '%s' "${CLUSTER_TOPOLOGY}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" | sha256sum | cut -c1-8)
+ATI_NAMESPACE="osac-e2e-${CLUSTER_TOPOLOGY}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+ATI_DIR="${RUN_WORKDIR}/assisted-test-infra"
+CLUSTER_TOOL_DIR="${RUN_WORKDIR}/cluster-tool"
+CLUSTER_TOOL_PATH="${CLUSTER_TOOL_DIR}/cluster-tool"
+DOMAIN_PREFIX="test-infra-cluster-${CLUSTER_ID}"
+SOURCE_HOSTS_MARKER="# osac-assisted-source-${CLUSTER_ID}"
+printf '%s\n' "${DOMAIN_PREFIX}" > "${RUN_WORKDIR}/source-prefix"
+chmod 0600 "${RUN_WORKDIR}/source-prefix"
+
+case "${CLUSTER_TOPOLOGY}" in
+  sno)
+    NUM_MASTERS=1
+    MASTER_MEMORY=65536
+    MASTER_CPU=16
+    MASTER_DISK=100000000000
+    MASTER_DISK_COUNT=2
+    ;;
+  mno)
+    NUM_MASTERS=3
+    MASTER_MEMORY=24576
+    MASTER_CPU=12
+    MASTER_DISK=85899345920
+    MASTER_DISK_COUNT=2
+    ;;
+  *)
+    fail "Unsupported cluster topology '${CLUSTER_TOPOLOGY}'. Choose sno or mno."
+    ;;
+esac
+
+[[ -f /root/.config/cluster-tool/config && -f /root/.config/cluster-tool/servers.json &&
+   -f /root/.config/cluster-tool/state.json && -s /root/.config/cluster-tool/cluster-tool.key &&
+   -s /root/.config/cluster-tool/cluster-tool.key.pub ]] ||
+  fail "cluster-tool is not configured for root on this runner."
+
+delete_hub_namespace() {
+  command -v kubectl >/dev/null 2>&1 || return 0
+  local hub_kubeconfig=/root/.kube/config
+  [[ -s "${hub_kubeconfig}" ]] || return 0
+  local context
+  while IFS= read -r context; do
+    [[ "${context}" == kind-* ]] || continue
+    if KUBECONFIG="${hub_kubeconfig}" kubectl --context "${context}" get namespace "${ATI_NAMESPACE}" >/dev/null 2>&1; then
+      KUBECONFIG="${hub_kubeconfig}" kubectl --context "${context}" delete namespace "${ATI_NAMESPACE}" --wait=true --timeout=5m || true
+    fi
+  done < <(KUBECONFIG="${hub_kubeconfig}" kubectl config get-contexts -o name 2>/dev/null || true)
+}
+
+update_source_host_alias() {
+  local action="$1"
+  local source_api_ip="${2:-}"
+  flock -x /run/lock/osac-assisted-hosts.lock python3 - \
+    "${action}" "${source_api_ip}" "${DOMAIN_PREFIX}" "${SOURCE_HOSTS_MARKER}" <<'PY_HOSTS'
+from pathlib import Path
+import ipaddress
+import re
+import sys
+
+action, source_ip, cluster_name, marker = sys.argv[1:]
+if action not in ("add", "remove") or not re.fullmatch(r"test-infra-cluster-[a-f0-9]{8}", cluster_name):
+    raise SystemExit("Invalid source host alias request")
+if action == "add":
+    source_ip = str(ipaddress.IPv4Address(source_ip))
+
+hosts = Path("/etc/hosts")
+with hosts.open("r+") as file:
+    lines = [line for line in file.readlines() if marker not in line]
+    if action == "add":
+        lines.append(
+            f"{source_ip} api.{cluster_name}.redhat.com api-int.{cluster_name}.redhat.com {marker}\n"
+        )
+    file.seek(0)
+    file.writelines(lines)
+    file.truncate()
+PY_HOSTS
+}
+
+cleanup_source_cluster() {
+  local status=$?
+  local tfvars="${ATI_DIR}/build/terraform/${DOMAIN_PREFIX}/baremetal/terraform.tfvars.json"
+  local primary_network=""
+  local secondary_network=""
+  local source_iso=""
+  local domain pool network volume
+  trap - EXIT INT TERM
+  update_source_host_alias remove || true
+  if [[ -d "${ATI_DIR}" ]]; then
+    echo "Cleaning Assisted Test Infra resources for '${CLUSTER_ID}'..."
+    if [[ -s "${tfvars}" ]]; then
+      primary_network=$(jq -r '.libvirt_network_name // empty' "${tfvars}")
+      secondary_network=$(jq -r '.libvirt_secondary_network_name // empty' "${tfvars}")
+      source_iso=$(jq -r '.image_path // empty' "${tfvars}")
+    fi
+    while IFS= read -r domain; do
+      [[ "${domain}" == "${DOMAIN_PREFIX}"* ]] || continue
+      virsh -c qemu:///system destroy "${domain}" >/dev/null 2>&1 || true
+      virsh -c qemu:///system undefine "${domain}" --nvram >/dev/null 2>&1 ||
+        virsh -c qemu:///system undefine "${domain}" >/dev/null 2>&1 || true
+    done < <(virsh -c qemu:///system list --all --name)
+    while IFS= read -r pool; do
+      [[ "${pool}" == "${DOMAIN_PREFIX}"* ]] || continue
+      while IFS= read -r volume; do
+        [[ -n "${volume}" ]] || continue
+        virsh -c qemu:///system vol-delete --pool "${pool}" "${volume}" >/dev/null 2>&1 || true
+      done < <(virsh -c qemu:///system vol-list --pool "${pool}" 2>/dev/null | awk 'NR > 2 && NF > 0 {print $1}')
+      virsh -c qemu:///system pool-destroy "${pool}" >/dev/null 2>&1 || true
+      virsh -c qemu:///system pool-undefine "${pool}" >/dev/null 2>&1 || true
+    done < <(virsh -c qemu:///system pool-list --all --name)
+    local storage_dir="/var/lib/libvirt/images/${DOMAIN_PREFIX}"
+    if [[ -d "${storage_dir}" && ! -L "${storage_dir}" &&
+          "$(stat -c '%u' "${storage_dir}")" == 0 ]]; then
+      rm -rf -- "${storage_dir}"
+    fi
+    while IFS= read -r network; do
+      [[ "${network}" == "${DOMAIN_PREFIX}"* ||
+         ( -n "${primary_network}" && "${network}" == "${primary_network}" ) ||
+         ( -n "${secondary_network}" && "${network}" == "${secondary_network}" ) ]] || continue
+      virsh -c qemu:///system net-destroy "${network}" >/dev/null 2>&1 || true
+      virsh -c qemu:///system net-undefine "${network}" >/dev/null 2>&1 || true
+    done < <(virsh -c qemu:///system net-list --all --name)
+    if [[ "${source_iso}" == /tmp/test_images/test-infra-infra-env-*-installer-image.iso &&
+          -f "${source_iso}" && ! -L "${source_iso}" ]]; then
+      rm -f -- "${source_iso}"
+    fi
+    delete_hub_namespace
+    rm -rf "${ATI_DIR}"
+  fi
+  rm -f -- "${RUN_WORKDIR}/pull-secret.json"
+  exit "${status}"
+}
+trap cleanup_source_cluster EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+git clone --quiet https://github.com/openshift/assisted-test-infra.git "${ATI_DIR}"
+git -C "${ATI_DIR}" checkout --detach "${ATI_REF}"
+git -C "${ATI_DIR}" submodule update --init --recursive
+
+python3 - "${ATI_DIR}/Makefile" "${ATI_NAMESPACE}" <<'PY'
+from pathlib import Path
+import sys
+
+makefile = Path(sys.argv[1])
+namespace = sys.argv[2]
+old = "assisted-service/build/assisted-installer/assisted-service-client/dist/*.whl"
+new = f"assisted-service/build/{namespace}/assisted-service-client/dist/*.whl"
+content = makefile.read_text()
+if content.count(old) != 1:
+    raise SystemExit("Could not locate ATI's generated-client wheel path")
+makefile.write_text(content.replace(old, new, 1))
+PY
+
+python3 - "${ATI_DIR}/scripts/utils.sh" <<'PY'
+from pathlib import Path
+import sys
+
+script = Path(sys.argv[1])
+content = script.read_text()
+start = content.find("function add_firewalld_port() {")
+end = content.find("\n}", start)
+if start < 0 or end < 0:
+    raise SystemExit("Could not locate ATI's firewalld port helper")
+end += 2
+function = content[start:end]
+if function.count("sudo firewall-cmd") != 3:
+    raise SystemExit("Unexpected ATI firewalld port helper")
+function = function.replace(
+    "function add_firewalld_port() {\n",
+    "function add_firewalld_port() {\n    systemctl is-active --quiet firewalld || return 0\n",
+    1,
+).replace("sudo firewall-cmd", "firewall-cmd")
+script.write_text(content[:start] + function + content[end:])
+PY
+
+python3 - "${ATI_DIR}/src/assisted_test_infra/test_infra/controllers/node_controllers/terraform_controller.py" <<'PY_PATCH_VIPS'
+from pathlib import Path
+import sys
+
+script = Path(sys.argv[1])
+old = "    def _get_vips(self):\n        vips = self.get_ingress_and_api_vips()\n"
+new = (
+    "    def _get_vips(self):\n"
+    "        if self._params.master_count == 1:\n"
+    "            node_ip = self.master_ips[0][0]\n"
+    "            return [node_ip], [node_ip]\n"
+    "        vips = self.get_ingress_and_api_vips()\n"
+)
+content = script.read_text()
+if content.count(old) != 1:
+    raise SystemExit("Could not locate ATI's libvirt VIP selection")
+content = content.replace(old, new, 1)
+old = "        self._suffix = self._entity_name.suffix or get_name_suffix()\n"
+new = (
+    "        source_name = self._entity_name.get()\n"
+    "        self._suffix = (\n"
+    "            source_name[len('test-infra-cluster-'):]\n"
+    "            if source_name.startswith('test-infra-cluster-')\n"
+    "            else self._entity_name.suffix or get_name_suffix()\n"
+    "        )\n"
+)
+if content.count(old) != 1:
+    raise SystemExit("Could not locate ATI's libvirt network suffix")
+script.write_text(content.replace(old, new, 1))
+PY_PATCH_VIPS
+
+python3 - "${ATI_DIR}/src/assisted_test_infra/test_infra/helper_classes/infra_env.py" <<'PY_NTP'
+from pathlib import Path
+import sys
+
+script = Path(sys.argv[1])
+old = "        if self._config.kernel_arguments is not None:\n"
+new = (
+    "        infraenv_create_params['additional_ntp_sources'] = "
+    "os.environ['ADDITIONAL_NTP_SOURCE']\n"
+    + old
+)
+content = script.read_text()
+if content.count(old) != 1:
+    raise SystemExit("Could not locate ATI's infra-env create parameters")
+script.write_text(content.replace(old, new, 1))
+PY_NTP
+
+git clone --quiet https://github.com/osac-project/cluster-tool.git "${CLUSTER_TOOL_DIR}"
+git -C "${CLUSTER_TOOL_DIR}" checkout --detach "${CLUSTER_TOOL_REF}"
+
+if [[ "${CLUSTER_TOPOLOGY}" == "mno" ]]; then
+  python3 - "${CLUSTER_TOOL_PATH}" "${DOMAIN_PREFIX}" <<'PY_COMPACT_ETCD_NAMES'
+from pathlib import Path
+import re
+import sys
+
+script = Path(sys.argv[1])
+prefix = sys.argv[2]
+if not re.fullmatch(r"test-infra-cluster-[a-f0-9]{8}", prefix):
+    raise SystemExit("Invalid compact source cluster prefix")
+old = "NODE_(master_0_[012])_IP"
+new = f"NODE_(?:{prefix.replace('-', '_')}_)?(master_0_[012])_IP"
+content = script.read_text()
+if content.count(old) == 1:
+    content = content.replace(old, new, 1)
+elif content.count(new) != 1:
+    raise SystemExit("Could not locate compact etcd member parsing")
+old_call = '        _vm(node["ip"], compact_install_etcd_certs_script() + "sudo systemctl start crio\\n", identity)'
+alias_call = r'''        assisted_aliases = textwrap.dedent(f"""\
+            for dir in /etc/kubernetes/static-pod-resources/etcd-certs/secrets/etcd-all-certs /etc/kubernetes/static-pod-resources/etcd-pod-*/secrets/etcd-all-certs; do
+              [ -d "$dir" ] || continue
+              for kind in peer serving serving-metrics; do
+                for extension in crt key; do
+                  source=/var/tmp/etcd-${{kind}}-{node['role']}.${{extension}}
+                  mode=0644
+                  [ "$extension" = key ] && mode=0600
+                  sudo install -m "$mode" "$source" "$dir/etcd-${{kind}}-{node['domain']}.${{extension}}"
+                done
+              done
+            done
+            sudo restorecon -R /etc/kubernetes/static-pod-resources || true
+        """)
+        _vm(node["ip"], compact_install_etcd_certs_script() + assisted_aliases + "sudo systemctl start crio\n", identity)'''
+if content.count(old_call) == 1:
+    content = content.replace(old_call, alias_call, 1)
+elif content.count('        assisted_aliases = textwrap.dedent(f"""\\') != 1:
+    raise SystemExit("Could not locate compact etcd certificate installation")
+old_alias_install = (
+    '        _vm(node["ip"], compact_install_etcd_certs_script() + assisted_aliases + '
+    '"sudo systemctl start crio\\n", identity)'
+)
+new_alias_install = (
+    '        _vm(node["ip"], compact_install_etcd_certs_script() + assisted_aliases +\\n'
+    '            f"sudo hostnamectl set-hostname {node[\'role\']}\\nsudo systemctl start crio\\n", identity)'
+)
+new_alias_install = new_alias_install.replace(' +\\n', ' +\n')
+if content.count(new_alias_install) == 1:
+    content = content.replace(new_alias_install, old_alias_install, 1)
+elif content.count(old_alias_install) != 1:
+    raise SystemExit("Could not locate compact guest startup")
+old_digest = '''    return (
+        f"sudo sha256sum {files}; "
+        "sudo find /etc/kubernetes/static-pod-resources "
+        "-path '*/kube-apiserver-pod-*/configmaps/bound-sa-token-signing-certs/*.pub' "
+        "-o -path '*/kube-apiserver-pod-*/configmaps/sa-token-signing-certs/*.pub' "
+        "| sort | sudo xargs -r sha256sum"
+    )'''
+new_digest = '    return f"sudo sha256sum {files}"'
+if content.count(old_digest) == 1:
+    content = content.replace(old_digest, new_digest, 1)
+elif content.count(new_digest) != 1:
+    raise SystemExit("Could not locate compact client trust digest command")
+sync_start = content.find("def _sync_reissued_etcd_certs(")
+sync_end = content.find("\ndef _require_reissued_etcd_certs(", sync_start)
+if sync_start < 0 or sync_end < 0:
+    raise SystemExit("Could not locate compact etcd secret sync")
+sync = content[sync_start:sync_end]
+mapping = (
+    f'    bundle_pems = {{key.replace("master-0-", "{prefix}-master-0-"): value '
+    'for key, value in pems.items()}\n'
+)
+if mapping not in sync:
+    anchor = '    pems = _load_reissued_etcd_pems(work, nodes)\n'
+    if sync.count(anchor) != 1:
+        raise SystemExit("Could not locate compact etcd PEM loading")
+    sync = sync.replace(anchor, anchor + mapping, 1)
+    replacements = (
+        ('compact_etcd_secret_delta(raw.stdout, pems)',
+         'compact_etcd_secret_delta(raw.stdout, bundle_pems)'),
+        ('compact_etcd_secret_patch(raw.stdout, pems)',
+         'compact_etcd_secret_patch(raw.stdout, bundle_pems)'),
+        ('compact_etcd_secret_delta(checked.stdout, pems)',
+         'compact_etcd_secret_delta(checked.stdout, bundle_pems)'),
+        ('_etcd_member_secret_status(clone_oc, secret, pems)',
+         '_etcd_member_secret_status(clone_oc, secret, bundle_pems)'),
+    )
+    for old_text, new_text in replacements:
+        if sync.count(old_text) != 1:
+            raise SystemExit(f"Could not locate compact etcd secret sync expression: {old_text}")
+        sync = sync.replace(old_text, new_text, 1)
+    old_secret = '''            secret = f"etcd-{kind}-{node['role']}"'''
+    new_secret = f'''            secret = f"etcd-{{kind}}-{prefix}-{{node['role']}}"'''
+    if sync.count(old_secret) != 1:
+        raise SystemExit("Could not locate compact etcd member secret naming")
+    sync = sync.replace(old_secret, new_secret, 1)
+content = content[:sync_start] + sync + content[sync_end:]
+old_kubeconfig_editor = '        oc=compact_guest_oc(ctx) if ctx.guest_oc else "oc")'
+new_kubeconfig_editor = '        oc="oc")'
+if content.count(old_kubeconfig_editor) == 1:
+    content = content.replace(old_kubeconfig_editor, new_kubeconfig_editor, 1)
+elif content.count(new_kubeconfig_editor) != 1:
+    raise SystemExit("Could not locate compact host kubeconfig editor")
+source_node_names = (
+    '    node_names = " ".join('
+    f' shlex.quote("{prefix}-" + node["role"]) for node in nodes)'
+)
+short_node_names = '    node_names = " ".join(shlex.quote(node["role"]) for node in nodes)'
+if content.count(short_node_names) == 1:
+    content = content.replace(short_node_names, source_node_names, 1)
+elif content.count(source_node_names) != 1:
+    raise SystemExit("Could not locate Assisted source node annotation names")
+identity_start = content.find("def compact_identity_pairs(")
+identity_end = content.find("\ndef ", identity_start + 1)
+if identity_start < 0 or identity_end < 0:
+    raise SystemExit("Could not locate compact identity replacements")
+identity = content[identity_start:identity_end]
+old_ip_pair = '        pairs.append((old["ip"], node["ip"]))\n'
+new_node_pair = f'''        pairs.append((f"{prefix}-{{node['role']}}", node["role"]))\n'''
+if new_node_pair not in identity:
+    if identity.count(old_ip_pair) != 1:
+        raise SystemExit("Could not locate compact node identity replacements")
+    identity = identity.replace(old_ip_pair, old_ip_pair + new_node_pair, 1)
+new_underscore_pair = (
+    f'''        pairs.append((f"{prefix.replace('-', '_')}_{{node['role'].replace('-', '_')}}", '''
+    '''node["role"].replace("-", "_")))\n'''
+)
+if new_underscore_pair not in identity:
+    if identity.count(new_node_pair) != 1:
+        raise SystemExit("Could not locate Assisted node identity replacement")
+    identity = identity.replace(new_node_pair, new_node_pair + new_underscore_pair, 1)
+content = content[:identity_start] + identity + content[identity_end:]
+old_kubelet_wait = '''    kubelet_ready = env.run(
+        f"{clone_oc} wait --for=condition=Ready node/{shlex.quote(recert_node['role'])} "
+        "--timeout=120s", check=False)
+    if kubelet_ready.returncode != 0:
+        detail = (kubelet_ready.stderr or kubelet_ready.stdout or "").strip()
+        sys.exit(
+            "master-0-0 did not return Ready after its kubelet certificate reload"
+            + (f": {detail}" if detail else "")
+            + f". Log: {work}/clone.log")
+    _clone_log(work, "master-0-0 kubelet is Ready with the clone client certificate")'''
+new_kubelet_wait = '''    kubelet_active = _vm(
+        recert_node["ip"], "systemctl is-active --quiet kubelet", identity, check=False)
+    if kubelet_active.returncode != 0:
+        sys.exit("master-0-0 kubelet did not restart after the client certificate reload. "
+                 f"Log: {work}/clone.log")
+    _clone_log(work, "master-0-0 kubelet restarted; registration waits for the clone API rewrite")'''
+if content.count(old_kubelet_wait) == 1:
+    content = content.replace(old_kubelet_wait, new_kubelet_wait, 1)
+elif content.count(new_kubelet_wait) != 1:
+    raise SystemExit("Could not locate compact kubelet registration gate")
+old_address_publish = '''    for node in nodes:
+        env.run(
+            f"{clone_oc} patch node {shlex.quote(node['role'])} --subresource=status --type=merge "
+            f"-p {shlex.quote(json.dumps(compact_node_address_patch(node['ip'])))}",
+            check=False)
+        env.run(
+            f"{clone_oc} annotate node {shlex.quote(node['role'])} "
+            f"k8s.ovn.org/node-encap-ips={shlex.quote(json.dumps([node['ip']]))} --overwrite",
+            check=False)'''
+new_address_publish = f'''    for node in nodes:
+        for name in (node["role"], f"{prefix}-{{node['role']}}"):
+            present = env.run(f"{{clone_oc}} get node {{shlex.quote(name)}} -o name", check=False)
+            if present.returncode != 0:
+                continue
+            env.run(
+                f"{{clone_oc}} patch node {{shlex.quote(name)}} --subresource=status --type=merge "
+                f"-p {{shlex.quote(json.dumps(compact_node_address_patch(node['ip'])))}}",
+                check=False)
+            env.run(
+                f"{{clone_oc}} annotate node {{shlex.quote(name)}} "
+                f"k8s.ovn.org/node-encap-ips={{shlex.quote(json.dumps([node['ip']]))}} --overwrite",
+                check=False)'''
+if content.count(old_address_publish) == 1:
+    content = content.replace(old_address_publish, new_address_publish, 1)
+elif content.count(new_address_publish) != 1:
+    raise SystemExit("Could not locate Assisted clone Node address publication")
+finish_start = content.find("def _finish_compact_clone(")
+finish_end = content.find("\ndef ", finish_start + 1)
+if finish_start < 0 or finish_end < 0:
+    raise SystemExit("Could not locate compact clone finish phase")
+finish = content[finish_start:finish_end]
+hostname_setup = '''    if start_at == "rewrite":
+        def restore_short_hostname(node):
+            _vm(node["ip"],
+                f"sudo hostnamectl set-hostname {shlex.quote(node['role'])} && "
+                "sudo systemctl restart kubelet", identity)
+        _in_parallel(nodes, restore_short_hostname)
+'''
+finish = finish.replace(hostname_setup, "", 1)
+stale_nodes = f'''    for node in nodes:
+        short_name = shlex.quote(node["role"])
+        for attempt in range(30):
+            result = env.run(f"{{clone_oc}} get node {{short_name}} -o name", check=False)
+            if result.returncode == 0:
+                break
+            time.sleep(5)
+        else:
+            sys.exit(f"Clone node {{node['role']}} did not register. Log: {{work}}/clone.log")
+    for node in nodes:
+        env.run(f"{{clone_oc}} delete node {prefix}-{{node['role']}} --ignore-not-found", check=False)
+'''
+finish = finish.replace(stale_nodes, "", 1)
+rewrite_anchor = '''        _in_parallel(nodes, rewrite_node)
+        _clone_log(work, "publish clone node IPs without restarting kubelet")'''
+registered_nodes = f'''        _in_parallel(nodes, rewrite_node)
+        for node in nodes:
+            _vm(node["ip"], textwrap.dedent(f"""\\
+                set -euo pipefail
+                sudo systemctl stop kubelet
+                sudo bash -c 'cat /var/tmp/{{node['role']}}-client.crt /var/tmp/{{node['role']}}-client.key > /var/lib/kubelet/pki/kubelet-client-current.pem'
+                sudo chmod 600 /var/lib/kubelet/pki/kubelet-client-current.pem
+                sudo restorecon /var/lib/kubelet/pki/kubelet-client-current.pem || true
+                sudo hostnamectl set-hostname {{node['role']}}
+                sudo systemctl start kubelet
+            """), identity)
+            short_name = shlex.quote(node["role"])
+            for attempt in range(60):
+                result = env.run(f"{{clone_oc}} get node {{short_name}} -o json", check=False)
+                if result.returncode == 0 and (result.stdout or "").strip():
+                    try:
+                        node_status = json.loads(result.stdout).get("status") or {{}}
+                    except json.JSONDecodeError:
+                        node_status = {{}}
+                    if any(condition.get("type") == "Ready" and condition.get("status") == "True"
+                           for condition in node_status.get("conditions") or []):
+                        break
+                time.sleep(5)
+            else:
+                sys.exit(f"Clone node {{node['role']}} did not register Ready after the API rewrite. "
+                         f"Log: {{work}}/clone.log")
+        short_nodes = " ".join(shlex.quote(node["role"]) for node in nodes)
+        env.run(
+            f"{{clone_oc}} annotate node {{short_nodes}} "
+            f"machineconfiguration.openshift.io/desiredConfig={{shlex.quote(desired_master_render)}} "
+            f"machineconfiguration.openshift.io/currentConfig={{shlex.quote(desired_master_render)}} "
+            "machineconfiguration.openshift.io/state=Done --overwrite")
+        env.run(f"{{clone_oc}} label node {{short_nodes}} node.openshift.io/remote-worker-")
+        env.run(f"{{clone_oc}} adm uncordon {{short_nodes}}")
+        for node in nodes:
+            env.run(f"{{clone_oc}} delete node {prefix}-{{node['role']}} --ignore-not-found", check=False)
+        _clone_log(work, "publish clone node IPs after short-name kubelet registration")'''
+old_registered_nodes = registered_nodes.replace(
+    '''            _vm(node["ip"], textwrap.dedent(f"""\\
+                set -euo pipefail
+                sudo systemctl stop kubelet
+                sudo bash -c 'cat /var/tmp/{node['role']}-client.crt /var/tmp/{node['role']}-client.key > /var/lib/kubelet/pki/kubelet-client-current.pem'
+                sudo chmod 600 /var/lib/kubelet/pki/kubelet-client-current.pem
+                sudo restorecon /var/lib/kubelet/pki/kubelet-client-current.pem || true
+                sudo hostnamectl set-hostname {node['role']}
+                sudo systemctl start kubelet
+            """), identity)''',
+    '''            _vm(node["ip"], "sudo systemctl restart kubelet", identity)''',
+)
+legacy_registered_nodes = registered_nodes.replace(
+    '''            _vm(node["ip"], textwrap.dedent(f"""\\
+                set -euo pipefail
+                sudo systemctl stop kubelet
+                sudo bash -c 'cat /var/tmp/{node['role']}-client.crt /var/tmp/{node['role']}-client.key > /var/lib/kubelet/pki/kubelet-client-current.pem'
+                sudo chmod 600 /var/lib/kubelet/pki/kubelet-client-current.pem
+                sudo restorecon /var/lib/kubelet/pki/kubelet-client-current.pem || true
+                sudo hostnamectl set-hostname {node['role']}
+                sudo systemctl start kubelet
+            """), identity)''',
+    '''            _vm(node["ip"],
+                f"sudo hostnamectl set-hostname {node['role']} && sudo systemctl restart kubelet",
+                identity)''',
+)
+unlabeled_registered_nodes = registered_nodes.replace(
+    '''        env.run(f"{clone_oc} label node {short_nodes} node.openshift.io/remote-worker-")
+''', "", 1)
+if unlabeled_registered_nodes != registered_nodes and unlabeled_registered_nodes in finish:
+    finish = finish.replace(unlabeled_registered_nodes, registered_nodes, 1)
+elif legacy_registered_nodes != registered_nodes and legacy_registered_nodes in finish:
+    finish = finish.replace(legacy_registered_nodes, registered_nodes, 1)
+elif old_registered_nodes != registered_nodes and old_registered_nodes in finish:
+    finish = finish.replace(old_registered_nodes, registered_nodes, 1)
+elif registered_nodes not in finish:
+    if finish.count(rewrite_anchor) != 1:
+        raise SystemExit("Could not locate compact kubelet identity handoff")
+    finish = finish.replace(rewrite_anchor, registered_nodes, 1)
+content = content[:finish_start] + finish + content[finish_end:]
+script.write_text(content)
+PY_COMPACT_ETCD_NAMES
+  python3 -m py_compile "${CLUSTER_TOOL_PATH}"
+
+  python3 - "${CLUSTER_TOOL_DIR}/scripts/capture_compact_flavor.py" "${DOMAIN_PREFIX}" <<'PY_CAPTURE_NAMES'
+from pathlib import Path
+import re
+import sys
+
+script = Path(sys.argv[1])
+prefix = sys.argv[2]
+if not re.fullmatch(r"test-infra-cluster-[a-f0-9]{8}", prefix):
+    raise SystemExit("Invalid compact source cluster prefix")
+content = script.read_text()
+old = 'NODE_NAMES = [f"master-0-{index}" for index in range(3)]'
+new = f'NODE_NAMES = [f"{prefix}-master-0-{{index}}" for index in range(3)]'
+if content.count(old) != 1:
+    raise SystemExit("Could not locate compact capture node names")
+content = content.replace(old, new, 1)
+old = 'if node_name == "master-0-0" and args.ssh_node_ip_explicit:'
+new = 'if node_name == NODE_NAMES[0] and args.ssh_node_ip_explicit:'
+if content.count(old) != 1:
+    raise SystemExit("Could not locate compact SSH node selection")
+content = content.replace(old, new, 1)
+content, ssh_count = re.subn(
+    r'(?m)^([ \t]*)"StrictHostKeyChecking=accept-new",$',
+    r'\1"StrictHostKeyChecking=no",\n\1"-o",\n\1"UserKnownHostsFile=/dev/null",',
+    content,
+)
+if ssh_count != 3:
+    raise SystemExit(f"Expected three compact source SSH option lists, found {ssh_count}")
+script.write_text(content)
+PY_CAPTURE_NAMES
+  python3 -m py_compile "${CLUSTER_TOOL_DIR}/scripts/capture_compact_flavor.py"
+
+  python3 - "${ATI_DIR}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+host_tf = root / "terraform_files/baremetal_host/main.tf"
+host_text = host_tf.read_text()
+host_text, scsi_count = re.subn(r"(?m)^([ \t]*)scsi[ \t]*=[ \t]*true[ \t]*$", r"\1scsi = false", host_text)
+if scsi_count != 2:
+    raise SystemExit(f"Expected 2 SCSI disk settings in {host_tf}, found {scsi_count}")
+host_tf.write_text(host_text)
+
+baremetal_tf = root / "terraform_files/baremetal/main.tf"
+baremetal_text = baremetal_tf.read_text()
+name_lines = re.findall(r"(?m)^[ \t]*name[ \t]*=.*var\.load_balancer_type.*$", baremetal_text)
+master_name_lines = [line for line in name_lines if "master-secondary" in line]
+old_master_name = '"${var.cluster_name}-master-${count.index}"'
+new_master_name = '"${var.cluster_name}-master-0-${count.index}"'
+if len(master_name_lines) != 1 or master_name_lines[0].count(old_master_name) != 2:
+    raise SystemExit(f"Could not find the master domain name in {baremetal_tf}")
+baremetal_text = baremetal_text.replace(
+    master_name_lines[0],
+    master_name_lines[0].replace(old_master_name, new_master_name),
+    1,
+)
+hostname_pattern = r'(?m)^([ \t]*hostname[ \t]*=[ \t]*var\.slave_interfaces \? null : )"\$\{var\.cluster_name\}-master-\$\{count\.index\}"'
+baremetal_text, hostname_count = re.subn(
+    hostname_pattern,
+    r'\1"master-0-${count.index}"',
+    baremetal_text,
+)
+if hostname_count < 1:
+    raise SystemExit(f"Could not set compact master hostnames in {baremetal_tf}")
+baremetal_tf.write_text(baremetal_text)
+PY
+fi
+
+CLUSTER_TOOL_KEY="/root/.config/cluster-tool/cluster-tool.key"
+CLUSTER_TOOL_PUBLIC_KEY="/root/.config/cluster-tool/cluster-tool.key.pub"
+if [[ ! -s "${CLUSTER_TOOL_KEY}" || ! -s "${CLUSTER_TOOL_PUBLIC_KEY}" ]]; then
+  fail "cluster-tool SSH key pair is missing from /root/.config/cluster-tool."
+fi
+
+SSH_PUBLIC_KEY=$(cat "${CLUSTER_TOOL_PUBLIC_KEY}")
+API_PLATFORM="baremetal"
+API_USER_MANAGED_NETWORKING="false"
+if [[ "${CLUSTER_TOPOLOGY}" == "sno" ]]; then
+  API_PLATFORM="none"
+  API_USER_MANAGED_NETWORKING="true"
+fi
+
+ATI_ENV=(
+  "DEPLOY_TARGET=kind"
+  "TEST_TEARDOWN=false"
+  "PLATFORM=${API_PLATFORM}"
+  "TF_PLATFORM=baremetal"
+  "STORAGE_POOL_PATH=/var/lib/libvirt/images"
+  "CONTAINER_RUNTIME_COMMAND=podman"
+  "USER_MANAGED_NETWORKING=${API_USER_MANAGED_NETWORKING}"
+  "NAMESPACE=${ATI_NAMESPACE}"
+  "CLUSTER_NAME=${DOMAIN_PREFIX}"
+  "NETWORK_NAME=test-infra-net-"
+  "BASE_DOMAIN=redhat.com"
+  "ADDITIONAL_NTP_SOURCE=192.168.127.1"
+  "OPENSHIFT_VERSION=${OPENSHIFT_VERSION}"
+  "PULL_SECRET_FILE=${PULL_SECRET_FILE}"
+  "SERVICE_COMMIT_REF=a5ab7940a2c933e1bff481c46a82f0f7e9743819"
+  "USE_LOCAL_SERVICE=true"
+  "SSH_PUB_KEY=${SSH_PUBLIC_KEY}"
+  "PRIVATE_KEY_PATH=${CLUSTER_TOOL_KEY}"
+  "NUM_MASTERS=${NUM_MASTERS}"
+  "NUM_WORKERS=0"
+  "MASTER_MEMORY=${MASTER_MEMORY}"
+  "MASTER_CPU=${MASTER_CPU}"
+  "MASTER_DISK=${MASTER_DISK}"
+  "MASTER_DISK_COUNT=${MASTER_DISK_COUNT}"
+)
+
+echo "Creating ${CLUSTER_TOPOLOGY^^} source cluster with ${NUM_MASTERS} master node(s)."
+env "${ATI_ENV[@]}" make -C "${ATI_DIR}" bring_assisted_service
+python3 - "${ATI_DIR}/assisted-service/hack/hub_cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+
+script = Path(sys.argv[1])
+old = "systemd-run --scope --user $__dir/kind/kind.sh create"
+new = "systemd-run --scope $__dir/kind/kind.sh create"
+content = script.read_text()
+if content.count(old) != 1:
+    raise SystemExit("Could not locate assisted-service's kind user scope")
+script.write_text(content.replace(old, new, 1))
+PY
+python3 - "${ATI_DIR}/scripts/deploy_assisted_service.sh" <<'PY'
+from pathlib import Path
+import sys
+
+script = Path(sys.argv[1])
+old = 'if [[ "${DEBUG_SERVICE}" == "true" || "${USE_LOCAL_SERVICE}" == "true" ]]; then'
+new = 'if [[ "${DEBUG_SERVICE}" == "true" ]]; then'
+content = script.read_text()
+if content.count(old) != 1:
+    raise SystemExit("Could not locate ATI's local-service image patch")
+content = content.replace(old, new, 1)
+old = 'if [[ "${PLATFORM}" == "none"  || "${PLATFORM}" == "external" || "${LOAD_BALANCER_TYPE}" == "user-managed" ]]; then'
+new = 'if systemctl is-active --quiet firewalld && { [[ "${PLATFORM}" == "none"  || "${PLATFORM}" == "external" || "${LOAD_BALANCER_TYPE}" == "user-managed" ]]; }; then'
+if content.count(old) != 1:
+    raise SystemExit("Could not locate ATI's direct firewalld port setup")
+script.write_text(content.replace(old, new, 1))
+PY
+for attempt in 1 2 3; do
+  if env "${ATI_ENV[@]}" make -C "${ATI_DIR}" image_build; then
+    break
+  fi
+  [[ "${attempt}" -lt 3 ]] || fail "Assisted Test Infra image build failed after 3 attempts."
+  echo "::warning::Assisted Test Infra image build failed; retrying (${attempt}/3)."
+  sleep $((attempt * 15))
+done
+env "${ATI_ENV[@]}" make -C "${ATI_DIR}" run
+env "${ATI_ENV[@]}" make -C "${ATI_DIR}" deploy_nodes_with_install
+
+SOURCE_TFVARS="${ATI_DIR}/build/terraform/${DOMAIN_PREFIX}/baremetal/terraform.tfvars.json"
+[[ -s "${SOURCE_TFVARS}" ]] || fail "Assisted Test Infra did not produce source VM metadata."
+SOURCE_API_IP=$(jq -er '.api_vips[0]' "${SOURCE_TFVARS}")
+update_source_host_alias add "${SOURCE_API_IP}"
+
+SOURCE_KUBECONFIG="${ATI_DIR}/build/kubeconfig/kubeconfig_${DOMAIN_PREFIX}"
+if [[ ! -s "${SOURCE_KUBECONFIG}" ]]; then
+  echo "::error::Assisted Test Infra did not produce ${SOURCE_KUBECONFIG}."
+  exit 1
+fi
+
+export KUBECONFIG="${SOURCE_KUBECONFIG}"
+wait_for_cluster_health() {
+  echo "Waiting for all source-cluster nodes to become Ready..."
+  local deadline=$((SECONDS + 3600))
+  until oc wait nodes --all --for=condition=Ready --timeout=2m; do
+    (( SECONDS < deadline )) || fail "Source nodes did not become Ready within 60 minutes."
+    echo "Source API or nodes are still recovering; retrying node readiness."
+    sleep 15
+  done
+
+  deadline=$((SECONDS + 3600))
+  until oc wait mcp/master --for=condition=Updated --timeout=2m; do
+    (( SECONDS < deadline )) || fail "Source master MCP did not become Updated within 60 minutes."
+    echo "Source API or master MCP is still recovering; retrying MCP readiness."
+    sleep 15
+  done
+
+  echo "Waiting for all ClusterOperators to become healthy and quiet..."
+  for attempt in $(seq 1 60); do
+    if oc get co -o json | jq -e '
+      (.items | length > 0) and
+      all(.items[];
+        ([.status.conditions[] | select(.type == "Available") | .status][0] == "True") and
+        ([.status.conditions[] | select(.type == "Progressing") | .status][0] == "False") and
+        ([.status.conditions[] | select(.type == "Degraded") | .status][0] == "False")
+      )' >/dev/null; then
+      return
+    fi
+    if [[ "${attempt}" == 60 ]]; then
+      echo "::error::ClusterOperators did not become healthy within 30 minutes."
+      return 1
+    fi
+    sleep 30
+  done
+}
+
+wait_for_cluster_health
+
+if [[ "${CLUSTER_TOPOLOGY}" == "sno" ]]; then
+  domain="${DOMAIN_PREFIX}-master-0"
+  vcpus=$(virsh dominfo "${domain}" | awk -F: '/^CPU\(s\):/ {gsub(/^[ \t]+/, "", $2); print $2}')
+  memory_kib=$(virsh dominfo "${domain}" | awk -F: '/^Max memory:/ {gsub(/[^0-9]/, "", $2); print $2}')
+  interfaces=$(virsh domiflist "${domain}" | awk 'NR > 2 && NF >= 5 {count++} END {print count+0}')
+  if [[ "${vcpus}" != 16 || "${memory_kib}" != 67108864 || "${interfaces}" != 2 ]]; then
+    echo "::error::SNO source VM '${domain}' does not match the 16-vCPU, 64-GiB, two-NIC profile."
+    exit 1
+  fi
+  for target in sda sdb; do
+    volume_name=$(virsh domblklist "${domain}" --details | awk -v target="${target}" '$2 == "disk" && $3 == target {print $4}')
+    disk=$(virsh vol-path --pool "${DOMAIN_PREFIX}" "${volume_name}" 2>/dev/null || true)
+    if [[ -z "${volume_name}" || -z "${disk}" || ! -f "${disk}" ]]; then
+      echo "::error::Could not find the ${target} disk on SNO source VM '${domain}'."
+      exit 1
+    fi
+    size=$(qemu-img info --force-share --output=json "${disk}" | jq -r '."virtual-size"')
+    if [[ "${size}" != 100000000000 ]]; then
+      echo "::error::SNO source disk ${target} is ${size} bytes; expected 100000000000."
+      exit 1
+    fi
+  done
+
+  python3 "${CLUSTER_TOOL_PATH}" snapshot \
+    --name "${FLAVOR_NAME}" \
+    --source "${CLUSTER_ID}" \
+    --server local
+else
+  TFVARS="${ATI_DIR}/build/terraform/${DOMAIN_PREFIX}/baremetal/terraform.tfvars.json"
+  PRIMARY_NETWORK=$(jq -r '.libvirt_network_name // empty' "${TFVARS}")
+  if [[ -z "${PRIMARY_NETWORK}" ]]; then
+    echo "::error::Could not find the source primary network in ${TFVARS}."
+    exit 1
+  fi
+
+  for index in 0 1 2; do
+    domain="${DOMAIN_PREFIX}-master-0-${index}"
+    virsh shutdown "${domain}"
+  done
+  for index in 0 1 2; do
+    domain="${DOMAIN_PREFIX}-master-0-${index}"
+    for attempt in $(seq 1 60); do
+      state=$(virsh domstate "${domain}" 2>/dev/null || true)
+      [[ "${state}" == "shut off" ]] && break
+      if [[ "${attempt}" == 60 ]]; then
+        echo "::error::Timed out shutting down ${domain} for spare-disk resize."
+        exit 1
+      fi
+      sleep 5
+    done
+  done
+
+  python3 - "${DOMAIN_PREFIX}" "${PRIMARY_NETWORK}" <<'PY'
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+
+prefix, primary_network = sys.argv[1:]
+for index in range(3):
+    domain = f"{prefix}-master-0-{index}"
+    xml = subprocess.check_output(["virsh", "dumpxml", domain], text=True)
+    root = ET.fromstring(xml)
+    devices = root.find("devices")
+    interfaces = devices.findall("interface")
+    primary = [
+        interface
+        for interface in interfaces
+        if (interface.find("source") is not None)
+        and interface.find("source").get("network") == primary_network
+    ]
+    if len(interfaces) != 2 or len(primary) != 1:
+        raise SystemExit(f"Expected two NICs and one primary network on {domain}")
+    for interface in interfaces:
+        if interface not in primary:
+            devices.remove(interface)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".xml") as xml_file:
+        ET.ElementTree(root).write(xml_file, encoding="unicode")
+        xml_file.flush()
+        subprocess.run(["virsh", "define", xml_file.name], check=True)
+PY
+
+  for index in 0 1 2; do
+    domain="${DOMAIN_PREFIX}-master-0-${index}"
+
+    spare_volume=$(virsh domblklist "${domain}" --details | awk '$2 == "disk" && $3 == "vdb" {print $4}')
+    spare_disk=$(virsh vol-path --pool "${DOMAIN_PREFIX}" "${spare_volume}" 2>/dev/null || true)
+    if [[ -z "${spare_volume}" || -z "${spare_disk}" || ! -f "${spare_disk}" ]]; then
+      echo "::error::Could not find the vdb disk for ${domain}."
+      exit 1
+    fi
+    qemu-img resize "${spare_disk}" 141733920768
+  done
+  for index in 0 1 2; do
+    domain="${DOMAIN_PREFIX}-master-0-${index}"
+    virsh start "${domain}"
+  done
+  wait_for_cluster_health
+
+  API_SERVER_NAME="api.${DOMAIN_PREFIX}.redhat.com"
+  API_ADDRESS="${SOURCE_API_IP}"
+  if [[ "${API_ADDRESS}" =~ ^192\.168\.([0-9]{1,3})\.100$ ]]; then
+    SOURCE_PRIMARY_SUBNET=${BASH_REMATCH[1]}
+  else
+    fail "Expected MNO API VIP on a 192.168.x.100 primary subnet, found '${API_ADDRESS}'."
+  fi
+
+  echo "Capturing compact flavor from healthy source cluster."
+  python3 "${CLUSTER_TOOL_DIR}/scripts/capture_compact_flavor.py" \
+    --flavor "${FLAVOR_NAME}" \
+    --source-cluster "${CLUSTER_ID}" \
+    --vm-prefix "${DOMAIN_PREFIX}" \
+    --source-primary-subnet "${SOURCE_PRIMARY_SUBNET}" \
+    --api-address "${API_ADDRESS}" \
+    --api-server-name "${API_SERVER_NAME}" \
+    --kubeconfig "${SOURCE_KUBECONFIG}" \
+    --ssh-identity "${CLUSTER_TOOL_KEY}" \
+    --ssh-public-key "${CLUSTER_TOOL_PUBLIC_KEY}" \
+    --expected-memory-gib 24 \
+    --expected-vcpus 12 \
+    --expected-os-disk-gib 80 \
+    --expected-spare-disk-gib 132 \
+    --yes
+fi
+
+if ! python3 "${CLUSTER_TOOL_PATH}" flavors | awk -v flavor="${FLAVOR_NAME}" '$1 == flavor { found = 1 } END { exit !found }'; then
+  fail "cluster-tool did not register the new local flavor '${FLAVOR_NAME}'."
+fi
+
+printf '%s\n' "${FLAVOR_NAME}" > "${RUN_WORKDIR}/flavor-name"
+chmod 0600 "${RUN_WORKDIR}/flavor-name"
+echo "Captured ${CLUSTER_TOPOLOGY} flavor '${FLAVOR_NAME}' from source cluster '${CLUSTER_ID}'."
