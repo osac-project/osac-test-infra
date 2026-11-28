@@ -2,7 +2,8 @@
 name: Collect OSAC Cluster Logs
 description: >-
   Collect cluster diagnostics and redact sensitive data into
-  RUNNER_TEMP/osac-artifacts. Wraps scripts/gather-osac-logs.sh and needs the
+  RUNNER_TEMP/osac-artifacts, including the native default management-cluster
+  must-gather. Needs the
   live cluster. Run the upload-artifacts action afterwards; the cluster can be
   destroyed in between. Use gather-artifacts to do both in one go.
 
