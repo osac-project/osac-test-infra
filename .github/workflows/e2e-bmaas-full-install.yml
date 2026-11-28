@@ -391,12 +391,12 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
           chmod 600 "$RUNNER_TEMP/kubeconfig"
 
-      - name: Setup virtual BareMetalHosts
-        if: inputs.inventory-backend != 'netbox'
+      # At the moment, every backend needs Ironic before the install: the
+      # preflight in OSAC chart requires the Provisioning CR.
+      - name: Activate Ironic
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
-        run: bash .github/scripts/setup-virtual-bmh.sh
+        run: bash .github/scripts/activate-ironic.sh
 
       # Loops over the `components` JSON array so any number of components
       # (one, two, or the 5-8 this repo is headed toward) can be built from
@@ -780,13 +780,13 @@ jobs:
         if: inputs.inventory-backend == 'netbox'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
 
-      # NetBox device setup runs here — after the install — because the
-      # reconciler drives everything it needs: NetBox (deployed by
-      # install-infra's bmaas-netbox-ci profile), the OSAC Secret API
-      # (install-osac) and the extracted osac CLI. The reconciler creates
-      # system-scoped BMC Secrets through the private API: the CLI is
-      # logged in with a cluster-admin token, matching the e2e conftest's
-      # private-client pattern.
+      - name: Setup virtual BareMetalHosts
+        if: inputs.inventory-backend == '' || inputs.inventory-backend == 'metal3'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+        run: bash .github/scripts/setup-virtual-bmh.sh
+
       - name: Setup virtual NetBox devices
         if: inputs.inventory-backend == 'netbox'
         env:

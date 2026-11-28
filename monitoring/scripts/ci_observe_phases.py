@@ -403,6 +403,7 @@ _STEP_PHASE = {
     "prepare cluster environment": "cluster",
     "boot cluster clone": "cluster",
     "prepare cluster prerequisites": "cluster",
+    "activate ironic": "cluster",
     "setup virtual baremetalhosts": "cluster",
     "setup virtual netbox devices": "cluster",
     "setup caas agent": "cluster",
