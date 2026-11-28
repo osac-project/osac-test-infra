@@ -112,22 +112,24 @@ build() {
     fi
   done
 
-  local overrides="{}" images=()
+  local overrides="{}" images=() component_sha=()
   declare -A pinned_sha
-  local repo ref file build_type context tag src repo_url sha
+  local repo ref file build_type context tag src repo_url sha effective_context
   local component_dir build_context containerfile_name var_name
+
+  # Resolve every source first and validate all Containerfile contexts before
+  # starting any expensive image build.  The second loop builds the exact
+  # commits inspected here, even if a branch advances in the meantime.
   for i in $(seq 0 $((count - 1))); do
     repo=$(jq -r ".[$i].repo" <<<"${components}")
     ref=$(jq -r ".[$i].ref" <<<"${components}")
     file=$(jq -r ".[$i].containerfile // \"Containerfile\"" <<<"${components}")
-    image_key=$(jq -r ".[$i].imageKey" <<<"${components}")
     build_type=$(jq -r ".[$i].buildType // \"containerfile\"" <<<"${components}")
     context=$(jq -r ".[$i].context // empty" <<<"${components}")
 
-    tag="localhost/component-${i}:${GITHUB_RUN_ID}"
     src="${COMPONENT_STATE_DIR}/src/component-${i}"
 
-    echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
+    echo "::group::Validate component[$i]: ${repo}@${ref} (${file})"
     repo_url="${repo}"
     if [[ "${repo_url}" != *://* && "${repo_url}" != git@* ]]; then
       repo_url="https://github.com/${repo_url%.git}.git"
@@ -146,6 +148,32 @@ build() {
       pinned_sha[$repo]="${sha}"
       echo "Pinned ${repo} to SHA ${sha} (resolved from ref '${ref}')."
     fi
+    component_sha[$i]="${sha}"
+
+    if [[ "${build_type}" != "ansible-builder" ]]; then
+      effective_context="${context:-$(dirname "${file}")}"
+      python3 .github/scripts/validate_containerfile_context.py \
+        --label "components[$i]" \
+        --repo-root "${src}" \
+        --containerfile "${file}" \
+        --context "${effective_context}"
+    fi
+    echo "::endgroup::"
+  done
+
+  for i in $(seq 0 $((count - 1))); do
+    repo=$(jq -r ".[$i].repo" <<<"${components}")
+    ref=$(jq -r ".[$i].ref" <<<"${components}")
+    file=$(jq -r ".[$i].containerfile // \"Containerfile\"" <<<"${components}")
+    image_key=$(jq -r ".[$i].imageKey" <<<"${components}")
+    build_type=$(jq -r ".[$i].buildType // \"containerfile\"" <<<"${components}")
+    context=$(jq -r ".[$i].context // empty" <<<"${components}")
+
+    tag="localhost/component-${i}:${GITHUB_RUN_ID}"
+    src="${COMPONENT_STATE_DIR}/src/component-${i}"
+    sha="${component_sha[$i]}"
+
+    echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
 
     component_dir="${src}"
     containerfile_name="${file}"

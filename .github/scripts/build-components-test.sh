@@ -41,6 +41,11 @@ if [[ "${1:-}" == "-m" && "${2:-}" == "venv" ]]; then
   done
 fi
 STUB
+cat > "${WORK}/bin/python3" <<'STUB'
+#!/usr/bin/env bash
+echo "validator $*" >> "${STUB_LOG}"
+exit "${STUB_VALIDATOR_RC:-0}"
+STUB
 cat > "${WORK}/bin/oc" <<'STUB'
 #!/usr/bin/env bash
 echo "oc $*" >> "${STUB_LOG}"
@@ -79,7 +84,7 @@ reset() {
   rm -rf "${COMPONENT_STATE_DIR}"
   : > "${STUB_LOG}"
   : > "${GITHUB_OUTPUT}"
-  unset STUB_PODMAN_RC STUB_BUILD_SLEEP
+  unset STUB_PODMAN_RC STUB_BUILD_SLEEP STUB_VALIDATOR_RC
   export COMPONENTS_JSON_INPUT='[]'
 }
 
@@ -102,6 +107,11 @@ test_build_core_only() {
   # The first clone resolves OSAC_BRANCH; the other three reuse the commit it resolved to.
   assert_eq "$(count_calls '^git .* fetch .* deadbeef$')" 1 "git fetches of OSAC_BRANCH"
   assert_eq "$(count_calls '^git .* fetch .* abc123$')" 3 "git fetches of the commit the first clone resolved"
+  assert_eq "$(count_calls '^validator ')" 3 "Containerfile context validations"
+  local last_validator first_build
+  last_validator=$(grep -n '^validator ' "${STUB_LOG}" | tail -n 1 | cut -d: -f1)
+  first_build=$(grep -n '^podman build' "${STUB_LOG}" | head -n 1 | cut -d: -f1)
+  [[ "${last_validator}" -lt "${first_build}" ]] || fail "a build started before every context was validated"
 }
 
 test_build_ignores_overridden_core_keys() {
@@ -137,6 +147,14 @@ test_build_fails_when_podman_fails() {
   run build
   [[ "${RC}" -ne 0 ]] || fail "expected a non-zero exit"
   [[ ! -e "${COMPONENT_STATE_DIR}/overrides.json" ]] || fail "overrides.json was written after a failed build"
+}
+
+test_build_fails_before_build_when_context_is_invalid() {
+  reset build_fails_before_build_when_context_is_invalid
+  export STUB_VALIDATOR_RC=1
+  run build
+  [[ "${RC}" -ne 0 ]] || fail "expected a non-zero exit"
+  assert_eq "$(count_calls '^podman build')" 0 "podman build count"
 }
 
 test_requires_state_dir() {
@@ -287,6 +305,7 @@ test_build_ignores_overridden_core_keys
 test_build_rejects_unknown_image_key
 test_build_uses_venv_for_ansible_builder
 test_build_fails_when_podman_fails
+test_build_fails_before_build_when_context_is_invalid
 test_requires_state_dir
 
 if [[ "${FAILED}" -ne 0 ]]; then
